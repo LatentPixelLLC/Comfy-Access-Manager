@@ -135,11 +135,18 @@ class ThumbnailService {
      * Find FFmpeg in common locations
      */
     static findFFmpeg() {
+        const isWin = process.platform === 'win32';
         const candidates = [
-            'ffmpeg',
-            'C:\\ffmpeg\\bin\\ffmpeg.exe',
-            'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
-            path.join(process.env.LOCALAPPDATA || '', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+            'ffmpeg',  // Works if on PATH (brew install ffmpeg, apt install ffmpeg, or Windows PATH)
+            ...(isWin ? [
+                'C:\\ffmpeg\\bin\\ffmpeg.exe',
+                'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+                path.join(process.env.LOCALAPPDATA || '', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+            ] : [
+                '/opt/homebrew/bin/ffmpeg',    // macOS (Apple Silicon Homebrew)
+                '/usr/local/bin/ffmpeg',       // macOS (Intel Homebrew) / Linux
+                '/usr/bin/ffmpeg',             // Linux system package
+            ]),
         ];
         
         // Check PATH first

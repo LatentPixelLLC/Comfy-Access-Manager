@@ -97,11 +97,18 @@ class MediaInfoService {
      * Find FFprobe in common locations
      */
     static findFFprobe() {
+        const isWin = process.platform === 'win32';
         const candidates = [
-            'ffprobe',
-            'C:\\ffmpeg\\bin\\ffprobe.exe',
-            'C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe',
-            path.join(process.env.LOCALAPPDATA || '', 'ffmpeg', 'bin', 'ffprobe.exe'),
+            'ffprobe',  // Works if on PATH
+            ...(isWin ? [
+                'C:\\ffmpeg\\bin\\ffprobe.exe',
+                'C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe',
+                path.join(process.env.LOCALAPPDATA || '', 'ffmpeg', 'bin', 'ffprobe.exe'),
+            ] : [
+                '/opt/homebrew/bin/ffprobe',
+                '/usr/local/bin/ffprobe',
+                '/usr/bin/ffprobe',
+            ]),
         ];
         
         const { execFileSync } = require('child_process');

@@ -338,7 +338,8 @@ function renderProjectDetail(project) {
 
     // Show vault path
     const vaultRoot = state.settings?.vault_root || '';
-    const projectFolder = vaultRoot ? `${vaultRoot}${vaultRoot.endsWith('\\') || vaultRoot.endsWith('/') ? '' : '\\'}${project.code}` : '';
+    const sep = vaultRoot.includes('/') ? '/' : '\\';
+    const projectFolder = vaultRoot ? `${vaultRoot}${vaultRoot.endsWith('\\') || vaultRoot.endsWith('/') ? '' : sep}${project.code}` : '';
     document.getElementById('projectPath').textContent = projectFolder ? `📂 ${projectFolder}` : '';
     document.getElementById('projectPath').title = projectFolder;
 

@@ -133,7 +133,7 @@ router.post('/migrate-vault', async (req, res) => {
             // Skip if it's the app directory itself (e.g. vault is inside app folder)
             if (path.resolve(srcFull) === appDir) continue;
             // Skip node_modules, src, public, package.json etc
-            if (['node_modules', 'src', 'public', 'comfyui', 'package.json', 'package-lock.json', 'start.bat', '.git'].includes(entry.name)) continue;
+            if (['node_modules', 'src', 'public', 'comfyui', 'package.json', 'package-lock.json', 'start.bat', 'start.sh', '.git', '.gitignore'].includes(entry.name)) continue;
 
             if (entry.isDirectory()) {
                 filesCopied += copyDir(srcFull, destFull);
@@ -203,7 +203,7 @@ router.post('/migrate-vault', async (req, res) => {
         };
 
         for (const entry of topEntries) {
-            if (['node_modules', 'src', 'public', 'comfyui', 'package.json', 'package-lock.json', 'start.bat', '.git'].includes(entry.name)) continue;
+            if (['node_modules', 'src', 'public', 'comfyui', 'package.json', 'package-lock.json', 'start.bat', 'start.sh', '.git', '.gitignore'].includes(entry.name)) continue;
             const srcFull = path.join(oldRoot, entry.name);
             if (path.resolve(srcFull) === appDir) continue;
             if (!fs.existsSync(srcFull)) continue;

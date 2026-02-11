@@ -39,7 +39,7 @@ async function browseTo(dirPath) {
 
 function navigateUp() {
     if (!state.importBrowsePath) return;
-    const parent = state.importBrowsePath.replace(/\\[^\\]+$/, '') || '';
+    const parent = state.importBrowsePath.replace(/[\\/][^\\/]+$/, '') || '';
     browseTo(parent);
 }
 

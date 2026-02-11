@@ -741,31 +741,64 @@ function getMimeType(filename) {
 // ═══════════════════════════════════════════
 
 function findMrViewer2() {
-    const candidates = [
-        'C:\\Program Files\\vmrv2-v1.5.4\\bin\\mrv2.exe',
-        'C:\\Program Files\\mrv2\\bin\\mrv2.exe',
-    ];
-    for (const c of candidates) {
-        if (fs.existsSync(c)) return c;
-    }
-    try {
-        const progFiles = 'C:\\Program Files';
-        const dirs = fs.readdirSync(progFiles).filter(d => d.startsWith('vmrv2') || d.startsWith('mrv2'));
-        for (const d of dirs) {
-            const exe = path.join(progFiles, d, 'bin', 'mrv2.exe');
-            if (fs.existsSync(exe)) return exe;
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+
+    if (isWin) {
+        // Windows: check Program Files for vmrv2-*/mrv2 folders
+        const candidates = [
+            'C:\\Program Files\\vmrv2-v1.5.4\\bin\\mrv2.exe',
+            'C:\\Program Files\\mrv2\\bin\\mrv2.exe',
+        ];
+        for (const c of candidates) {
+            if (fs.existsSync(c)) return c;
         }
-    } catch (e) { /* ignore */ }
+        try {
+            const progFiles = 'C:\\Program Files';
+            const dirs = fs.readdirSync(progFiles).filter(d => d.startsWith('vmrv2') || d.startsWith('mrv2'));
+            for (const d of dirs) {
+                const exe = path.join(progFiles, d, 'bin', 'mrv2.exe');
+                if (fs.existsSync(exe)) return exe;
+            }
+        } catch (e) { /* ignore */ }
+    } else if (isMac) {
+        // macOS: check /Applications for mrv2.app bundles
+        const candidates = [
+            '/Applications/mrv2.app/Contents/MacOS/mrv2',
+            '/Applications/mrViewer2.app/Contents/MacOS/mrv2',
+        ];
+        for (const c of candidates) {
+            if (fs.existsSync(c)) return c;
+        }
+        try {
+            const dirs = fs.readdirSync('/Applications').filter(d => d.toLowerCase().includes('mrv2') || d.toLowerCase().includes('mrviewer'));
+            for (const d of dirs) {
+                const exe = path.join('/Applications', d, 'Contents', 'MacOS', 'mrv2');
+                if (fs.existsSync(exe)) return exe;
+            }
+        } catch (e) { /* ignore */ }
+    } else {
+        // Linux: check common install locations
+        const candidates = [
+            '/usr/local/bin/mrv2',
+            '/usr/bin/mrv2',
+            path.join(process.env.HOME || '', '.local', 'bin', 'mrv2'),
+        ];
+        for (const c of candidates) {
+            if (fs.existsSync(c)) return c;
+        }
+    }
     return null;
 }
 
 /**
- * Capture mrViewer2 window position before killing it.
- * Returns { left, top, width, height } or null if no window found.
- * Uses EnumWindows to find the LARGEST visible window (the main viewer),
- * since mrv2 has multiple windows and MainWindowHandle may point to a tiny one.
+ * Capture mrViewer2 window position before killing it (Windows only).
+ * Returns { left, top, width, height } or null.
+ * On macOS/Linux, returns null (window position restore not supported yet).
  */
 function getMrv2WindowRect() {
+    if (process.platform !== 'win32') return null;
+
     const { spawnSync } = require('child_process');
     // C# helper that enumerates all windows for mrv2 PIDs and returns the largest
     const script = `
@@ -829,11 +862,11 @@ Write-Output ([MrvWinHelper]::GetLargestRect("mrv2"))
 }
 
 /**
- * Move mrViewer2 window to a saved position.
+ * Move mrViewer2 window to a saved position (Windows only).
  * Retries up to 10 times (every 800ms) waiting for the main window to appear.
- * Uses EnumWindows to find the largest visible window belonging to mrv2.
  */
 function restoreMrv2Position(rect, attempt = 1) {
+    if (process.platform !== 'win32') return;  // Only supported on Windows
     if (attempt > 10) {
         console.log(`[mrViewer2] Could not restore position after ${attempt - 1} attempts`);
         return;
@@ -912,10 +945,10 @@ Write-Output ([MrvWinMover]::MoveMainWindow("mrv2", ${rect.left}, ${rect.top}, $
  * then restores the window to the same monitor/position.
  */
 function launchInMrv2(exePath, filePaths, compareArgs) {
-    const { execFile, execSync } = require('child_process');
+    const { execFile, execSync, spawnSync } = require('child_process');
     const cwd = path.dirname(exePath);
 
-    // Capture window position before killing
+    // Capture window position before killing (Windows only)
     const savedRect = getMrv2WindowRect();
     if (savedRect) {
         console.log(`[mrViewer2] Saved position: ${savedRect.left},${savedRect.top} ${savedRect.width}x${savedRect.height}`);
@@ -923,14 +956,21 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         console.log(`[mrViewer2] No existing window found — will open at default position`);
     }
 
-    // Kill existing mrViewer2
+    // Kill existing mrViewer2 (cross-platform)
     try {
-        execSync('taskkill /F /IM mrv2.exe', { windowsHide: true, stdio: 'ignore' });
+        if (process.platform === 'win32') {
+            execSync('taskkill /F /IM mrv2.exe', { windowsHide: true, stdio: 'ignore' });
+        } else {
+            execSync('pkill -f mrv2 || true', { stdio: 'ignore' });
+        }
     } catch (e) { /* not running, that's fine */ }
 
     // Wait for process to fully die before launching new one
-    const { spawnSync } = require('child_process');
-    spawnSync('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Milliseconds 300'], { windowsHide: true });
+    if (process.platform === 'win32') {
+        spawnSync('powershell.exe', ['-NoProfile', '-Command', 'Start-Sleep -Milliseconds 300'], { windowsHide: true });
+    } else {
+        spawnSync('sleep', ['0.3']);
+    }
 
     const args = [];
     // For single image files, use -s (single/still) to prevent mrv2 from
