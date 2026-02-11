@@ -1,0 +1,213 @@
+/**
+ * MediaVault - Naming Convention Engine
+ * Transforms random filenames into structured production names
+ * 
+ * Template tokens:
+ *   {project}   → Project code (e.g. "HERO")
+ *   {sequence}  → Sequence code (e.g. "SQ010")
+ *   {shot}      → Shot code (e.g. "SH020")
+ *   {take}      → Take number zero-padded (e.g. "T01")
+ *   {type}      → Media type (e.g. "video", "image")
+ *   {date}      → Date YYYYMMDD
+ *   {original}  → Original filename (without extension)
+ *   {counter}   → Auto-incrementing counter
+ */
+
+const path = require('path');
+
+const DEFAULT_TEMPLATE = '{project}_{sequence}_{shot}_{take}_{counter}';
+const SIMPLE_TEMPLATE = '{project}_{type}_{counter}';
+
+/**
+ * Generate a vault-friendly structured filename
+ * @param {object} params 
+ * @param {string} params.originalName - Original filename
+ * @param {string} params.projectCode - Project code (e.g. "HERO")
+ * @param {string} [params.sequenceCode] - Sequence code (e.g. "SQ010")
+ * @param {string} [params.shotCode] - Shot code (e.g. "SH020")
+ * @param {number} [params.takeNumber] - Take number
+ * @param {number} [params.version] - Version number (default 1)
+ * @param {string} [params.mediaType] - Media type
+ * @param {number} [params.counter] - Auto-incrementing counter
+ * @param {string} [params.template] - Naming template
+ * @param {string} [params.customName] - Custom name override (skip template)
+ * @returns {{ vaultName: string, ext: string }}
+ */
+function generateVaultName(params) {
+    const {
+        originalName,
+        projectCode,
+        sequenceCode,
+        shotCode,
+        takeNumber = 1,
+        mediaType = 'media',
+        counter = 1,
+        template,
+        customName,
+    } = params;
+
+    const ext = path.extname(originalName).toLowerCase();
+    const originalBase = path.basename(originalName, ext);
+
+    // Custom name override — just sanitize and use it
+    if (customName) {
+        const sanitized = sanitizeFilename(customName);
+        return { vaultName: `${sanitized}${ext}`, ext };
+    }
+
+    // Pick template based on available info
+    let tmpl = template;
+    if (!tmpl) {
+        if (sequenceCode && shotCode) {
+            tmpl = DEFAULT_TEMPLATE;  // DD_SQ010_SH020_T01_v001
+        } else if (sequenceCode) {
+            tmpl = '{project}_{sequence}_{type}_{counter}';  // DD_REF_image_0001
+        } else {
+            tmpl = SIMPLE_TEMPLATE;   // DD_image_0001_v001
+        }
+    }
+
+    const tokens = {
+        project: projectCode || 'UNSET',
+        sequence: sequenceCode || '',
+        shot: shotCode || '',
+        take: `T${String(takeNumber).padStart(2, '0')}`,
+        type: mediaType,
+        date: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+        original: sanitizeFilename(originalBase),
+        counter: String(counter).padStart(4, '0'),
+    };
+
+    let name = tmpl;
+    for (const [key, value] of Object.entries(tokens)) {
+        name = name.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+    }
+
+    // Clean up double underscores from empty tokens
+    name = name.replace(/_+/g, '_').replace(/^_|_$/g, '');
+
+    return { vaultName: `${name}${ext}`, ext };
+}
+
+/**
+ * Parse a structured filename back into components
+ * @param {string} filename 
+ * @returns {object} Parsed components
+ */
+function parseStructuredName(filename) {
+    const ext = path.extname(filename);
+    const base = path.basename(filename, ext);
+    const parts = base.split('_');
+
+    const result = {
+        projectCode: null,
+        sequenceCode: null,
+        shotCode: null,
+        takeNumber: null,
+    };
+
+    for (const part of parts) {
+        if (/^SQ\d+$/i.test(part)) result.sequenceCode = part.toUpperCase();
+        else if (/^SH\d+$/i.test(part)) result.shotCode = part.toUpperCase();
+        else if (/^T\d+$/i.test(part)) result.takeNumber = parseInt(part.slice(1));
+        else if (!result.projectCode) result.projectCode = part;
+    }
+
+    return result;
+}
+
+/**
+ * Get the next available version number for a given naming pattern
+ * @param {string} directory - Directory to check
+ * @param {string} basePattern - Base pattern without version
+ * @returns {number} Next version number
+ */
+function getNextVersion(directory, basePattern) {
+    const fs = require('fs');
+    if (!fs.existsSync(directory)) return 1;
+
+    const files = fs.readdirSync(directory);
+    let maxVersion = 0;
+
+    for (const file of files) {
+        const base = path.basename(file, path.extname(file));
+        if (base.startsWith(basePattern)) {
+            const match = base.match(/v(\d+)$/);
+            if (match) {
+                const v = parseInt(match[1]);
+                if (v > maxVersion) maxVersion = v;
+            }
+        }
+    }
+
+    return maxVersion + 1;
+}
+
+/**
+ * Generate the vault folder path for an asset
+ * @param {string} vaultRoot - Root vault directory
+ * @param {string} projectCode - Project code
+ * @param {string} mediaType - Media type (video, image, etc.)
+ * @param {string} [sequenceCode] - Sequence code
+ * @param {string} [shotCode] - Shot code
+ * @returns {string} Full directory path
+ */
+function getVaultDirectory(vaultRoot, projectCode, mediaType, sequenceCode, shotCode) {
+    const parts = [vaultRoot, projectCode];
+
+    if (sequenceCode && shotCode) {
+        // Full hierarchy: DD/SQ010/SH020/image/
+        parts.push(sequenceCode, shotCode, mediaType);
+    } else if (sequenceCode) {
+        // Sequence only (e.g. REF material): DD/REF/image/
+        parts.push(sequenceCode, mediaType);
+    } else {
+        // No sequence: DD/image/
+        parts.push(mediaType);
+    }
+
+    return path.join(...parts);
+}
+
+/**
+ * Sanitize a string for use as a filename
+ */
+function sanitizeFilename(name) {
+    return name
+        .replace(/[<>:"/\\|?*]/g, '')
+        .replace(/\s+/g, '_')
+        .replace(/_+/g, '_')
+        .trim();
+}
+
+/**
+ * Generate a sequence code from a number
+ * @param {number} num - Sequence number (1, 2, 3...)
+ * @param {number} [pad=3] - Zero-padding
+ * @returns {string} e.g. "SQ010", "SQ020"
+ */
+function makeSequenceCode(num, pad = 3) {
+    return `SQ${String(num * 10).padStart(pad, '0')}`;
+}
+
+/**
+ * Generate a shot code from a number
+ * @param {number} num - Shot number
+ * @param {number} [pad=3] - Zero-padding
+ * @returns {string} e.g. "SH010", "SH020"
+ */
+function makeShotCode(num, pad = 3) {
+    return `SH${String(num * 10).padStart(pad, '0')}`;
+}
+
+module.exports = {
+    generateVaultName,
+    parseStructuredName,
+    getNextVersion,
+    getVaultDirectory,
+    sanitizeFilename,
+    makeSequenceCode,
+    makeShotCode,
+    DEFAULT_TEMPLATE,
+    SIMPLE_TEMPLATE,
+};

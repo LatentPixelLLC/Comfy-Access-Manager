@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Media Vault</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <!-- ═══ SETUP OVERLAY (first-time vault config) ═══ -->
+    <div id="setupOverlay" class="overlay" style="display:none;">
+        <div class="setup-card">
+            <h1>🗄️ Digital Media Vault</h1>
+            <p class="subtitle">Local Digital Asset Manager</p>
+            <p>Choose where to store your organized media files:</p>
+            <div class="vault-path-picker">
+                <input type="text" id="setupVaultPath" placeholder="C:\MediaVault" value="C:\MediaVault">
+                <button onclick="browseForVault()">Browse...</button>
+            </div>
+            <p class="hint">This folder will contain all your organized projects. Files are moved here when imported.</p>
+            <button class="btn-primary" onclick="setupVault()">Create Vault & Get Started</button>
+        </div>
+    </div>
+
+    <!-- ═══ TOP BAR ═══ -->
+    <header id="topBar">
+        <div class="topbar-left">
+            <span class="logo">🗄️ DMV</span>
+            <nav class="tabs">
+                <button class="tab active" data-tab="projects" onclick="switchTab('projects')">📁 Projects</button>
+                <button class="tab" data-tab="browser" onclick="switchTab('browser')">🔍 Browser</button>
+                <button class="tab" data-tab="import" onclick="switchTab('import')">📥 Import</button>
+                <button class="tab" data-tab="settings" onclick="switchTab('settings')">⚙️ Settings</button>
+            </nav>
+        </div>
+        <div class="topbar-right">
+            <span id="statusIndicator" class="status-dot" title="System status"></span>
+            <span id="assetCount" class="stat">0 assets</span>
+        </div>
+    </header>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <main id="mainContent">
+
+        <!-- ─── PROJECTS TAB ─── -->
+        <section id="tab-projects" class="tab-content active">
+            <div class="section-header">
+                <h2>Projects</h2>
+                <button class="btn-primary" onclick="showCreateProjectModal()">+ New Project</button>
+            </div>
+            <div id="projectGrid" class="project-grid">
+                <!-- Populated by JS -->
+            </div>
+        </section>
+
+        <!-- ─── BROWSER TAB (single project view) ─── -->
+        <section id="tab-browser" class="tab-content">
+            <div class="browser-layout">
+                <!-- LEFT: Tree Navigation -->
+                <div id="treePanel" class="tree-panel">
+                    <div class="tree-header">
+                        <span>🌳 Tree Navigation</span>
+                        <button class="btn-tiny" onclick="refreshTree()" title="Refresh">↻</button>
+                    </div>
+                    <div id="treeContainer" class="tree-container">
+                        <div class="tree-loading">Loading...</div>
+                    </div>
+                </div>
+
+                <!-- RIGHT: Asset browser -->
+                <div class="browser-main">
+            <div id="browserBreadcrumb" class="breadcrumb">
+                <span class="crumb" onclick="switchTab('projects')">Projects</span>
+            </div>
+
+            <!-- Project detail with sequences/shots -->
+            <div id="projectDetail" style="display:none">
+              <div class="project-sticky-header">
+                <div class="project-header-bar">
+                    <div>
+                        <h2 id="projectTitle"></h2>
+                        <span id="projectCode" class="badge"></span>
+                        <span id="projectType" class="badge badge-dim"></span>
+                        <div id="projectPath" class="project-path"></div>
+                    </div>
+                    <div class="project-actions">
+                        <button class="btn-sm" onclick="showAddSequenceModal()">+ Sequence</button>
+                        <button class="btn-sm" onclick="importToProject()">📥 Import Files</button>
+                        <button class="btn-sm btn-danger" onclick="deleteCurrentProject()">🗑️ Delete</button>
+                    </div>
+                </div>
+
+                <!-- Sequences & Shots panel (for shot-based projects) -->
+                <div id="sequencesPanel" class="sequences-panel">
+                    <div id="sequenceList" class="sequence-list"></div>
+                </div>
+
+                <!-- Filter bar -->
+                <div class="filter-bar">
+                    <select id="filterMediaType" onchange="filterAssets()">
+                        <option value="">All Types</option>
+                        <option value="video">🎬 Video</option>
+                        <option value="image">🖼️ Image</option>
+                        <option value="audio">🔊 Audio</option>
+                        <option value="exr">✨ EXR/HDR</option>
+                    </select>
+                    <select id="filterSequence" onchange="filterAssets()" style="display:none">
+                        <option value="">All Sequences</option>
+                    </select>
+                    <input type="text" id="searchInput" placeholder="Search assets..." oninput="filterAssets()">
+                    <div class="view-toggle">
+                        <button class="active" onclick="setView('grid')" title="Grid view">▦</button>
+                        <button onclick="setView('list')" title="List view">≡</button>
+                    </div>
+                </div>
+
+                <!-- Selection toolbar (hidden until assets selected) -->
+                <div id="selectionToolbar" class="selection-toolbar" style="display:none">
+                    <span id="selectionCount">0 selected</span>
+                    <button class="btn-small" onclick="selectAllAssets()">☑ Select All</button>
+                    <button class="btn-small" onclick="clearAssetSelection()">☐ Deselect All</button>
+                    <button class="btn-small btn-accent" onclick="showMoveToSequenceModal()">📋 Move to Sequence</button>
+                    <button class="btn-small btn-role" onclick="showAssignRoleModal()">🎭 Set Role</button>
+                    <button class="btn-small btn-export" onclick="showExportModal()">📤 Export</button>
+                    <button class="btn-small btn-compare" onclick="openCompareInMrViewer2()">🎬 Compare in mrViewer2</button>
+                    <button class="btn-small btn-danger" onclick="bulkDeleteAssets()">🗑 Delete Selected</button>
+                    <button class="btn-small" onclick="bulkDeleteAssets(true)">🗑 DB Only (keep files)</button>
+                </div>
+              </div><!-- /.project-sticky-header -->
+
+                <!-- Asset grid/list -->
+                <div id="assetContainerWrap" style="position:relative; flex:1;">
+                    <div id="fileDropOverlay" class="file-drop-overlay" style="display:none">
+                        <div class="file-drop-inner">
+                            <div class="file-drop-icon">📥</div>
+                            <div class="file-drop-text">Drop files to import</div>
+                            <div class="file-drop-sub" id="dropTargetLabel"></div>
+                        </div>
+                    </div>
+                    <div id="assetContainer" class="asset-grid"></div>
+                </div>
+                </div><!-- /.browser-main -->
+            </div><!-- /.browser-layout -->
+        </section>
+
+        <!-- ─── IMPORT TAB ─── -->
+        <section id="tab-import" class="tab-content">
+            <div class="section-header">
+                <h2>Import Media</h2>
+            </div>
+            <div class="import-layout">
+                <!-- File picker panel -->
+                <div class="import-source">
+                    <h3>📂 Source Files</h3>
+                    <div class="file-browser-bar">
+                        <button onclick="navigateUp()" title="Go up">⬆️</button>
+                        <input type="text" id="importPath" placeholder="Browse to select files..." onkeydown="if(event.key==='Enter')browseTo(this.value)">
+                        <button onclick="browseTo(document.getElementById('importPath').value)">Go</button>
+                    </div>
+                    <div id="fileBrowser" class="file-browser"></div>
+                    <div class="selected-files">
+                        <h4>Selected Files (<span id="selectedCount">0</span>)</h4>
+                        <div id="selectedFilesList" class="selected-list"></div>
+                    </div>
+                </div>
+
+                <!-- Import settings -->
+                <div class="import-settings">
+                    <h3>⚙️ Import Settings</h3>
+                    <label>Project</label>
+                    <select id="importProject" onchange="onImportProjectChange()">
+                        <option value="">-- Select Project --</option>
+                    </select>
+
+                    <div id="importShotFields" style="display:none">
+                        <label>Sequence</label>
+                        <select id="importSequence" onchange="onImportSequenceChange()">
+                            <option value="">-- None --</option>
+                        </select>
+
+                        <label>Shot</label>
+                        <select id="importShot">
+                            <option value="">-- None --</option>
+                        </select>
+
+                        <label>Role</label>
+                        <select id="importRole">
+                            <option value="">-- None --</option>
+                        </select>
+
+                        <label>Take #</label>
+                        <input type="number" id="importTake" value="1" min="1">
+                    </div>
+
+                    <label>Custom Name (optional)</label>
+                    <input type="text" id="importCustomName" placeholder="Leave blank for auto-naming">
+
+                    <div class="rename-preview">
+                        <h4>📝 Name Preview</h4>
+                        <div id="renamePreview" class="preview-box">Select files and project to preview...</div>
+                    </div>
+
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:8px 0;">
+                        <input type="checkbox" id="importKeepOriginals">
+                        <span>📋 Keep originals (copy instead of move)</span>
+                    </label>
+
+                    <button class="btn-primary btn-large" onclick="executeImport()" id="importBtn" disabled>
+                        📥 Import & Rename
+                    </button>
+
+                    <div id="importProgress" class="progress-bar" style="display:none">
+                        <div id="importProgressFill" class="progress-fill"></div>
+                    </div>
+                    <div id="importResult" class="import-result" style="display:none"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── SETTINGS TAB ─── -->
+        <section id="tab-settings" class="tab-content">
+            <div class="section-header">
+                <h2>Settings</h2>
+            </div>
+            <div class="settings-grid">
+                <div class="settings-section">
+                    <h3>🗄️ Vault</h3>
+                    <label>Vault Root Path</label>
+                    <div class="input-row">
+                        <input type="text" id="settingVaultRoot" placeholder="C:\MediaVault">
+                        <button class="btn-browse" onclick="openFolderPicker('settingVaultRoot')" title="Browse...">📁</button>
+                        <button onclick="saveSettings()">Save</button>
+                    </div>
+
+                    <div id="migrateSection" style="display:none; margin-top:10px;">
+                        <div class="migrate-banner">
+                            <span id="migrateMessage">Files are at a different location than the vault root.</span>
+                            <button id="migrateBtn" onclick="migrateVault()">📦 Move Files to New Location</button>
+                        </div>
+                        <div id="migrateProgress" style="display:none;">
+                            <div class="progress-bar"><div class="progress-fill" id="migrateFill"></div></div>
+                            <span id="migrateStatus" class="hint">Migrating...</span>
+                        </div>
+                    </div>
+
+                    <label>Naming Template</label>
+                    <input type="text" id="settingNamingTemplate" placeholder="{project}_{type}_{counter}">
+                    <p class="hint">Tokens: {project}, {sequence}, {shot}, {take}, {type}, {date}, {original}, {counter}</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>🎬 External Player</h3>
+                    <label>Default Player</label>
+                    <select id="settingDefaultPlayer" class="setting-select">
+                        <option value="browser">Browser (built-in)</option>
+                        <option value="mrviewer2">mrViewer2</option>
+                        <option value="custom">Custom...</option>
+                    </select>
+                    <div id="customPlayerRow" class="input-row" style="display:none; margin-top:6px;">
+                        <input type="text" id="settingCustomPlayerPath" placeholder="C:\\path\\to\\player.exe">
+                        <button onclick="saveSettings()">Save</button>
+                    </div>
+                    <p class="hint">Files will open in this player when clicked. mrViewer2 supports EXR, ProRes, and all common formats.</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>🖼️ Thumbnails</h3>
+                    <label>Thumbnail Size (px)</label>
+                    <input type="number" id="settingThumbSize" value="320" min="100" max="800">
+                    <label><input type="checkbox" id="settingAutoThumb" checked> Auto-generate thumbnails on import</label>
+                </div>
+
+                <div class="settings-section">
+                    <h3>🎨 ComfyUI Integration</h3>
+                    <label>ComfyUI Output Path</label>
+                    <div class="input-row">
+                        <input type="text" id="settingComfyPath" placeholder="C:\ComfyUI_windows_portable\ComfyUI\output">
+                        <button class="btn-browse" onclick="openFolderPicker('settingComfyPath')" title="Browse...">📁</button>
+                        <button onclick="saveSettings()">Save</button>
+                    </div>
+                    <label><input type="checkbox" id="settingComfyWatch"> Auto-watch ComfyUI output folder</label>
+                    <p class="hint">New files in ComfyUI output will appear in the import queue.</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>🎭 Roles</h3>
+                    <p class="hint">Roles categorize assets under shots (e.g., Comp, Light, Anim, FX). Assign roles during import or in the browser.</p>
+                    <div id="rolesList" class="roles-list"></div>
+                    <div class="input-row" style="margin-top:8px;">
+                        <input type="text" id="newRoleName" placeholder="New role name..." maxlength="30"
+                            onkeydown="if(event.key==='Enter')addRole()">
+                        <input type="color" id="newRoleColor" value="#80cbc4" style="width:36px;padding:2px 3px;height:32px;">
+                        <button onclick="addRole()">+ Add</button>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>👁️ Watch Folders</h3>
+                    <div id="watchFolderList" class="watch-list"></div>
+                    <div class="input-row">
+                        <input type="text" id="newWatchPath" placeholder="Folder path to watch...">
+                        <button class="btn-browse" onclick="openFolderPicker('newWatchPath')" title="Browse...">📁</button>
+                        <button onclick="addWatchFolder()">+ Add</button>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>📊 System Info</h3>
+                    <div id="systemInfo"></div>
+                </div>
+
+                <!-- ─── Keyboard Shortcuts ─── -->
+                <div class="settings-section settings-section-wide">
+                    <h3>⌨️ Viewer Keyboard Shortcuts</h3>
+                    <p class="hint" style="margin-bottom:10px;">Customize mrViewer2 hotkeys. Click a shortcut to remap it, then press the new key combo. Changes apply next time mrViewer2 opens.</p>
+                    <div id="hotkeyEditor">
+                        <div class="hotkey-loading">Loading shortcuts...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ═══ MEDIA PLAYER MODAL ═══ -->
+    <div id="playerModal" class="modal" style="display:none" onclick="if(event.target===this)closePlayer()">
+        <div class="player-container">
+            <div class="player-header">
+                <span id="playerTitle" class="player-title"></span>
+                <div class="player-nav">
+                    <button onclick="playerPrev()" title="Previous">◀</button>
+                    <span id="playerIndex"></span>
+                    <button onclick="playerNext()" title="Next">▶</button>
+                </div>
+                <button class="player-close" onclick="closePlayer()">✕</button>
+            </div>
+            <div class="player-body">
+                <div id="playerContent" class="player-content">
+                    <!-- Video or image rendered here -->
+                </div>
+                <div id="playerCompare" class="player-compare" style="display:none">
+                    <!-- Side-by-side or toggle comparison rendered here -->
+                </div>
+            </div>
+            <div class="player-info">
+                <div id="playerMeta" class="player-meta"></div>
+                <div id="playerRoleBar" class="player-role-bar" style="display:none"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ FOLDER PICKER MODAL ═══ -->
+    <div id="folderPickerModal" class="modal" style="display:none" onclick="if(event.target===this)closeFolderPicker()">
+        <div class="modal-card folder-picker-card">
+            <div class="fp-header">
+                <h3>📂 Select Folder</h3>
+                <button class="player-close" onclick="closeFolderPicker()">✕</button>
+            </div>
+            <div class="fp-path-bar">
+                <button class="btn-sm" onclick="fpNavigate('')" title="Drives">💾</button>
+                <span id="fpCurrentPath" class="fp-current-path">Drives</span>
+            </div>
+            <div id="fpEntries" class="fp-entries"></div>
+            <div class="fp-footer">
+                <div class="fp-selected">
+                    <label>Selected:</label>
+                    <input type="text" id="fpSelectedPath" readonly placeholder="Navigate to a folder...">
+                </div>
+                <div class="fp-actions">
+                    <button class="btn-cancel" onclick="closeFolderPicker()">Cancel</button>
+                    <button class="btn-confirm" onclick="confirmFolderPicker()">Select This Folder</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ GENERIC MODAL ═══ -->
+    <div id="modal" class="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+        <div class="modal-card" id="modalContent"></div>
+    </div>
+
+    <script type="module" src="/js/main.js"></script>
+</body>
+</html>

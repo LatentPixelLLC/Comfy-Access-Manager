@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Database (user-specific data)
+data/mediavault.db
+data/uploads/
+data/tmp.txt
+
+# Thumbnails (generated, can be re-created)
+thumbnails/
+
+# Temp files
+tmp_count.txt
+*.tmp
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.bak
