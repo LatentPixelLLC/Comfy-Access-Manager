@@ -87,20 +87,10 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 
 ## Prerequisites
 
-### Required
 - **Node.js** v18 or later — [Download](https://nodejs.org/)
 - **Git** (for cloning the repo) — [Download](https://git-scm.com/)
 
-### Optional (recommended)
-- **FFmpeg** — Required for video thumbnails, playback transcoding, and export/transcode features
-  - Windows: [Download from ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
-  - macOS: `brew install ffmpeg`
-  - Linux: `sudo apt install ffmpeg`
-- **mrViewer2** — Professional media viewer for EXR, ProRes, HDR playback — [Download](https://mrv2.sourceforge.io/)
-  - Windows: Install to default location (`C:\Program Files\`)
-  - macOS: Drag to `/Applications/`
-
-> **Note:** DMV will work without FFmpeg, but you won't get video thumbnails, transcoding, or export features. Images and basic browsing work fine without it.
+> FFmpeg and mrViewer2 are **automatically installed** by the install script. You don't need to download them manually.
 
 ---
 
@@ -113,57 +103,51 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 2. Install dependencies
-npm install
+# 2. Run the installer (installs npm packages, downloads FFmpeg, offers mrViewer2)
+install.bat
 
 # 3. Start the server
 start.bat
 ```
 
-Or manually:
-```bash
-npm start
-```
+The installer will:
+- Install all npm packages
+- Download a portable FFmpeg build to `tools/ffmpeg/` (if not already on your PATH)
+- Offer to download and install mrViewer2 for pro video playback
 
 ### macOS
 
 ```bash
-# 1. Install prerequisites (if you don't have them)
-brew install node git ffmpeg
-
-# 2. Clone the repository
+# 1. Clone the repository
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 3. Install dependencies
-npm install
+# 2. Run the installer (installs Homebrew, Node.js, FFmpeg, npm packages)
+chmod +x install.sh start.sh
+./install.sh
 
-# 4. Start the server
-chmod +x start.sh
+# 3. Start the server
 ./start.sh
 ```
 
-Or manually:
-```bash
-npm start
-```
+The installer will:
+- Install Homebrew (if not present)
+- Install Node.js and FFmpeg via Homebrew
+- Install all npm packages
+- Print instructions for optional mrViewer2 install
 
 ### Linux
 
 ```bash
-# 1. Install prerequisites
-sudo apt update
-sudo apt install nodejs npm git ffmpeg
-
-# 2. Clone the repository
+# 1. Clone the repository
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 3. Install dependencies
-npm install
+# 2. Run the installer (installs Node.js, FFmpeg, npm packages via apt)
+chmod +x install.sh start.sh
+./install.sh
 
-# 4. Start the server
-chmod +x start.sh
+# 3. Start the server
 ./start.sh
 ```
 

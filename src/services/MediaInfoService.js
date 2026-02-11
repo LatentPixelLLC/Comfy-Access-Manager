@@ -98,8 +98,10 @@ class MediaInfoService {
      */
     static findFFprobe() {
         const isWin = process.platform === 'win32';
+        const localTools = path.join(__dirname, '..', '..', 'tools', 'ffmpeg', 'bin', isWin ? 'ffprobe.exe' : 'ffprobe');
         const candidates = [
             'ffprobe',  // Works if on PATH
+            localTools, // Local tools/ directory (installed by install.bat)
             ...(isWin ? [
                 'C:\\ffmpeg\\bin\\ffprobe.exe',
                 'C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe',

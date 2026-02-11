@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Downloaded tools (FFmpeg, etc. — installed by install.bat/install.sh)
+tools/
+
 # Database (user-specific data)
 data/mediavault.db
 data/uploads/

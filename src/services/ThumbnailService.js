@@ -136,8 +136,10 @@ class ThumbnailService {
      */
     static findFFmpeg() {
         const isWin = process.platform === 'win32';
+        const localTools = path.join(__dirname, '..', '..', 'tools', 'ffmpeg', 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg');
         const candidates = [
             'ffmpeg',  // Works if on PATH (brew install ffmpeg, apt install ffmpeg, or Windows PATH)
+            localTools, // Local tools/ directory (installed by install.bat)
             ...(isWin ? [
                 'C:\\ffmpeg\\bin\\ffmpeg.exe',
                 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',

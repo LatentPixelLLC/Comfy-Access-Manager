@@ -12,6 +12,10 @@ const { getDb, getSetting, logActivity } = require('../database');
 const MediaInfoService = require('../services/MediaInfoService');
 const ThumbnailService = require('../services/ThumbnailService');
 
+// Resolve FFmpeg/FFprobe paths once at startup (use discovery, not bare commands)
+const resolvedFFprobe = MediaInfoService.findFFprobe() || 'ffprobe';
+const resolvedFFmpeg = ThumbnailService.findFFmpeg() || 'ffmpeg';
+
 // ─── In-flight export jobs (id → job info) ───
 const jobs = new Map();
 let nextJobId = 1;
@@ -85,7 +89,7 @@ router.get('/probe/:id', (req, res) => {
         asset.file_path,
     ];
 
-    execFile('ffprobe', args, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(resolvedFFprobe, args, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
         if (err) return res.status(500).json({ error: 'ffprobe failed: ' + err.message });
 
         try {
@@ -290,7 +294,7 @@ function exportSingleAsset(asset, opts) {
             // Sync probe to determine source codec
             const { execFileSync } = require('child_process');
             try {
-                const probeOut = execFileSync('ffprobe', [
+                const probeOut = execFileSync(resolvedFFprobe, [
                     '-v', 'quiet', '-print_format', 'json', '-show_streams', asset.file_path
                 ], { maxBuffer: 1024 * 1024 }).toString();
                 const probeInfo = JSON.parse(probeOut);
@@ -370,7 +374,7 @@ function exportSingleAsset(asset, opts) {
         args.push(safePath);
 
         // Run FFmpeg
-        const ffmpeg = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        const ffmpeg = spawn(resolvedFFmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
         let stderr = '';
         ffmpeg.stderr.on('data', (d) => { stderr += d.toString(); });
