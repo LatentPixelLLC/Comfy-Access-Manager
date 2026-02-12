@@ -103,35 +103,32 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 
 ## Installation
 
-> **Only two things to install first:** [Node.js](https://nodejs.org/) (v18+) and [Git](https://git-scm.com/). Everything else — FFmpeg, mrViewer2, npm packages — is handled automatically by the install script.
-
 ### Windows
+
+Install [Node.js](https://nodejs.org/) (v18+) and [Git](https://git-scm.com/) first. The installer handles everything else — FFmpeg, npm packages, and mrViewer2.
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 2. Run the installer (installs npm packages, downloads FFmpeg, offers mrViewer2)
+# 2. Run the installer
 install.bat
 
 # 3. Start the server
 start.bat
 ```
 
-The installer will:
-- Install all npm packages
-- Download a portable FFmpeg build to `tools/ffmpeg/` (if not already on your PATH)
-- Offer to download and install mrViewer2 for pro video playback
-
 ### macOS
+
+Just need [Git](https://git-scm.com/). The installer auto-installs Node.js, FFmpeg, and npm packages via Homebrew.
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 2. Run the installer (installs Homebrew, Node.js, FFmpeg, npm packages)
+# 2. Run the installer
 chmod +x install.sh start.sh
 ./install.sh
 
@@ -139,20 +136,16 @@ chmod +x install.sh start.sh
 ./start.sh
 ```
 
-The installer will:
-- Install Homebrew (if not present)
-- Install Node.js and FFmpeg via Homebrew
-- Install all npm packages
-- Print instructions for optional mrViewer2 install
-
 ### Linux
+
+Just need [Git](https://git-scm.com/). The installer auto-installs Node.js, FFmpeg, and npm packages via apt.
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 2. Run the installer (installs Node.js, FFmpeg, npm packages via apt)
+# 2. Run the installer
 chmod +x install.sh start.sh
 ./install.sh
 
