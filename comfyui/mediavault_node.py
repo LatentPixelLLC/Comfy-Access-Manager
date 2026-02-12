@@ -298,6 +298,11 @@ class LoadFromMediaVault:
     FUNCTION = "load_image"
     CATEGORY = "MediaVault"
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        # Dropdowns are dynamically populated by JS extension — skip combo validation
+        return True
+
     def load_image(self, project, asset, sequence="* (All Sequences)",
                    shot="* (All Shots)", role="* (All Roles)", workflow_id="default"):
         # Resolve IDs from display names
@@ -431,6 +436,11 @@ class SaveToMediaVault:
     FUNCTION = "save_output"
     CATEGORY = "MediaVault"
     OUTPUT_NODE = True
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        # Dropdowns are dynamically populated by JS extension — skip combo validation
+        return True
 
     def _resolve_ids(self, project, sequence, shot, role):
         """Resolve display names to IDs."""
@@ -629,6 +639,11 @@ class LoadVideoFromMediaVault:
     RETURN_NAMES = ("images", "file_path", "frame_count", "fps")
     FUNCTION = "load_video"
     CATEGORY = "MediaVault"
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        # Dropdowns are dynamically populated by JS extension — skip combo validation
+        return True
 
     def load_video(self, project, asset,
                    sequence="* (All Sequences)", shot="* (All Shots)", role="* (All Roles)",
