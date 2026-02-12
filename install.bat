@@ -5,33 +5,125 @@ setlocal EnableDelayedExpansion
 
 echo.
 echo  =============================================
-echo    Digital Media Vault (DMV) — Installer
+echo    Digital Media Vault (DMV) — One-Click Installer
 echo  =============================================
+echo.
+echo  This installer handles everything for you.
+echo  Just sit back — it will install all dependencies
+echo  automatically if they are not already present.
 echo.
 
 cd /d "%~dp0"
+if not exist "tools" mkdir tools
 
-:: ─── [1/4] Check Node.js ───
-echo  [1/4] Checking Node.js...
+:: ─── [1/5] Check / Install Node.js ───
+echo  [1/5] Checking Node.js...
 where node >nul 2>&1
 if errorlevel 1 (
+    echo         Node.js not found. Installing automatically...
     echo.
-    echo  ERROR: Node.js is not installed!
-    echo  Please install Node.js from: https://nodejs.org/
-    echo  Then re-run this installer.
-    echo.
-    pause
-    exit /b 1
-)
-for /f "tokens=*" %%v in ('node --version') do echo         Found Node.js %%v
 
-:: ─── [2/4] Install npm packages ───
-echo  [2/4] Installing npm packages...
+    :: Detect architecture
+    set "NODE_URL=https://nodejs.org/dist/v22.14.0/node-v22.14.0-x64.msi"
+    if "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
+        set "NODE_URL=https://nodejs.org/dist/v22.14.0/node-v22.14.0-arm64.msi"
+    )
+
+    echo         Downloading Node.js v22 LTS...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$ProgressPreference = 'SilentlyContinue'; " ^
+        "try { " ^
+        "  Invoke-WebRequest -Uri '!NODE_URL!' -OutFile 'tools\node-installer.msi'; " ^
+        "  Write-Host '         Download complete.'; " ^
+        "} catch { " ^
+        "  Write-Host ('         ERROR: ' + $_.Exception.Message); " ^
+        "}"
+
+    if not exist "tools\node-installer.msi" (
+        echo.
+        echo  ERROR: Failed to download Node.js installer.
+        echo  Please install manually from: https://nodejs.org/
+        echo  Then re-run this installer.
+        echo.
+        pause
+        exit /b 1
+    )
+
+    echo         Installing Node.js (this may take a minute^)...
+    msiexec /i "tools\node-installer.msi" /passive /norestart
+    del "tools\node-installer.msi" 2>nul
+
+    :: Refresh PATH so node is available in this session
+    for /f "tokens=2*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SYSPATH=%%B"
+    for /f "tokens=2*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USRPATH=%%B"
+    set "PATH=!SYSPATH!;!USRPATH!"
+
+    where node >nul 2>&1
+    if errorlevel 1 (
+        echo.
+        echo  ERROR: Node.js installation may have failed.
+        echo  Please install manually from: https://nodejs.org/
+        echo  Then re-run this installer.
+        echo.
+        pause
+        exit /b 1
+    )
+    for /f "tokens=*" %%v in ('node --version') do echo         Node.js %%v installed successfully!
+) else (
+    for /f "tokens=*" %%v in ('node --version') do echo         Found Node.js %%v
+)
+
+:: ─── [2/5] Check / Install Git ───
+echo  [2/5] Checking Git...
+where git >nul 2>&1
+if errorlevel 1 (
+    echo         Git not found. Installing automatically...
+    echo.
+
+    set "GIT_URL=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe"
+    echo         Downloading Git for Windows...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$ProgressPreference = 'SilentlyContinue'; " ^
+        "try { " ^
+        "  Invoke-WebRequest -Uri '!GIT_URL!' -OutFile 'tools\git-installer.exe'; " ^
+        "  Write-Host '         Download complete.'; " ^
+        "} catch { " ^
+        "  Write-Host ('         ERROR: ' + $_.Exception.Message); " ^
+        "}"
+
+    if exist "tools\git-installer.exe" (
+        echo         Installing Git (silent install^)...
+        start "" /wait "tools\git-installer.exe" /VERYSILENT /NORESTART /NOCANCEL /SP-
+        del "tools\git-installer.exe" 2>nul
+
+        :: Refresh PATH
+        for /f "tokens=2*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SYSPATH=%%B"
+        for /f "tokens=2*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USRPATH=%%B"
+        set "PATH=!SYSPATH!;!USRPATH!"
+
+        where git >nul 2>&1
+        if errorlevel 1 (
+            echo         NOTE: Git installed but not on PATH yet.
+            echo         Close and re-open this terminal for Git to work.
+        ) else (
+            for /f "tokens=*" %%v in ('git --version') do echo         %%v installed successfully!
+        )
+    ) else (
+        echo         WARNING: Git download failed. You can install it later from:
+        echo         https://git-scm.com/
+        echo         (Git is only needed for pulling future updates.^)
+    )
+) else (
+    for /f "tokens=*" %%v in ('git --version') do echo         Found %%v
+)
+
+:: ─── [3/5] Install npm packages ───
+echo  [3/5] Installing npm packages...
 call npm install --no-audit --no-fund
 echo         Done.
 
-:: ─── [3/4] Download FFmpeg ───
-echo  [3/4] Checking FFmpeg...
+:: ─── [4/5] Download FFmpeg ───
+echo  [4/5] Checking FFmpeg...
 
 :: Check if FFmpeg is already on PATH
 where ffmpeg >nul 2>&1
@@ -75,8 +167,8 @@ if exist "tools\ffmpeg\bin\ffmpeg.exe" (
 )
 
 :mrv2
-:: ─── [4/4] Check mrViewer2 ───
-echo  [4/4] Checking mrViewer2...
+:: ─── [5/5] Check mrViewer2 ───
+echo  [5/5] Checking mrViewer2...
 set "MRV2_FOUND=0"
 for /d %%d in ("C:\Program Files\vmrv2-*") do set "MRV2_FOUND=1"
 if !MRV2_FOUND!==1 (

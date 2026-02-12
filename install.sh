@@ -6,13 +6,17 @@ cd "$(dirname "$0")"
 
 echo ""
 echo "  ============================================="
-echo "    Digital Media Vault (DMV) — Installer"
+echo "    Digital Media Vault (DMV) — One-Click Installer"
 echo "  ============================================="
 echo ""
+echo "  This installer handles everything for you."
+echo "  Just sit back — it will install all dependencies"
+echo "  automatically if they are not already present."
+echo ""
 
-# ─── [1/5] Homebrew (macOS only) ───
+# ─── [1/6] Homebrew (macOS only) ───
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "  [1/5] Checking Homebrew..."
+    echo "  [1/6] Checking Homebrew..."
     if command -v brew &>/dev/null; then
         echo "         Homebrew found."
     else
@@ -24,11 +28,11 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         fi
     fi
 else
-    echo "  [1/5] Linux detected — using apt package manager."
+    echo "  [1/6] Linux detected — using apt package manager."
 fi
 
-# ─── [2/5] Node.js ───
-echo "  [2/5] Checking Node.js..."
+# ─── [2/6] Node.js ───
+echo "  [2/6] Checking Node.js..."
 if command -v node &>/dev/null; then
     echo "         Found Node.js $(node --version)"
 else
@@ -41,8 +45,22 @@ else
     echo "         Installed Node.js $(node --version)"
 fi
 
-# ─── [3/5] FFmpeg ───
-echo "  [3/5] Checking FFmpeg..."
+# ─── [3/6] Git ───
+echo "  [3/6] Checking Git..."
+if command -v git &>/dev/null; then
+    echo "         Found $(git --version)"
+else
+    echo "         Git not found. Installing..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        brew install git
+    else
+        sudo apt install -y git
+    fi
+    echo "         Installed $(git --version)"
+fi
+
+# ─── [4/6] FFmpeg ───
+echo "  [4/6] Checking FFmpeg..."
 if command -v ffmpeg &>/dev/null; then
     echo "         FFmpeg already installed."
 else
@@ -55,13 +73,13 @@ else
     echo "         FFmpeg installed."
 fi
 
-# ─── [4/5] npm packages ───
-echo "  [4/5] Installing npm packages..."
+# ─── [5/6] npm packages ───
+echo "  [5/6] Installing npm packages..."
 npm install --no-audit --no-fund
 echo "         Done."
 
-# ─── [5/5] mrViewer2 ───
-echo "  [5/5] Checking mrViewer2..."
+# ─── [6/6] mrViewer2 ───
+echo "  [6/6] Checking mrViewer2..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
     if ls /Applications/mrv2*.app &>/dev/null 2>&1; then
         echo "         mrViewer2 found in /Applications."

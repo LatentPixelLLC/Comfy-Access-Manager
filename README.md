@@ -103,32 +103,30 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 
 ## Installation
 
+The one-click installer automatically downloads and installs **everything** you need — Node.js, Git, FFmpeg, npm packages, and mrViewer2. No manual setup required.
+
 ### Windows
 
-Install [Node.js](https://nodejs.org/) (v18+) and [Git](https://git-scm.com/) first. The installer handles everything else — FFmpeg, npm packages, and mrViewer2.
-
 ```bash
-# 1. Clone the repository
+# 1. Download the ZIP from GitHub and extract it (or clone if you already have Git)
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 2. Run the installer
+# 2. Run the one-click installer (handles Node.js, Git, FFmpeg, npm packages)
 install.bat
 
 # 3. Start the server
 start.bat
 ```
 
-### macOS
-
-Just need [Git](https://git-scm.com/). The installer auto-installs Node.js, FFmpeg, and npm packages via Homebrew.
+### macOS / Linux
 
 ```bash
-# 1. Clone the repository
+# 1. Clone the repository (Git comes pre-installed on most Macs; Linux install.sh will install it)
 git clone https://github.com/gregtee2/Digital-Media-Vault.git
 cd Digital-Media-Vault
 
-# 2. Run the installer
+# 2. Run the one-click installer (handles Homebrew, Node.js, Git, FFmpeg, npm packages)
 chmod +x install.sh start.sh
 ./install.sh
 
@@ -136,22 +134,7 @@ chmod +x install.sh start.sh
 ./start.sh
 ```
 
-### Linux
-
-Just need [Git](https://git-scm.com/). The installer auto-installs Node.js, FFmpeg, and npm packages via apt.
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/gregtee2/Digital-Media-Vault.git
-cd Digital-Media-Vault
-
-# 2. Run the installer
-chmod +x install.sh start.sh
-./install.sh
-
-# 3. Start the server
-./start.sh
-```
+> **No Git?** You can also download the [ZIP from GitHub](https://github.com/gregtee2/Digital-Media-Vault/archive/refs/heads/main.zip), extract it, and run the installer — it will install Git for you too.
 
 ---
 
