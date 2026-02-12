@@ -101,16 +101,9 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 
 ---
 
-## Prerequisites
-
-- **Node.js** v18 or later — [Download](https://nodejs.org/)
-- **Git** (for cloning the repo) — [Download](https://git-scm.com/)
-
-> FFmpeg and mrViewer2 are **automatically installed** by the install script. You don't need to download them manually.
-
----
-
 ## Installation
+
+> **Only two things to install first:** [Node.js](https://nodejs.org/) (v18+) and [Git](https://git-scm.com/). Everything else — FFmpeg, mrViewer2, npm packages — is handled automatically by the install script.
 
 ### Windows
 
