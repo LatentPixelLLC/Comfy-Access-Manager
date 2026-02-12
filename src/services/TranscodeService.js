@@ -218,9 +218,13 @@ class TranscodeService {
             outputVaultName = `${sourceBase}${outputExt}`;
             outputPath = path.join(outputDir, outputVaultName);
 
-            // Handle collision
+            // Handle collision — find next clean suffix (_02, _03, etc.)
             if (fs.existsSync(outputPath)) {
-                outputPath = path.join(outputDir, `${sourceBase}_${Date.now()}${outputExt}`);
+                let suffix = 2;
+                while (fs.existsSync(path.join(outputDir, `${sourceBase}_${String(suffix).padStart(2, '0')}${outputExt}`))) {
+                    suffix++;
+                }
+                outputPath = path.join(outputDir, `${sourceBase}_${String(suffix).padStart(2, '0')}${outputExt}`);
                 outputVaultName = path.basename(outputPath);
             }
         }

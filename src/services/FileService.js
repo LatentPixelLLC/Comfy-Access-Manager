@@ -94,12 +94,16 @@ class FileService {
 
         const destPath = path.join(vaultDir, vaultName);
 
-        // Handle name collision — append timestamp
+        // Handle name collision — find next clean suffix (_02, _03, etc.)
         let finalPath = destPath;
         if (fs.existsSync(destPath)) {
             const ext = getExtension(vaultName);
             const base = path.basename(vaultName, ext);
-            finalPath = path.join(vaultDir, `${base}_${Date.now()}${ext}`);
+            let suffix = 2;
+            while (fs.existsSync(path.join(vaultDir, `${base}_${String(suffix).padStart(2, '0')}${ext}`))) {
+                suffix++;
+            }
+            finalPath = path.join(vaultDir, `${base}_${String(suffix).padStart(2, '0')}${ext}`);
         }
 
         // Move or copy file into vault
@@ -169,11 +173,16 @@ class FileService {
 
         const destPath = path.join(vaultDir, vaultName);
 
+        // Handle name collision — find next clean suffix (_02, _03, etc.)
         let finalPath = destPath;
         if (fs.existsSync(destPath)) {
             const ext = getExtension(vaultName);
             const base = path.basename(vaultName, ext);
-            finalPath = path.join(vaultDir, `${base}_${Date.now()}${ext}`);
+            let suffix = 2;
+            while (fs.existsSync(path.join(vaultDir, `${base}_${String(suffix).padStart(2, '0')}${ext}`))) {
+                suffix++;
+            }
+            finalPath = path.join(vaultDir, `${base}_${String(suffix).padStart(2, '0')}${ext}`);
         }
 
         fs.copyFileSync(sourcePath, finalPath);
