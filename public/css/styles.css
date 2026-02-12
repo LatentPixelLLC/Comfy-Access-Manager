@@ -1694,6 +1694,56 @@ label:has(input[type="checkbox"]) {
     color: var(--text-muted);
 }
 
+/* Sub-menu (format variants) */
+.ctx-item-parent {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.ctx-item-parent::after {
+    content: '\25B8';
+    margin-left: 12px;
+    font-size: 0.7rem;
+    opacity: 0.5;
+}
+.ctx-submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: -4px;
+    min-width: 160px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 0;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 10001;
+}
+.ctx-item-parent:hover > .ctx-submenu {
+    display: block;
+}
+.ctx-sub-item {
+    padding: 6px 14px;
+    cursor: pointer;
+    color: var(--text-primary);
+    white-space: nowrap;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 0.82rem;
+}
+.ctx-sub-item:hover {
+    background: var(--bg-card-hover);
+}
+.ctx-sub-ext {
+    font-weight: 600;
+}
+.ctx-sub-size {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
 /* ═══════════════════════════════════════════
    TOOLTIPS — Custom styled tooltips
    Usage: <span class="has-tip" data-tip="Tooltip text">Label</span>

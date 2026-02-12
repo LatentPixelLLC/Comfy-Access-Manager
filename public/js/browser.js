@@ -503,7 +503,7 @@ function renderAssets() {
         container.className = 'asset-grid';
         container.innerHTML = state.assets.map((a, i) => `
             <div class="asset-card fade-in ${state.selectedAssets.includes(a.id) ? 'asset-selected' : ''}" 
-                data-aidx="${i}" onclick="handleAssetClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
+                data-aidx="${i}" onclick="handleAssetClick(event, ${i})" ondblclick="handleAssetDblClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
                 draggable="true" ondragstart="onAssetDragStart(event, ${i})">
                 <div class="asset-thumb">
                     <img src="/api/assets/${a.id}/thumbnail" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
@@ -528,7 +528,7 @@ function renderAssets() {
         container.className = 'asset-list';
         container.innerHTML = state.assets.map((a, i) => `
             <div class="asset-row ${state.selectedAssets.includes(a.id) ? 'asset-selected' : ''}" 
-                data-aidx="${i}" onclick="handleAssetClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
+                data-aidx="${i}" onclick="handleAssetClick(event, ${i})" ondblclick="handleAssetDblClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
                 draggable="true" ondragstart="onAssetDragStart(event, ${i})">
                 ${state.selectedAssets.includes(a.id) ? '<div class="asset-check-row">✓</div>' : ''}
                 <div class="row-thumb">
@@ -583,8 +583,15 @@ function handleAssetClick(event, assetIdx) {
     }
 
     state.lastClickedAsset = assetIdx;
+}
+
+function handleAssetDblClick(event, assetIdx) {
+    event.preventDefault();
+    const asset = state.assets[assetIdx];
+    if (!asset) return;
     openPlayer(assetIdx);
 }
+window.handleAssetDblClick = handleAssetDblClick;
 
 function toggleAssetSelection(assetId) {
     const idx = state.selectedAssets.indexOf(assetId);
@@ -619,7 +626,7 @@ function updateSelectionToolbar() {
 //  RIGHT-CLICK CONTEXT MENU
 // ═══════════════════════════════════════════
 
-function showContextMenu(event, assetIdx) {
+async function showContextMenu(event, assetIdx) {
     event.preventDefault();
     event.stopPropagation();
 
@@ -636,6 +643,16 @@ function showContextMenu(event, assetIdx) {
     const count = state.selectedAssets.length;
     const isSingle = count === 1;
 
+    // Fetch format variants for single-asset actions
+    let formats = [];
+    if (isSingle) {
+        try {
+            const resp = await fetch(`/api/assets/${asset.id}/formats`);
+            const data = await resp.json();
+            formats = data.formats || [];
+        } catch { formats = [{ id: asset.id, file_ext: asset.file_ext || '?', media_type: asset.media_type, file_size: asset.file_size }]; }
+    }
+
     // Remove any existing context menu
     dismissContextMenu();
 
@@ -643,49 +660,95 @@ function showContextMenu(event, assetIdx) {
     menu.id = 'assetContextMenu';
     menu.className = 'context-menu';
 
-    const items = [];
+    // Helper: format file size compactly
+    const fmtSize = (bytes) => {
+        if (!bytes) return '';
+        if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
+        if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return bytes + ' B';
+    };
 
-    // Single-asset actions
+    // Build menu HTML
+    let html = '';
+
+    // Single-asset actions with format sub-menus
     if (isSingle) {
-        items.push({ icon: '▶️', label: 'Open in Player', action: () => openPlayer(assetIdx) });
-        items.push({ icon: '🎬', label: 'Open in mrViewer2', action: () => window.openInMrViewer2?.(asset.id) });
-        items.push({ icon: asset.starred ? '☆' : '⭐', label: asset.starred ? 'Unstar' : 'Star', action: () => toggleStar(asset.id) });
-        items.push('separator');
+        if (formats.length <= 1) {
+            // Single format — show extension inline, no sub-menu
+            const ext = (asset.file_ext || '').toLowerCase();
+            html += `<div class="ctx-item" data-action="play">▶️ Play ${ext}</div>`;
+            html += `<div class="ctx-item" data-action="mrv2">🎬 mrViewer2 ${ext}</div>`;
+        } else {
+            // Multiple formats — show sub-menus
+            html += `<div class="ctx-item ctx-item-parent">▶️ Play`;
+            html += `<div class="ctx-submenu">`;
+            for (const f of formats) {
+                const ext = (f.file_ext || '').toLowerCase();
+                html += `<div class="ctx-sub-item" data-play-id="${f.id}"><span class="ctx-sub-ext">${ext}</span><span class="ctx-sub-size">${fmtSize(f.file_size)}</span></div>`;
+            }
+            html += `</div></div>`;
+
+            html += `<div class="ctx-item ctx-item-parent">🎬 mrViewer2`;
+            html += `<div class="ctx-submenu">`;
+            for (const f of formats) {
+                const ext = (f.file_ext || '').toLowerCase();
+                html += `<div class="ctx-sub-item" data-mrv2-id="${f.id}"><span class="ctx-sub-ext">${ext}</span><span class="ctx-sub-size">${fmtSize(f.file_size)}</span></div>`;
+            }
+            html += `</div></div>`;
+        }
+        html += `<div class="ctx-item" data-action="star">${asset.starred ? '☆' : '⭐'} ${asset.starred ? 'Unstar' : 'Star'}</div>`;
+        html += `<div class="ctx-separator"></div>`;
     }
 
     // Multi-asset actions (always available)
-    items.push({ icon: '📋', label: `Move to Sequence${!isSingle ? ` (${count})` : ''}`, action: () => showMoveToSequenceModal() });
-    items.push({ icon: '🎭', label: `Set Role${!isSingle ? ` (${count})` : ''}`, action: () => showAssignRoleModal() });
-    items.push({ icon: '📤', label: `Export${!isSingle ? ` (${count})` : ''}`, action: () => window.showExportModal?.() });
+    html += `<div class="ctx-item" data-action="move">📋 Move to Sequence${!isSingle ? ` (${count})` : ''}</div>`;
+    html += `<div class="ctx-item" data-action="role">🎭 Set Role${!isSingle ? ` (${count})` : ''}</div>`;
+    html += `<div class="ctx-item" data-action="export">📤 Export${!isSingle ? ` (${count})` : ''}</div>`;
 
     if (count >= 2) {
-        items.push({ icon: '🎬', label: `Compare in mrViewer2 (${count})`, action: () => window.openCompareInMrViewer2?.() });
+        html += `<div class="ctx-item" data-action="compare">🎬 Compare in mrViewer2 (${count})</div>`;
     }
 
-    items.push('separator');
-    items.push({ icon: '☑', label: 'Select All', action: () => selectAllAssets() });
+    html += `<div class="ctx-separator"></div>`;
+    html += `<div class="ctx-item" data-action="selectAll">☑ Select All</div>`;
     if (count > 0) {
-        items.push({ icon: '☐', label: 'Deselect All', action: () => clearAssetSelection() });
+        html += `<div class="ctx-item" data-action="deselectAll">☐ Deselect All</div>`;
     }
 
-    items.push('separator');
-    items.push({ icon: '🗑', label: `Delete${!isSingle ? ` (${count})` : ''}`, cls: 'ctx-danger', action: () => bulkDeleteAssets() });
-    items.push({ icon: '🗑', label: `Remove from DB only${!isSingle ? ` (${count})` : ''}`, cls: 'ctx-muted', action: () => bulkDeleteAssets(true) });
+    html += `<div class="ctx-separator"></div>`;
+    html += `<div class="ctx-item ctx-danger" data-action="delete">🗑 Delete${!isSingle ? ` (${count})` : ''}</div>`;
+    html += `<div class="ctx-item ctx-muted" data-action="removeDb">🗑 Remove from DB only${!isSingle ? ` (${count})` : ''}</div>`;
 
-    menu.innerHTML = items.map(item => {
-        if (item === 'separator') return '<div class="ctx-separator"></div>';
-        return `<div class="ctx-item ${item.cls || ''}">${item.icon} ${item.label}</div>`;
-    }).join('');
-
+    menu.innerHTML = html;
     document.body.appendChild(menu);
 
     // Wire up click handlers
-    const clickableItems = items.filter(i => i !== 'separator');
-    menu.querySelectorAll('.ctx-item').forEach((el, i) => {
-        el.addEventListener('click', () => {
-            dismissContextMenu();
-            clickableItems[i].action();
-        });
+    menu.addEventListener('click', (e) => {
+        const item = e.target.closest('[data-action], [data-play-id], [data-mrv2-id]');
+        if (!item) return;
+        dismissContextMenu();
+
+        const action = item.dataset.action;
+        const playId = item.dataset.playId;
+        const mrv2Id = item.dataset.mrv2Id;
+
+        if (playId) { window.openPlayerById?.(parseInt(playId)); return; }
+        if (mrv2Id) { window.openInMrViewer2?.(parseInt(mrv2Id)); return; }
+
+        switch (action) {
+            case 'play': openPlayer(assetIdx); break;
+            case 'mrv2': window.openInMrViewer2?.(asset.id); break;
+            case 'star': toggleStar(asset.id); break;
+            case 'move': showMoveToSequenceModal(); break;
+            case 'role': showAssignRoleModal(); break;
+            case 'export': window.showExportModal?.(); break;
+            case 'compare': window.openCompareInMrViewer2?.(); break;
+            case 'selectAll': selectAllAssets(); break;
+            case 'deselectAll': clearAssetSelection(); break;
+            case 'delete': bulkDeleteAssets(); break;
+            case 'removeDb': bulkDeleteAssets(true); break;
+        }
     });
 
     // Position: ensure menu stays within viewport
@@ -702,6 +765,14 @@ function showContextMenu(event, assetIdx) {
         if (y + mRect.height > window.innerHeight) y = window.innerHeight - mRect.height - 8;
         menu.style.left = x + 'px';
         menu.style.top = y + 'px';
+
+        // Flip sub-menus to the left if they'd go off-screen
+        if (x + mRect.width + 160 > window.innerWidth) {
+            menu.querySelectorAll('.ctx-submenu').forEach(sub => {
+                sub.style.left = 'auto';
+                sub.style.right = '100%';
+            });
+        }
     });
 
     // Dismiss on click outside or Escape

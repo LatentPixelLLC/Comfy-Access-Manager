@@ -173,6 +173,7 @@ router.get('/:id', (req, res) => {
 // ═══════════════════════════════════════════
 
 // POST /api/assets/import — Import files from filesystem paths
+// Supports: individual files, frame sequences (auto-detected), and derivative generation
 router.post('/import', async (req, res) => {
     const { files, project_id, sequence_id, shot_id, role_id, take_number, custom_name, template } = req.body;
 
@@ -194,11 +195,182 @@ router.post('/import', async (req, res) => {
 
     const results = [];
     const errors = [];
+    const derivativeJobIds = [];
 
     const registerInPlace = !!req.body.register_in_place;
+    const generateDerivatives = !!req.body.generate_derivatives;
+    const derivativeFormats = Array.isArray(req.body.derivative_formats) ? req.body.derivative_formats : [];
+    const derivativeFps = parseInt(req.body.derivative_fps) || 24;
 
-    for (let i = 0; i < files.length; i++) {
-        const filePath = files[i];
+    // ── Step 1: Detect frame sequences ──
+    const { detectSequences, buildFrameFilename, buildVaultPattern } = require('../utils/sequenceDetector');
+    const { sequences: detectedSeqs, singles } = detectSequences(files);
+
+    // ── Step 2: Import detected frame sequences as single assets ──
+    for (const seq of detectedSeqs) {
+        try {
+            // Validate all frames exist
+            const missingFrames = seq.files.filter(f => !fs.existsSync(f));
+            if (missingFrames.length > 0) {
+                errors.push({ file: `${seq.baseName}${seq.ext} (sequence)`, error: `${missingFrames.length} frames not found` });
+                continue;
+            }
+
+            // Generate ONE vault name for the whole sequence (base name without frame number)
+            const seqOriginalName = `${seq.baseName}${seq.ext}`;
+            const { type: mediaType } = detectMediaType(seqOriginalName);
+
+            const naming = require('../utils/naming');
+            const nameResult = naming.generateVaultName({
+                originalName: seqOriginalName,
+                projectCode: project.code,
+                sequenceCode: sequence?.code,
+                shotCode: shot?.code,
+                roleCode: role?.code,
+                takeNumber: take_number || 1,
+                mediaType,
+                customName: custom_name || null,
+                counter: 1,
+            });
+            // Base name without extension: "EDA1500_comp_v001"
+            const vaultBaseName = path.basename(nameResult.vaultName, nameResult.ext);
+            const vaultExt = nameResult.ext;  // ".exr"
+
+            let firstFramePath, framePatternString, totalSize = 0;
+
+            if (registerInPlace) {
+                // Register in place: just catalog the sequence
+                firstFramePath = path.resolve(seq.files[0]);
+                framePatternString = `${seq.baseName}${seq.separator}%0${seq.digits}d${seq.ext}`;
+
+                // Sum file sizes
+                for (const fp of seq.files) {
+                    try { totalSize += fs.statSync(fp).size; } catch {}
+                }
+            } else {
+                // Normal import: move/copy all frames into vault
+                const vaultRoot = FileService.getVaultRoot();
+                const { getVaultDirectory: getVaultDir } = require('../utils/naming');
+                const vaultDir = getVaultDir(vaultRoot, project.code, mediaType, sequence?.code, shot?.code);
+                FileService.ensureDir(vaultDir);
+
+                for (let fi = 0; fi < seq.files.length; fi++) {
+                    const srcFrame = seq.files[fi];
+                    const frameNum = seq.frameStart + fi;
+                    const frameFilename = buildFrameFilename(vaultBaseName, frameNum, seq.digits, vaultExt);
+                    const destPath = path.join(vaultDir, frameFilename);
+
+                    if (req.body.keep_originals) {
+                        fs.copyFileSync(srcFrame, destPath);
+                    } else {
+                        try {
+                            fs.renameSync(srcFrame, destPath);
+                        } catch (err) {
+                            if (err.code === 'EXDEV') {
+                                fs.copyFileSync(srcFrame, destPath);
+                                fs.unlinkSync(srcFrame);
+                            } else throw err;
+                        }
+                    }
+
+                    totalSize += fs.statSync(destPath).size;
+                    if (fi === 0) firstFramePath = destPath;
+                }
+
+                framePatternString = buildVaultPattern(vaultBaseName, seq.digits, vaultExt);
+            }
+
+            // Probe first frame for dimensions
+            const info = await MediaInfoService.probe(firstFramePath);
+
+            // Compute relative path
+            const vaultRoot = registerInPlace ? '' : FileService.getVaultRoot();
+            const relativePath = vaultRoot ? path.relative(vaultRoot, firstFramePath) : firstFramePath;
+
+            // Insert ONE asset row for the entire sequence
+            const vaultName = `${vaultBaseName}${vaultExt}`;
+            const result = db.prepare(`
+                INSERT INTO assets (
+                    project_id, sequence_id, shot_id, role_id,
+                    original_name, vault_name, file_path, relative_path,
+                    media_type, file_ext, file_size,
+                    width, height, duration, fps, codec,
+                    take_number, version, is_linked,
+                    is_sequence, frame_start, frame_end, frame_count, frame_pattern
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                project.id,
+                sequence?.id || null,
+                shot?.id || null,
+                role_id || null,
+                seqOriginalName,
+                vaultName,
+                firstFramePath,
+                relativePath,
+                mediaType,
+                vaultExt,
+                totalSize,
+                info.width, info.height,
+                null,  // duration: calculated from frame_count / fps if needed
+                null,  // fps: set by user or default
+                info.codec,
+                take_number || 1,
+                1,
+                registerInPlace ? 1 : 0,
+                1,                  // is_sequence = true
+                seq.frameStart,
+                seq.frameEnd,
+                seq.frameCount,
+                framePatternString
+            );
+
+            const assetId = result.lastInsertRowid;
+
+            // Generate thumbnail from first frame
+            const autoThumb = getSetting('auto_thumbnail') !== 'false';
+            if (autoThumb) {
+                try {
+                    const thumbPath = await ThumbnailService.generate(firstFramePath, assetId);
+                    if (thumbPath) {
+                        db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?').run(thumbPath, assetId);
+                    }
+                } catch (thumbErr) {
+                    console.error(`[Import] Thumbnail failed for sequence ${vaultName}:`, thumbErr.message);
+                }
+            }
+
+            logActivity('asset_imported', 'asset', assetId, {
+                original: seqOriginalName,
+                vault: vaultName,
+                project: project.name,
+                isSequence: true,
+                frameCount: seq.frameCount,
+                frameRange: `${seq.frameStart}-${seq.frameEnd}`,
+            });
+
+            const asset = db.prepare('SELECT * FROM assets WHERE id = ?').get(assetId);
+            results.push(asset);
+
+            // Queue derivatives for this sequence if requested
+            if (generateDerivatives && derivativeFormats.length > 0) {
+                const TranscodeService = require('../services/TranscodeService');
+                for (const fmt of derivativeFormats) {
+                    const jobId = TranscodeService.queueDerivative(assetId, fmt, {
+                        fps: derivativeFps,
+                        _totalFrames: seq.frameCount,
+                    });
+                    derivativeJobIds.push(jobId);
+                }
+            }
+
+        } catch (err) {
+            errors.push({ file: `${seq.baseName}${seq.ext} (${seq.frameCount} frames)`, error: err.message });
+        }
+    }
+
+    // ── Step 3: Import remaining single files normally ──
+    for (let i = 0; i < singles.length; i++) {
+        const filePath = singles[i];
 
         try {
             if (!fs.existsSync(filePath)) {
@@ -217,12 +389,10 @@ router.post('/import', async (req, res) => {
             let vaultPath, vaultName, relativePath, finalMediaType;
 
             if (registerInPlace) {
-                // ── Register in place: don't move/copy, just catalog ──
                 vaultPath = path.resolve(filePath);
-                relativePath = vaultPath;  // Full path since it's outside the vault
+                relativePath = vaultPath;
                 finalMediaType = mediaType;
 
-                // Still generate a proper ShotGrid vault_name for display
                 const naming = require('../utils/naming');
                 const nameResult = naming.generateVaultName({
                     originalName,
@@ -231,19 +401,18 @@ router.post('/import', async (req, res) => {
                     shotCode: shot?.code,
                     roleCode: role?.code,
                     takeNumber: take_number || (i + 1),
-                    customName: files.length === 1 ? custom_name : null,
+                    customName: singles.length === 1 && !detectedSeqs.length ? custom_name : null,
                     counter: i + 1,
                 });
                 vaultName = nameResult.vaultName;
             } else {
-                // ── Normal import: move or copy into vault ──
                 const imported = FileService.importFile(filePath, {
                     projectCode: project.code,
                     sequenceCode: sequence?.code,
                     shotCode: shot?.code,
                     roleCode: role?.code,
                     takeNumber: take_number || (i + 1),
-                    customName: files.length === 1 ? custom_name : null,
+                    customName: singles.length === 1 && !detectedSeqs.length ? custom_name : null,
                     template,
                     counter: i + 1,
                     keepOriginals: !!req.body.keep_originals,
@@ -254,10 +423,8 @@ router.post('/import', async (req, res) => {
                 finalMediaType = imported.mediaType;
             }
 
-            // Get media metadata
             const info = await MediaInfoService.probe(vaultPath);
 
-            // Insert into database
             const result = db.prepare(`
                 INSERT INTO assets (
                     project_id, sequence_id, shot_id, role_id,
@@ -286,14 +453,12 @@ router.post('/import', async (req, res) => {
 
             const assetId = result.lastInsertRowid;
 
-            // Generate thumbnail
             const autoThumb = getSetting('auto_thumbnail') !== 'false';
             if (autoThumb) {
                 try {
                     const thumbPath = await ThumbnailService.generate(vaultPath, assetId);
                     if (thumbPath) {
-                        db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?')
-                            .run(thumbPath, assetId);
+                        db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?').run(thumbPath, assetId);
                     }
                 } catch (thumbErr) {
                     console.error(`[Import] Thumbnail failed for ${originalName}:`, thumbErr.message);
@@ -309,6 +474,21 @@ router.post('/import', async (req, res) => {
             const asset = db.prepare('SELECT * FROM assets WHERE id = ?').get(assetId);
             results.push(asset);
 
+            // Queue derivatives for video/exr single files if requested
+            if (generateDerivatives && derivativeFormats.length > 0) {
+                const { type: srcType } = detectMediaType(vaultName);
+                if (srcType === 'video' || srcType === 'exr') {
+                    const TranscodeService = require('../services/TranscodeService');
+                    for (const fmt of derivativeFormats) {
+                        const jobId = TranscodeService.queueDerivative(assetId, fmt, {
+                            fps: derivativeFps,
+                            _totalDuration: info.duration || null,
+                        });
+                        derivativeJobIds.push(jobId);
+                    }
+                }
+            }
+
         } catch (err) {
             errors.push({ file: filePath, error: err.message });
         }
@@ -317,11 +497,17 @@ router.post('/import', async (req, res) => {
     // Update project timestamp
     db.prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?").run(project.id);
 
+    const sequenceCount = detectedSeqs.length;
+    const singleCount = singles.length;
+
     res.json({
         imported: results.length,
         errors: errors.length,
         assets: results,
         errors_detail: errors,
+        sequences_detected: sequenceCount,
+        singles_imported: singleCount,
+        derivative_jobs: derivativeJobIds,
     });
 });
 
@@ -1120,6 +1306,51 @@ router.post('/:id/open-external', (req, res) => {
     const playerName = player === 'custom' ? path.basename(exePath) : 'mrViewer2';
     console.log(`[${playerName}] Launched: ${asset.vault_name}`);
     res.json({ success: true, path: asset.file_path, player: playerName });
+});
+
+// ═══════════════════════════════════════════
+//  FORMAT VARIANTS (siblings with same base name)
+// ═══════════════════════════════════════════
+
+// GET /api/assets/:id/formats — find format variants (same base name, different extension)
+// Includes both GLOB-matched siblings and explicit derivatives (parent_asset_id)
+router.get('/:id/formats', (req, res) => {
+    const db = getDb();
+    const asset = db.prepare('SELECT * FROM assets WHERE id = ?').get(req.params.id);
+    if (!asset) return res.status(404).json({ error: 'Asset not found' });
+
+    // Strip extension to get base name
+    const baseName = asset.vault_name.replace(/\.[^.]+$/, '');
+
+    // 1. GLOB match: same base name, any extension, same project
+    const globMatches = db.prepare(`
+        SELECT id, vault_name, file_ext, media_type, file_size, is_sequence, is_derivative, parent_asset_id
+        FROM assets
+        WHERE project_id = ?
+        AND vault_name GLOB ?
+        ORDER BY file_ext
+    `).all(asset.project_id, baseName + '.*');
+
+    // 2. Explicit derivatives: linked via parent_asset_id (covers cases where name differs)
+    const parentId = asset.parent_asset_id || asset.id;
+    const explicitDerivatives = db.prepare(`
+        SELECT id, vault_name, file_ext, media_type, file_size, is_sequence, is_derivative, parent_asset_id
+        FROM assets
+        WHERE (parent_asset_id = ? OR parent_asset_id = ? OR id = ?)
+        ORDER BY file_ext
+    `).all(parentId, asset.id, parentId);
+
+    // Merge and deduplicate by ID
+    const seen = new Set();
+    const formats = [];
+    for (const row of [...globMatches, ...explicitDerivatives]) {
+        if (!seen.has(row.id)) {
+            seen.add(row.id);
+            formats.push(row);
+        }
+    }
+
+    res.json({ formats, baseName });
 });
 
 module.exports = router;

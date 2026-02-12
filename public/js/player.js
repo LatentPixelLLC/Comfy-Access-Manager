@@ -388,3 +388,32 @@ window.setCompareMode = setCompareMode;
 window.setCompareActive = setCompareActive;
 window.swapCompareAsset = swapCompareAsset;
 window.exitCompareMode = exitCompareMode;
+
+// Open player by asset ID (for format variant sub-menu)
+function openPlayerById(assetId) {
+    // Find index in current state.assets
+    const idx = state.assets.findIndex(a => a.id === assetId);
+    if (idx >= 0) {
+        openPlayer(idx);
+    } else {
+        // Asset not in current view — fetch it and play directly
+        fetch(`/api/assets/${assetId}`)
+            .then(r => r.json())
+            .then(asset => {
+                if (asset && asset.id) {
+                    state.playerAssets = [asset];
+                    state.playerIndex = 0;
+                    const defPlayer = state.settings?.default_player || 'browser';
+                    if (defPlayer !== 'browser') {
+                        openInExternalPlayer(asset.id);
+                    } else {
+                        renderPlayer();
+                        document.getElementById('playerModal').style.display = 'flex';
+                        document.addEventListener('keydown', playerKeyHandler);
+                    }
+                }
+            })
+            .catch(() => showToast('Failed to load asset', 3000));
+    }
+}
+window.openPlayerById = openPlayerById;

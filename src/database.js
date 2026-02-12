@@ -302,6 +302,30 @@ function runMigrations(wrapper) {
         }
     } catch (_) { /* column already exists */ }
 
+    // ─── Add sequence + derivative columns to assets ───
+    const seqDerivCols = {
+        is_sequence:     'INTEGER DEFAULT 0',
+        frame_start:     'INTEGER',
+        frame_end:       'INTEGER',
+        frame_count:     'INTEGER',
+        frame_pattern:   'TEXT',
+        parent_asset_id: 'INTEGER',
+        is_derivative:   'INTEGER DEFAULT 0',
+    };
+    try {
+        const assetColsSD = [];
+        let stSD = wrapper._rawDb.prepare('PRAGMA table_info(assets)');
+        while (stSD.step()) assetColsSD.push(stSD.getAsObject().name);
+        stSD.free();
+        for (const [col, typedef] of Object.entries(seqDerivCols)) {
+            if (!assetColsSD.includes(col)) {
+                wrapper.exec(`ALTER TABLE assets ADD COLUMN ${col} ${typedef}`);
+            }
+        }
+        wrapper.exec('CREATE INDEX IF NOT EXISTS idx_assets_parent ON assets(parent_asset_id)');
+        wrapper.exec('CREATE INDEX IF NOT EXISTS idx_assets_sequence_flag ON assets(is_sequence)');
+    } catch (_) { /* columns already exist */ }
+
     // ─── Add flow_id columns for Flow Production Tracking integration ───
     const flowTables = ['projects', 'sequences', 'shots', 'roles'];
     for (const table of flowTables) {

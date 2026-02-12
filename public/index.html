@@ -217,6 +217,30 @@
                         </label>
                         <div id="registerWarning" style="display:none; font-size:0.8em; color:#ffaa00; margin-left:24px;">⚠️ Files remain on their current drive/network. If moved or deleted externally, MediaVault will show broken references.</div>
                     </div>
+
+                    <!-- Derivative Generation -->
+                    <div class="derivative-group" style="margin:12px 0; padding:10px; border:1px solid #333; border-radius:6px; background:#1e1e1e;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px;">
+                            <input type="checkbox" id="generateDerivatives">
+                            <span style="font-size:0.95em;">🔄 Generate Derivatives <span class="help-icon" data-tip="Automatically create alternate file formats after import. Derivatives are linked to the parent asset and appear in the format sub-menu.">?</span></span>
+                        </label>
+                        <div id="derivativeOptions" style="display:none; margin-left:24px;">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:4px;" title="Creates an H.264 MOV file for review/playback">
+                                <input type="checkbox" class="derivFormat" value="h264_mov" checked>
+                                <span style="font-size:0.85em;">🎬 H.264 MOV (review proxy)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px;" title="Creates a PNG image sequence (lossless, RGBA)">
+                                <input type="checkbox" class="derivFormat" value="png_sequence">
+                                <span style="font-size:0.85em;">🖼️ PNG Sequence (lossless)</span>
+                            </label>
+                            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                                <label style="font-size:0.82em;color:#aaa;">Sequence FPS</label>
+                                <input type="number" id="derivativeFps" value="24" min="1" max="120" style="width:60px;" title="Frame rate for derivative MOV and for interpreting frame sequences">
+                            </div>
+                            <div id="derivativeStatus" style="display:none; margin-top:8px; font-size:0.82em; color:#88aa88;"></div>
+                        </div>
+                    </div>
+
                     <!-- Hidden checkbox kept for backward compat -->
                     <input type="checkbox" id="importKeepOriginals" style="display:none">
 

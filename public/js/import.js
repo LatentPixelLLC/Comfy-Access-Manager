@@ -318,6 +318,14 @@ async function executeImport() {
         const keepOriginals = importMode === 'copy';
         const registerInPlace = importMode === 'register';
 
+        // Derivative options
+        const generateDerivatives = document.getElementById('generateDerivatives')?.checked || false;
+        const derivativeFormats = [];
+        if (generateDerivatives) {
+            document.querySelectorAll('.derivFormat:checked').forEach(cb => derivativeFormats.push(cb.value));
+        }
+        const derivativeFps = parseInt(document.getElementById('derivativeFps')?.value) || 24;
+
         const result = await api('/api/assets/import', {
             method: 'POST',
             body: {
@@ -330,21 +338,35 @@ async function executeImport() {
                 custom_name: customName,
                 keep_originals: keepOriginals,
                 register_in_place: registerInPlace,
+                generate_derivatives: generateDerivatives,
+                derivative_formats: derivativeFormats,
+                derivative_fps: derivativeFps,
             },
         });
 
         progressFill.style.width = '100%';
 
         resultDiv.style.display = 'block';
+        let resultHtml = '';
         if (result.imported > 0) {
             resultDiv.className = 'import-result success';
-            resultDiv.innerHTML = `✅ Imported ${result.imported} file(s) successfully!` +
-                (result.errors > 0 ? `<br>⚠️ ${result.errors} error(s)` : '');
+            resultHtml = `✅ Imported ${result.imported} asset(s) successfully!`;
+            if (result.sequences_detected > 0) {
+                resultHtml += `<br>📽️ ${result.sequences_detected} frame sequence(s) detected`;
+            }
+            if (result.errors > 0) {
+                resultHtml += `<br>⚠️ ${result.errors} error(s)`;
+            }
+            if (result.derivative_jobs?.length > 0) {
+                resultHtml += `<br>🔄 ${result.derivative_jobs.length} derivative job(s) queued`;
+                startDerivativePolling(result.derivative_jobs);
+            }
         } else {
             resultDiv.className = 'import-result error';
-            resultDiv.innerHTML = `❌ No files imported. ` +
+            resultHtml = `❌ No files imported. ` +
                 (result.errors_detail?.map(e => e.error).join(', ') || '');
         }
+        resultDiv.innerHTML = resultHtml;
 
         // Clear selection
         state.selectedFiles = [];
@@ -362,6 +384,54 @@ async function executeImport() {
     btn.disabled = false;
     btn.textContent = '📥 Import & Rename';
     setTimeout(() => { progress.style.display = 'none'; }, 2000);
+}
+
+// ═══════════════════════════════════════════
+//  DERIVATIVE PROGRESS POLLING
+// ═══════════════════════════════════════════
+
+let derivativePoller = null;
+
+function startDerivativePolling(jobIds) {
+    const statusDiv = document.getElementById('derivativeStatus');
+    if (!statusDiv) return;
+    statusDiv.style.display = 'block';
+    statusDiv.textContent = `🔄 Processing ${jobIds.length} derivative(s)...`;
+
+    let completedCount = 0;
+
+    derivativePoller = setInterval(async () => {
+        try {
+            const jobs = await api('/api/transcode/jobs');
+            const relevant = jobs.filter(j => jobIds.includes(j.id));
+            const done = relevant.filter(j => j.status === 'completed' || j.status === 'failed');
+            const active = relevant.find(j => j.status === 'running');
+
+            completedCount = done.length;
+            let msg = `🔄 Derivatives: ${completedCount}/${jobIds.length} complete`;
+            if (active) {
+                msg += ` — ${active.formatKey} ${Math.round(active.progress || 0)}%`;
+            }
+
+            const errCount = done.filter(j => j.status === 'failed').length;
+            if (errCount > 0) msg += ` (${errCount} failed)`;
+
+            statusDiv.textContent = msg;
+
+            if (completedCount >= jobIds.length) {
+                clearInterval(derivativePoller);
+                derivativePoller = null;
+                statusDiv.textContent = errCount > 0
+                    ? `⚠️ Derivatives: ${completedCount - errCount} done, ${errCount} failed`
+                    : `✅ All ${completedCount} derivative(s) complete!`;
+                setTimeout(() => { statusDiv.style.display = 'none'; }, 8000);
+                // Refresh browser if user switches to it
+                window.checkSetup?.();
+            }
+        } catch {
+            // Ignore polling errors silently
+        }
+    }, 2000);
 }
 
 function importToProject() {
@@ -382,6 +452,23 @@ function importToProject() {
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('importCustomName')?.addEventListener('input', updateRenamePreview);
     document.getElementById('importTake')?.addEventListener('input', updateRenamePreview);
+
+    // Derivative checkbox toggle
+    const derivCb = document.getElementById('generateDerivatives');
+    const derivOpts = document.getElementById('derivativeOptions');
+    if (derivCb && derivOpts) {
+        derivCb.addEventListener('change', () => {
+            derivOpts.style.display = derivCb.checked ? 'block' : 'none';
+        });
+    }
+
+    // Import mode: show register warning
+    document.querySelectorAll('input[name="importMode"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+            const warn = document.getElementById('registerWarning');
+            if (warn) warn.style.display = radio.value === 'register' && radio.checked ? 'block' : 'none';
+        });
+    });
 });
 
 // ═══════════════════════════════════════════
