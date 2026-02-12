@@ -27,6 +27,35 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m
 # MediaVault API base — change if needed
 MEDIAVAULT_URL = os.environ.get("MEDIAVAULT_URL", "http://localhost:7700")
 
+# Connection health cache — avoids spamming errors when MediaVault is down
+_mv_alive = True          # assume alive until first failure
+_mv_last_check = 0.0      # timestamp of last failed attempt
+_MV_BACKOFF_SEC = 60      # seconds to wait before retrying after failure
+_mv_warned = False         # only print the "offline" warning once
+
+def _mv_is_reachable():
+    """Check if MediaVault server is reachable (with backoff cache)."""
+    global _mv_alive, _mv_last_check, _mv_warned
+    now = time.time()
+    if _mv_alive:
+        return True
+    if now - _mv_last_check < _MV_BACKOFF_SEC:
+        return False  # still in backoff period — skip silently
+    # Backoff expired — try again
+    try:
+        req = urllib.request.Request(f"{MEDIAVAULT_URL}/api/settings/status", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            _mv_alive = True
+            _mv_warned = False
+            print("[MediaVault] ✓ Reconnected to MediaVault server")
+            return True
+    except Exception:
+        _mv_last_check = now
+        if not _mv_warned:
+            print(f"[MediaVault] ⚠ Server not running at {MEDIAVAULT_URL} — dropdowns will show defaults. Retrying every {_MV_BACKOFF_SEC}s.")
+            _mv_warned = True
+        return False
+
 # ═══════════════════════════════════════════
 #  ComfyUI Server Routes (for dynamic dropdowns)
 #  These register on ComfyUI's aiohttp server so the
@@ -38,13 +67,18 @@ try:
 
     def _proxy_mv(path):
         """Synchronous fetch from MediaVault API (runs inside async handler)."""
+        if not _mv_is_reachable():
+            return []
         url = f"{MEDIAVAULT_URL}{path}"
         try:
             req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode())
         except Exception as e:
-            print(f"[MediaVault] proxy error: {e}")
+            global _mv_alive, _mv_last_check
+            _mv_alive = False
+            _mv_last_check = time.time()
+            print(f"[MediaVault] proxy error (backing off {_MV_BACKOFF_SEC}s): {e}")
             return []
 
     @PromptServer.instance.routes.get("/mediavault/projects")
@@ -95,6 +129,8 @@ try:
     @PromptServer.instance.routes.get("/mediavault/thumbnail/{asset_id}")
     async def mv_thumbnail(request):
         """Proxy thumbnail image from MediaVault (avoids CORS)."""
+        if not _mv_is_reachable():
+            return web.Response(status=503, text="MediaVault not available")
         asset_id = request.match_info["asset_id"]
         url = f"{MEDIAVAULT_URL}/api/assets/{asset_id}/thumbnail"
         try:
@@ -118,6 +154,8 @@ except ImportError:
 # ═══════════════════════════════════════════
 def mv_api(path, method="GET", data=None):
     """Call MediaVault REST API."""
+    if not _mv_is_reachable():
+        return None
     url = f"{MEDIAVAULT_URL}{path}"
     headers = {"Content-Type": "application/json"}
 
@@ -130,7 +168,10 @@ def mv_api(path, method="GET", data=None):
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.URLError as e:
-        print(f"[MediaVault] API error: {e}")
+        global _mv_alive, _mv_last_check
+        _mv_alive = False
+        _mv_last_check = time.time()
+        print(f"[MediaVault] API error (backing off {_MV_BACKOFF_SEC}s): {e}")
         return None
     except json.JSONDecodeError:
         return None
