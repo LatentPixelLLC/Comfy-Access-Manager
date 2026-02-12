@@ -310,19 +310,59 @@ class FileService {
     }
 
     /**
-     * Get available drive letters on Windows
+     * Get available drive roots for the file browser.
+     * Windows: Drive letters (C:\, D:\, Z:\, etc.)
+     * macOS: / plus mounted volumes (/Volumes/ShareName, etc.)
+     * Linux: / plus common mount points
      */
     static getDrives() {
-        if (process.platform !== 'win32') return ['/'];
-        const drives = [];
-        for (let i = 65; i <= 90; i++) {
-            const drive = `${String.fromCharCode(i)}:\\`;
+        if (process.platform === 'win32') {
+            const drives = [];
+            for (let i = 65; i <= 90; i++) {
+                const drive = `${String.fromCharCode(i)}:\\`;
+                try {
+                    fs.accessSync(drive);
+                    drives.push(drive);
+                } catch {}
+            }
+            return drives;
+        }
+
+        // macOS / Linux: start with root
+        const roots = ['/'];
+
+        // macOS: Add mounted volumes (network drives, external disks)
+        if (process.platform === 'darwin') {
             try {
-                fs.accessSync(drive);
-                drives.push(drive);
+                const volumes = fs.readdirSync('/Volumes');
+                for (const vol of volumes) {
+                    const volPath = `/Volumes/${vol}`;
+                    try {
+                        fs.accessSync(volPath);
+                        roots.push(volPath);
+                    } catch {}
+                }
             } catch {}
         }
-        return drives;
+
+        // Linux: Check common network mount points
+        if (process.platform === 'linux') {
+            for (const mountDir of ['/mnt', '/media']) {
+                try {
+                    const entries = fs.readdirSync(mountDir);
+                    for (const entry of entries) {
+                        const mountPath = `${mountDir}/${entry}`;
+                        try {
+                            if (fs.statSync(mountPath).isDirectory()) {
+                                roots.push(mountPath);
+                            }
+                        } catch {}
+                    }
+                } catch {}
+            }
+        }
+
+        return roots;
     }
 }
 

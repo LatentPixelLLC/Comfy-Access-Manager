@@ -98,9 +98,14 @@ router.get('/browse', (req, res) => {
     const { dir, folders_only } = req.query;
 
     if (!dir) {
-        // Return drive letters on Windows
+        // Return drive roots (Windows: C:\, D:\, etc. / macOS: /, /Volumes/..., etc.)
         const drives = FileService.getDrives();
-        res.json({ path: '', entries: drives.map(d => ({ name: d, path: d, isDirectory: true, icon: '💾' })) });
+        res.json({ path: '', entries: drives.map(d => {
+            const isVolume = d.startsWith('/Volumes/') || d.startsWith('/mnt/') || d.startsWith('/media/');
+            const name = isVolume ? d.split('/').pop() : d;
+            const icon = isVolume ? '🌐' : (d === '/' ? '💻' : '💾');
+            return { name, path: d, isDirectory: true, icon };
+        }) });
         return;
     }
 
