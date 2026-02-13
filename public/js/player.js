@@ -1035,8 +1035,10 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
  */
 async function _buildCacheWebCodecs(videoSrc, fps, onProgress, ac) {
     // 1. Download entire video file
+    console.log('[FrameCache] WC: fetching video...');
     const response = await fetch(videoSrc, { signal: ac.signal });
     const buffer = await response.arrayBuffer();
+    console.log('[FrameCache] WC: downloaded', (buffer.byteLength / 1024 / 1024).toFixed(1), 'MB');
     if (ac.signal.aborted) return null;
 
     return new Promise((resolve, reject) => {
@@ -1058,10 +1060,11 @@ async function _buildCacheWebCodecs(videoSrc, fps, onProgress, ac) {
         ac.signal.addEventListener('abort', onAbort, { once: true });
 
         file.onReady = async (info) => {
+            console.log('[FrameCache] WC: mp4box onReady, tracks:', info.videoTracks?.length, 'duration:', info.duration / info.timescale);
             if (ac.signal.aborted) return;
 
             const track = info.videoTracks?.[0];
-            if (!track) { resolve(null); return; }
+            if (!track) { console.warn('[FrameCache] WC: no video track found'); resolve(null); return; }
 
             // Use coded dimensions from video sample entry, falling back to track dimensions
             const trak = file.getTrackById(track.id);
@@ -1112,6 +1115,7 @@ async function _buildCacheWebCodecs(videoSrc, fps, onProgress, ac) {
                 resolve(null);
                 return;
             }
+            console.log('[FrameCache] WC: config accepted, codec:', track.codec, 'dims:', w, 'x', h, 'samples:', totalSamplesExpected);
 
             // OffscreenCanvas for CPU-backed bitmap materialization
             // VideoFrame bitmaps may live in GPU memory; drawing through canvas
@@ -1191,9 +1195,11 @@ async function _buildCacheWebCodecs(videoSrc, fps, onProgress, ac) {
         };
 
         // Feed entire buffer to mp4box
+        console.log('[FrameCache] WC: feeding buffer to mp4box...');
         buffer.fileStart = 0;
         file.appendBuffer(buffer);
         file.flush();
+        console.log('[FrameCache] WC: mp4box buffer fed + flushed');
     });
 }
 
