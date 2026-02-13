@@ -1344,7 +1344,9 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         if (bFile) allFiles.push(bFile);
     }
     const allImages = allFiles.every(f => imageExts.includes(path.extname(f).toLowerCase()));
-    if (allImages && allFiles.length > 0) {
+    // -s (single/still) prevents mrv2 sequence detection on _vNNN names,
+    // but it also prevents loading multiple files. Only use for single file + wipe (2 files).
+    if (allImages && allFiles.length <= 2) {
         args.push('-s');
     }
     args.push(...filePaths);
