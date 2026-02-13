@@ -949,7 +949,7 @@ function showCachedFrame(timePos, canvas, ctx, videoEl) {
     if (canvas.height !== frameCache.height) canvas.height = frameCache.height;
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
-    canvas.style.display = '';
+    canvas.style.display = 'block';
     if (videoEl) videoEl.style.visibility = 'hidden';
 
     ctx.drawImage(frameCache.frames[frameIdx], 0, 0);
@@ -1283,7 +1283,7 @@ function initTransportControls(container, fps) {
         scrubCanvas._cachedRect = videoRect;
 
         video.style.visibility = 'hidden';
-        scrubCanvas.style.display = '';
+        scrubCanvas.style.display = 'block';
 
         // Init cached playback state
         destroyCachedPlayback();
