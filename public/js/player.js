@@ -1080,7 +1080,7 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
                 extractor.requestVideoFrameCallback(captureFrame);
 
                 // Play at max speed for fast caching
-                extractor.playbackRate = 4;
+                extractor.playbackRate = 2;
                 extractor.play().catch(() => {});
 
                 // When playback ends, wait for ALL createImageBitmap promises, THEN finalize
@@ -1422,7 +1422,22 @@ function initTransportControls(container, fps) {
     function stepFrame(delta) {
         if (useCache && cachedPlaybackState) {
             cachedPause();
-            const newIdx = Math.max(0, Math.min(cachedPlaybackState.frameIdx + delta, (frameCache?.frames.length || 1) - 1));
+            const frames = frameCache?.frames;
+            const maxIdx = (frames?.length || 1) - 1;
+            let newIdx = cachedPlaybackState.frameIdx;
+            const currentBmp = frames?.[newIdx];
+
+            // Skip over duplicate bitmaps (gap-fill produces same ImageBitmap in adjacent slots)
+            // Keep stepping in the delta direction until we find a different bitmap or hit bounds
+            let steps = 0;
+            do {
+                newIdx = Math.max(0, Math.min(newIdx + delta, maxIdx));
+                steps++;
+                // Stop if we hit boundary or found a different frame (or after max 10 steps)
+                if (newIdx === 0 || newIdx === maxIdx) break;
+                if (steps > 10) break;
+            } while (frames?.[newIdx] === currentBmp);
+
             cachedPlaybackState.frameIdx = newIdx;
             cachedPlaybackState.startFrame = newIdx;
             cachedPlaybackState.startTime = performance.now();
