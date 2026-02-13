@@ -152,7 +152,7 @@ except ImportError:
 # ═══════════════════════════════════════════
 #  API Helpers
 # ═══════════════════════════════════════════
-def mv_api(path, method="GET", data=None):
+def mv_api(path, method="GET", data=None, timeout=3):
     """Call MediaVault REST API."""
     if not _mv_is_reachable():
         return None
@@ -165,7 +165,7 @@ def mv_api(path, method="GET", data=None):
         req = urllib.request.Request(url, headers=headers, method=method)
 
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.URLError as e:
         global _mv_alive, _mv_last_check
@@ -474,7 +474,7 @@ class SaveToMediaVault:
         if role_id != "0":
             save_data["role_id"] = int(role_id)
 
-        result = mv_api("/api/comfyui/save", method="POST", data=save_data)
+        result = mv_api("/api/comfyui/save", method="POST", data=save_data, timeout=120)
 
         if result and result.get("asset"):
             vault_path = result["asset"].get("file_path", file_path)
