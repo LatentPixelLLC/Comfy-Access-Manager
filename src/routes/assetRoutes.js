@@ -1336,8 +1336,8 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
     // mrv2's version_regex matches _v in our vault names (e.g. _v001) and tries
     // to expand into a frame sequence → "Cannot open" errors.
     // -s (single/still) prevents this, but only works with 1-2 files.
-    // For 3+ images: create temp hard links with _v renamed to -v to break
-    // the regex, so mrv2 loads them individually without sequence detection.
+    // For 3+ images: isolate each file in its own temp subdirectory so mrv2
+    // can't find sequence neighbors (it only detects sequences within a folder).
     const imageExts = ['.png', '.jpg', '.jpeg', '.exr', '.tif', '.tiff', '.bmp', '.tga', '.hdr', '.webp', '.gif', '.dpx'];
     const allFiles = [...filePaths];
     if (compareArgs) {
@@ -1352,20 +1352,21 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         args.push(...filePaths);
         if (compareArgs) args.push(...compareArgs);
     } else if (allImages && allFiles.length > 2) {
-        // 3+ images: create temp copies with sanitized names to bypass version detection
+        // 3+ images: put each in its own subdirectory to prevent sequence detection.
+        // mrv2 only detects sequences from sibling files in the same folder.
+        // With each file alone in a folder, no sequence can form.
         const os = require('os');
         const tmpDir = path.join(os.tmpdir(), `dmv-mrv2-${Date.now()}`);
-        fs.mkdirSync(tmpDir, { recursive: true });
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
         for (let i = 0; i < allFiles.length; i++) {
             const fp = allFiles[i];
-            // Replace _v (followed by digits) with -v to break mrv2 version regex
-            // Prefix with index to avoid name collisions from different folders
-            const safeName = `${i}_${path.basename(fp).replace(/_v(\d+)/g, '-v$1')}`;
-            const dest = path.join(tmpDir, safeName);
+            const subDir = path.join(tmpDir, letters[i % 26] + (i >= 26 ? String(Math.floor(i / 26)) : ''));
+            fs.mkdirSync(subDir, { recursive: true });
+            const dest = path.join(subDir, path.basename(fp));
             try {
                 fs.linkSync(fp, dest);  // Hard link: instant, zero disk space (same volume)
             } catch {
-                fs.copyFileSync(fp, dest);  // Fallback: copy (cross-drive or permission issue)
+                fs.copyFileSync(fp, dest);  // Fallback: copy (cross-drive)
             }
             args.push(dest);
         }
@@ -1379,7 +1380,7 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         if (compareArgs) args.push(...compareArgs);
     }
     execFile(exePath, args, { cwd });
-    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (sanitized names)' : ''}`);
+    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (isolated dirs)' : ''}`);
 
     // Restore window to previous position/monitor after it opens
     if (savedRect) {
