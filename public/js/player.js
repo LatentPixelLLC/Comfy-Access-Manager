@@ -1080,7 +1080,7 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
                 extractor.requestVideoFrameCallback(captureFrame);
 
                 // Play at max speed for fast caching
-                extractor.playbackRate = 8;
+                extractor.playbackRate = 4;
                 extractor.play().catch(() => {});
 
                 // When playback ends, wait for ALL createImageBitmap promises, THEN finalize
@@ -1309,19 +1309,29 @@ function initTransportControls(container, fps) {
     }
 
     // ─── Draw a cached frame by index and update transport UI ───
+    let _lastDrawnRect = null;  // Cache to avoid redundant style updates
     function drawCachedFrame(idx) {
         if (!frameCache?.ready) return;
         idx = Math.max(0, Math.min(idx, frameCache.frames.length - 1));
         const bmp = frameCache.frames[idx];
         if (!bmp) return;
 
-        // Size canvas to player content area (video is hidden, its rect is 0×0)
-        const container = video.parentElement || document.getElementById('playerContent');
-        const rect = scrubCanvas._cachedRect || container.getBoundingClientRect();
+        // Size canvas — use cached rect, only recompute if missing
+        if (!_lastDrawnRect) {
+            const container = video.parentElement || document.getElementById('playerContent');
+            _lastDrawnRect = scrubCanvas._cachedRect || container.getBoundingClientRect();
+        }
         if (scrubCanvas.width !== frameCache.width) scrubCanvas.width = frameCache.width;
         if (scrubCanvas.height !== frameCache.height) scrubCanvas.height = frameCache.height;
-        scrubCanvas.style.width = rect.width + 'px';
-        scrubCanvas.style.height = rect.height + 'px';
+        // Only set style dimensions once (avoid layout thrash)
+        if (scrubCanvas._styleW !== _lastDrawnRect.width) {
+            scrubCanvas.style.width = _lastDrawnRect.width + 'px';
+            scrubCanvas._styleW = _lastDrawnRect.width;
+        }
+        if (scrubCanvas._styleH !== _lastDrawnRect.height) {
+            scrubCanvas.style.height = _lastDrawnRect.height + 'px';
+            scrubCanvas._styleH = _lastDrawnRect.height;
+        }
         scrubCtx.drawImage(bmp, 0, 0);
 
         // Update transport UI
@@ -1372,8 +1382,9 @@ function initTransportControls(container, fps) {
         video.style.visibility = 'hidden';
         scrubCanvas.style.display = 'block';
 
-        // Init cached playback state
-        destroyCachedPlayback();
+        // Reset cached playback state WITHOUT nulling playerTransportAPI
+        // (destroyCachedPlayback nulls playerTransportAPI which breaks keyboard frame stepping)
+        if (cachedPlaybackState?.rafId) cancelAnimationFrame(cachedPlaybackState.rafId);
         const currentFrame = Math.floor((video.currentTime || 0) * fps);
         cachedPlaybackState = {
             playing: false,
