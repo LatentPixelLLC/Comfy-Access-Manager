@@ -11814,41 +11814,7 @@ var ItemContentIDPropertyBox = class extends UUIDBox {
 // entries/all.ts
 var BoxParser = registerBoxes(all_boxes_exports);
 registerDescriptors(descriptor_exports);
-export {
-  AudioSampleEntry,
-  Box,
-  BoxParser,
-  DIFF_BOXES_PROP_NAMES,
-  DIFF_PRIMITIVE_ARRAY_PROP_NAMES,
-  DataStream,
-  Descriptor,
-  ES_Descriptor,
-  Endianness,
-  FullBox,
-  HintSampleEntry,
-  ISOFile,
-  Log,
-  MP4BoxBuffer,
-  MPEG4DescriptorParser,
-  MetadataSampleEntry,
-  MultiBufferStream,
-  SampleEntry,
-  SampleGroupEntry,
-  SampleGroupInfo,
-  SingleItemTypeReferenceBox,
-  SingleItemTypeReferenceBoxLarge,
-  SubtitleSampleEntry,
-  SystemSampleEntry,
-  TX3GParser,
-  TextSampleEntry,
-  Textin4Parser,
-  TrackGroupTypeBox,
-  TrackReferenceTypeBox,
-  VTTin4Parser,
-  VisualSampleEntry,
-  XMLSubtitlein4Parser,
-  boxEqual,
-  boxEqualFields,
-  createFile
-};
+// Patched: expose as globals for non-module <script> usage
+window.MP4Box = { createFile, BoxParser, ISOFile, DataStream, Log };
+window.DataStream = DataStream;
 //# sourceMappingURL=mp4box.all.js.map
