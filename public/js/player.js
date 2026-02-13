@@ -1003,14 +1003,188 @@ function showCachedFrame(timePos, canvas, ctx, videoEl) {
 }
 
 /**
- * Fast frame cache builder — plays video at max speed with requestVideoFrameCallback
- * to capture every decoded frame sequentially (GPU-accelerated, no redundant seeking).
- * Like RV/DJV: sequential decode is 10-20x faster than seek-per-frame.
+ * Frame cache builder — dispatches to WebCodecs (primary) or RVFC (fallback).
+ *
+ * WebCodecs + mp4box.js gives 100% frame-accurate decode at GPU speed.
+ * RVFC fallback handles WebM or browsers without WebCodecs.
  */
 async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
     const ac = externalAbort || new AbortController();
-    if (!externalAbort) frameCacheAbort = ac;  // Only track global for active clip builds
+    if (!externalAbort) frameCacheAbort = ac;
 
+    // Primary: WebCodecs + mp4box demuxer (MP4/MOV with H.264/H.265/VP9/AV1)
+    if (typeof VideoDecoder !== 'undefined' && typeof MP4Box !== 'undefined') {
+        try {
+            const result = await _buildCacheWebCodecs(videoSrc, fps, onProgress, ac);
+            if (result) return result;
+        } catch (e) {
+            console.warn('[FrameCache] WebCodecs failed, falling back to RVFC:', e.message);
+        }
+    }
+
+    // Fallback: RVFC (requestVideoFrameCallback) or seek-per-frame
+    return _buildCacheRVFC(videoSrc, fps, onProgress, ac);
+}
+
+/**
+ * WebCodecs path: fetch video as ArrayBuffer → mp4box demux → VideoDecoder → ImageBitmap[].
+ * Decodes every single frame at full GPU speed. No browser compositor involved.
+ */
+async function _buildCacheWebCodecs(videoSrc, fps, onProgress, ac) {
+    // 1. Download entire video file
+    const response = await fetch(videoSrc, { signal: ac.signal });
+    const buffer = await response.arrayBuffer();
+    if (ac.signal.aborted) return null;
+
+    return new Promise((resolve, reject) => {
+        const file = MP4Box.createFile();
+        let decoder = null;
+        let totalFrames = 0;
+        let captured = 0;
+        let frames = [];
+        let w = 0, h = 0, duration = 0;
+        const pendingBitmaps = [];
+        let samplesProcessed = 0;
+        let totalSamplesExpected = 0;
+
+        // Abort handler — clean up decoder
+        const onAbort = () => {
+            try { if (decoder && decoder.state !== 'closed') decoder.close(); } catch {}
+            resolve(null);
+        };
+        ac.signal.addEventListener('abort', onAbort, { once: true });
+
+        file.onReady = (info) => {
+            if (ac.signal.aborted) return;
+
+            const track = info.videoTracks?.[0];
+            if (!track) { resolve(null); return; }
+
+            w = track.track_width;
+            h = track.track_height;
+            duration = info.duration / info.timescale;
+            totalFrames = Math.ceil(duration * fps);
+            totalSamplesExpected = track.nb_samples;
+
+            // Limit: don't cache huge clips (>60s at fps)
+            if (totalFrames > 1800) {
+                if (onProgress) onProgress(-1, totalFrames);
+                resolve(null);
+                return;
+            }
+
+            frames = new Array(totalFrames).fill(null);
+
+            // Extract codec description (avcC / hvcC / vpcC / av1C box)
+            const description = _getCodecDescription(file, track);
+
+            decoder = new VideoDecoder({
+                output: (frame) => {
+                    if (ac.signal.aborted) { frame.close(); return; }
+
+                    const frameIdx = Math.min(
+                        Math.round(frame.timestamp / 1e6 * fps),
+                        totalFrames - 1
+                    );
+
+                    const p = createImageBitmap(frame).then(bmp => {
+                        if (ac.signal.aborted) { bmp.close(); return; }
+                        frames[frameIdx] = bmp;
+                        captured++;
+                        if (onProgress && captured % 10 === 0) onProgress(captured, totalFrames);
+                    }).catch(() => {}).finally(() => {
+                        frame.close();
+                    });
+                    pendingBitmaps.push(p);
+                },
+                error: (e) => {
+                    console.warn('[FrameCache] VideoDecoder error:', e.message);
+                    reject(e);
+                }
+            });
+
+            const config = {
+                codec: track.codec,
+                codedWidth: w,
+                codedHeight: h,
+                hardwareAcceleration: 'prefer-hardware'
+            };
+            if (description) config.description = description;
+            decoder.configure(config);
+
+            // Set up sample handler BEFORE starting extraction
+            file.onSamples = (trackId, ref, samples) => {
+                for (const sample of samples) {
+                    if (ac.signal.aborted) break;
+                    decoder.decode(new EncodedVideoChunk({
+                        type: sample.is_sync ? 'key' : 'delta',
+                        timestamp: (1e6 * sample.cts) / sample.timescale,
+                        duration: (1e6 * sample.duration) / sample.timescale,
+                        data: sample.data
+                    }));
+                }
+                samplesProcessed += samples.length;
+
+                // All samples fed — flush decoder and finalize
+                if (samplesProcessed >= totalSamplesExpected) {
+                    decoder.flush().then(async () => {
+                        await Promise.all(pendingBitmaps);
+                        if (ac.signal.aborted) return;
+                        ac.signal.removeEventListener('abort', onAbort);
+
+                        _fillFrameGaps(frames);
+                        if (onProgress) onProgress(totalFrames, totalFrames);
+
+                        try { decoder.close(); } catch {}
+                        resolve({ frames, fps, duration, width: w, height: h, ready: true });
+                    }).catch(() => resolve(null));
+                }
+            };
+
+            file.setExtractionOptions(track.id);
+            file.start();
+        };
+
+        file.onError = (e) => {
+            console.warn('[FrameCache] mp4box parse error:', e);
+            resolve(null);
+        };
+
+        // Feed entire buffer to mp4box
+        buffer.fileStart = 0;
+        file.appendBuffer(buffer);
+        file.flush();
+    });
+}
+
+/**
+ * Extract codec-specific description (SPS/PPS for H.264, etc.) from mp4box track.
+ * Required by VideoDecoder.configure() for proper initialization.
+ */
+function _getCodecDescription(file, track) {
+    try {
+        const trak = file.getTrackById(track.id);
+        for (const entry of trak.mdia.minf.stbl.stsd.entries) {
+            const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+            if (box) {
+                const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
+                box.write(stream);
+                // Skip 8-byte box header (4 bytes size + 4 bytes type)
+                return new Uint8Array(stream.buffer, 8);
+            }
+        }
+    } catch (e) {
+        console.warn('[FrameCache] Could not extract codec description:', e.message);
+    }
+    return undefined;
+}
+
+/**
+ * RVFC fallback: plays video at 2x with requestVideoFrameCallback to capture frames.
+ * Works for any format the browser can play, but may drop frames at high speeds.
+ * Final fallback within this: seek-per-frame (slow but universal).
+ */
+async function _buildCacheRVFC(videoSrc, fps, onProgress, ac) {
     return new Promise((resolve) => {
         const extractor = document.createElement('video');
         extractor.muted = true;
@@ -1028,9 +1202,7 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
             const w = extractor.videoWidth;
             const h = extractor.videoHeight;
 
-            // Limit: don't cache huge clips (>60s at fps)
-            const maxFrames = 1800;
-            if (totalFrames > maxFrames) {
+            if (totalFrames > 1800) {
                 if (onProgress) onProgress(-1, totalFrames);
                 resolve(null);
                 return;
@@ -1043,13 +1215,11 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
 
             const frames = new Array(totalFrames).fill(null);
             let captured = 0;
-            const pendingBitmaps = []; // Track async createImageBitmap promises
+            const pendingBitmaps = [];
 
-            // Use requestVideoFrameCallback if available (Chrome 83+, Edge)
             const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 
             if (hasRVFC) {
-                // ─── Fast path: play at high speed, capture presented frames ───
                 const captureFrame = (now, metadata) => {
                     if (ac.signal.aborted) return;
 
@@ -1071,36 +1241,26 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
                         } catch { /* skip frame */ }
                     }
 
-                    // Continue capturing
                     if (!extractor.ended && !ac.signal.aborted) {
                         extractor.requestVideoFrameCallback(captureFrame);
                     }
                 };
 
                 extractor.requestVideoFrameCallback(captureFrame);
-
-                // Play at max speed for fast caching
                 extractor.playbackRate = 2;
                 extractor.play().catch(() => {});
 
-                // When playback ends, wait for ALL createImageBitmap promises, THEN finalize
                 extractor.addEventListener('ended', async () => {
                     if (ac.signal.aborted) { resolve(null); return; }
-
-                    // Wait for all pending bitmap creations to finish
                     await Promise.all(pendingBitmaps);
                     if (ac.signal.aborted) { resolve(null); return; }
-
-                    // Fill any gaps with nearest neighbor (some frames may have been skipped at high speed)
                     _fillFrameGaps(frames);
-
                     const result = { frames, fps, duration, width: w, height: h, ready: true };
                     if (onProgress) onProgress(totalFrames, totalFrames);
-                    extractor.src = ''; // Release video resource
+                    extractor.src = '';
                     resolve(result);
                 });
             } else {
-                // ─── Fallback: seek per frame (slow but universal) ───
                 (async () => {
                     const frameDur = 1 / fps;
                     for (let i = 0; i < totalFrames; i++) {
