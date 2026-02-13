@@ -1345,37 +1345,67 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         if (bFile) allFiles.push(bFile);
     }
     const allImages = allFiles.every(f => imageExts.includes(path.extname(f).toLowerCase()));
+    // mrv2 version_regex matches _v### patterns in filenames and tries to expand
+    // into a frame sequence → "Cannot open" errors for missing frames.
+    // Detect if ANY filename has a version pattern that would trigger this.
+    const hasVersionPattern = allFiles.some(f => /[_\-]v\d+|_\d{3,}/i.test(path.basename(f)));
 
-    if (allImages && allFiles.length <= 2) {
-        // 1-2 images: -s flag works perfectly
+    if (allImages && hasVersionPattern) {
+        // Images with version patterns: copy to temp dir with clean names.
+        // This prevents mrv2 from detecting sequences in ALL modes (single, compare, 3+).
+        const os = require('os');
+        const tmpDir = path.join(os.tmpdir(), `dmv-mrv2-${Date.now()}`);
+        fs.mkdirSync(tmpDir, { recursive: true });
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+        if (allFiles.length <= 2) {
+            // 1-2 images: clean-named copies + -s flag + optional compare
+            for (let i = 0; i < filePaths.length; i++) {
+                const ext = path.extname(filePaths[i]).toLowerCase();
+                const dest = path.join(tmpDir, letters[i] + ext);
+                try { fs.linkSync(filePaths[i], dest); } catch { fs.copyFileSync(filePaths[i], dest); }
+                filePaths[i] = dest;  // Replace with clean path
+            }
+            if (compareArgs) {
+                const bOrig = compareArgs[1];
+                const bExt = path.extname(bOrig).toLowerCase();
+                const bDest = path.join(tmpDir, letters[filePaths.length] + bExt);
+                try { fs.linkSync(bOrig, bDest); } catch { fs.copyFileSync(bOrig, bDest); }
+                compareArgs[1] = bDest;  // Replace B file with clean path
+            }
+            args.push('-s');
+            args.push(...filePaths);
+            if (compareArgs) args.push(...compareArgs);
+        } else {
+            // 3+ images: contiguous frame sequence for arrow key scrubbing
+            for (let i = 0; i < allFiles.length; i++) {
+                const ext = path.extname(allFiles[i]).toLowerCase();
+                const frame = String(i + 1).padStart(4, '0');
+                const dest = path.join(tmpDir, `img.${frame}${ext}`);
+                try { fs.linkSync(allFiles[i], dest); } catch { fs.copyFileSync(allFiles[i], dest); }
+            }
+            args.push(path.join(tmpDir, `img.0001${path.extname(allFiles[0]).toLowerCase()}`));
+        }
+        setTimeout(() => {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        }, 60000);
+    } else if (allImages && allFiles.length <= 2) {
+        // 1-2 images without version patterns: -s flag is sufficient
         args.push('-s');
         args.push(...filePaths);
         if (compareArgs) args.push(...compareArgs);
     } else if (allImages && allFiles.length > 2) {
-        // 3+ images: build a proper contiguous frame sequence in a temp directory.
-        // mrv2 uses version_regex to detect sequences from filenames. Vault names
-        // like _v007.._v011 cause "Cannot open" because mrv2 looks for _v001-_v006
-        // which don't exist. By renaming to img.0001.png, img.0002.png, … we create
-        // a complete contiguous sequence starting at 1. mrv2 finds all expected
-        // frames → no errors, and ← → arrow keys scrub through the sequence.
+        // 3+ images without version patterns: sequence approach
         const os = require('os');
         const tmpDir = path.join(os.tmpdir(), `dmv-mrv2-${Date.now()}`);
         fs.mkdirSync(tmpDir, { recursive: true });
         for (let i = 0; i < allFiles.length; i++) {
-            const fp = allFiles[i];
-            const ext = path.extname(fp).toLowerCase();
-            const frame = String(i + 1).padStart(4, '0');  // 0001, 0002, …
+            const ext = path.extname(allFiles[i]).toLowerCase();
+            const frame = String(i + 1).padStart(4, '0');
             const dest = path.join(tmpDir, `img.${frame}${ext}`);
-            try {
-                fs.linkSync(fp, dest);
-            } catch {
-                fs.copyFileSync(fp, dest);
-            }
+            try { fs.linkSync(allFiles[i], dest); } catch { fs.copyFileSync(allFiles[i], dest); }
         }
-        // Pass just the first frame — mrv2 auto-detects the full sequence
-        const firstFrame = path.join(tmpDir, `img.0001${path.extname(allFiles[0]).toLowerCase()}`);
-        args.push(firstFrame);
-        // Clean up temp dir after 60 seconds (mrv2 will have loaded by then)
+        args.push(path.join(tmpDir, `img.0001${path.extname(allFiles[0]).toLowerCase()}`));
         setTimeout(() => {
             try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
         }, 60000);
@@ -1385,7 +1415,7 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         if (compareArgs) args.push(...compareArgs);
     }
     execFile(exePath, args, { cwd });
-    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (sequence)' : ''}`);
+    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (still)' : ''}${allImages && hasVersionPattern ? ' (clean names)' : ''}`);
 
     // Restore window to previous position/monitor after it opens
     if (savedRect) {
