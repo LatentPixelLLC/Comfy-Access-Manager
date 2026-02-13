@@ -180,7 +180,7 @@ router.get('/mapping/:nodeId', (req, res) => {
 
 // POST /api/comfyui/save — Save a ComfyUI output file into the vault
 router.post('/save', async (req, res) => {
-    const { file_path, project_id, sequence_id, shot_id, role_id, custom_name, node_id, workflow_id } = req.body;
+    const { file_path, project_id, sequence_id, shot_id, role_id, custom_name, node_id, workflow_id, generation_info } = req.body;
 
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
     if (!project_id) return res.status(400).json({ error: 'project_id required' });
@@ -228,6 +228,18 @@ router.post('/save', async (req, res) => {
         );
 
         const assetId = result.lastInsertRowid;
+
+        // Store generation metadata if provided (model, sampler, scheduler, etc.)
+        if (generation_info && typeof generation_info === 'object') {
+            try {
+                const existing = db.prepare('SELECT metadata FROM assets WHERE id = ?').get(assetId);
+                const meta = JSON.parse(existing?.metadata || '{}');
+                meta.generation = generation_info;
+                db.prepare('UPDATE assets SET metadata = ? WHERE id = ?').run(JSON.stringify(meta), assetId);
+            } catch (metaErr) {
+                console.warn('[ComfyUI] Failed to save generation metadata:', metaErr.message);
+            }
+        }
 
         // Generate thumbnail
         try {

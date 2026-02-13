@@ -429,6 +429,10 @@ class SaveToMediaVault:
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 0.01,
                                   "tooltip": "Frames per second for video output"}),
             },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -460,7 +464,7 @@ class SaveToMediaVault:
 
         return project_id, sequence_id, shot_id, role_id
 
-    def _send_to_vault(self, file_path, project_id, sequence_id, shot_id, role_id, custom_name):
+    def _send_to_vault(self, file_path, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None):
         """Upload a file to MediaVault via API."""
         save_data = {
             "file_path": os.path.abspath(file_path),
@@ -473,6 +477,8 @@ class SaveToMediaVault:
             save_data["shot_id"] = int(shot_id)
         if role_id != "0":
             save_data["role_id"] = int(role_id)
+        if gen_info:
+            save_data["generation_info"] = gen_info
 
         result = mv_api("/api/comfyui/save", method="POST", data=save_data, timeout=120)
 
@@ -487,7 +493,7 @@ class SaveToMediaVault:
             print(f"[MediaVault] Warning: API save failed, file kept at {file_path}")
             return file_path
 
-    def _save_images(self, images, format, quality, project_id, sequence_id, shot_id, role_id, custom_name):
+    def _save_images(self, images, format, quality, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None):
         """Save frames as individual image files."""
         saved_paths = []
         for i, image in enumerate(images):
@@ -511,12 +517,12 @@ class SaveToMediaVault:
             else:
                 img.save(temp_path, "PNG")
 
-            vault_path = self._send_to_vault(temp_path, project_id, sequence_id, shot_id, role_id, custom_name)
+            vault_path = self._send_to_vault(temp_path, project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
             saved_paths.append(vault_path)
 
         return saved_paths
 
-    def _save_video(self, images, format, quality, fps, project_id, sequence_id, shot_id, role_id, custom_name):
+    def _save_video(self, images, format, quality, fps, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None):
         """Encode all frames into a single video file via FFmpeg."""
         vfmt = VIDEO_FORMATS[format]
         ext = vfmt["ext"]
@@ -579,19 +585,112 @@ class SaveToMediaVault:
         file_size = os.path.getsize(temp_video)
         print(f"[MediaVault] ✓ Video saved: {os.path.basename(temp_video)} ({file_size / 1024 / 1024:.1f} MB)")
 
-        vault_path = self._send_to_vault(temp_video, project_id, sequence_id, shot_id, role_id, custom_name)
+        vault_path = self._send_to_vault(temp_video, project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
         return [vault_path]
 
+    @staticmethod
+    def _extract_generation_info(prompt):
+        """
+        Scan the ComfyUI prompt dict for known node types and extract
+        generation parameters (model, sampler, scheduler, steps, CFG, seed, etc.).
+        """
+        if not prompt or not isinstance(prompt, dict):
+            return {}
+
+        info = {}
+
+        # Map of ComfyUI class_type → which fields to grab
+        CHECKPOINT_TYPES = {"CheckpointLoaderSimple", "CheckpointLoader", "UNETLoader",
+                           "unCLIPCheckpointLoader"}
+        SAMPLER_TYPES = {"KSampler", "KSamplerAdvanced", "SamplerCustom",
+                        "KSamplerSelect"}
+        CLIP_TYPES = {"CLIPTextEncode", "CLIPTextEncodeSDXL"}
+        LORA_TYPES = {"LoraLoader", "LoraLoaderModelOnly"}
+        VAE_TYPES = {"VAELoader"}
+        UPSCALE_TYPES = {"UpscaleModelLoader"}
+
+        loras = []
+        positive_prompts = []
+        negative_prompts = []
+
+        for node_id, node_data in prompt.items():
+            ct = node_data.get("class_type", "")
+            inputs = node_data.get("inputs", {})
+
+            # Checkpoint / Model
+            if ct in CHECKPOINT_TYPES:
+                ckpt = inputs.get("ckpt_name") or inputs.get("unet_name") or ""
+                if ckpt:
+                    info["model"] = ckpt
+
+            # Sampler / Scheduler
+            if ct in SAMPLER_TYPES:
+                for key in ["sampler_name", "sampler"]:
+                    if key in inputs and isinstance(inputs[key], str):
+                        info["sampler"] = inputs[key]
+                if "scheduler" in inputs and isinstance(inputs["scheduler"], str):
+                    info["scheduler"] = inputs["scheduler"]
+                if "steps" in inputs and isinstance(inputs["steps"], (int, float)):
+                    info["steps"] = int(inputs["steps"])
+                if "cfg" in inputs and isinstance(inputs["cfg"], (int, float)):
+                    info["cfg"] = round(float(inputs["cfg"]), 2)
+                if "seed" in inputs and isinstance(inputs["seed"], (int, float)):
+                    info["seed"] = int(inputs["seed"])
+                if "denoise" in inputs and isinstance(inputs["denoise"], (int, float)):
+                    info["denoise"] = round(float(inputs["denoise"]), 3)
+
+            # CLIP text (positive / negative)
+            if ct in CLIP_TYPES:
+                text = inputs.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    # Heuristic: try to classify as positive or negative
+                    # by checking if this node's output feeds a "negative" input
+                    # Fallback: just collect all
+                    positive_prompts.append(text.strip())
+
+            # LoRAs
+            if ct in LORA_TYPES:
+                lora_name = inputs.get("lora_name", "")
+                strength = inputs.get("strength_model", 1.0)
+                if lora_name:
+                    loras.append({"name": lora_name, "strength": round(float(strength), 2)})
+
+            # VAE
+            if ct in VAE_TYPES:
+                vae = inputs.get("vae_name", "")
+                if vae:
+                    info["vae"] = vae
+
+            # Upscale model
+            if ct in UPSCALE_TYPES:
+                model = inputs.get("model_name", "")
+                if model:
+                    info["upscale_model"] = model
+
+        if loras:
+            info["loras"] = loras
+        if positive_prompts:
+            info["prompt"] = positive_prompts[0] if len(positive_prompts) == 1 else positive_prompts
+
+        return info
+
     def save_output(self, images, project, custom_name="", format="png", quality=95, fps=24.0,
-                    sequence="* (All Sequences)", shot="* (All Shots)", role="* (All Roles)"):
+                    sequence="* (All Sequences)", shot="* (All Shots)", role="* (All Roles)",
+                    prompt=None, extra_pnginfo=None):
         project_id, sequence_id, shot_id, role_id = self._resolve_ids(project, sequence, shot, role)
+
+        # Extract generation metadata from prompt
+        gen_info = self._extract_generation_info(prompt)
+        if gen_info:
+            print(f"[MediaVault] Generation info captured: model={gen_info.get('model','?')}, "
+                  f"sampler={gen_info.get('sampler','?')}, steps={gen_info.get('steps','?')}")
 
         if format in VIDEO_FORMATS:
             saved_paths = self._save_video(images, format, quality, fps,
-                                           project_id, sequence_id, shot_id, role_id, custom_name)
+                                           project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
         else:
             saved_paths = self._save_images(images, format, quality,
-                                            project_id, sequence_id, shot_id, role_id, custom_name)
+                                            project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
 
         return (", ".join(saved_paths),)
 

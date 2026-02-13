@@ -72,6 +72,15 @@ function closePlayer() {
     document.getElementById('playerModal').style.display = 'none';
     document.removeEventListener('keydown', playerKeyHandler);
 
+    // Hide metadata panel
+    metaPanelVisible = false;
+    const metaPanel = document.getElementById('playerMetaPanel');
+    if (metaPanel) {
+        metaPanel.style.display = 'none';
+        const body = metaPanel.closest('.player-body');
+        if (body) body.classList.remove('meta-open');
+    }
+
     // Stop video if playing
     const video = document.querySelector('#playerContent video');
     if (video) video.pause();
@@ -116,6 +125,10 @@ function playerKeyHandler(e) {
     if ((e.key === 'h' || e.key === 'H') && presentationMode) {
         const modal = document.getElementById('playerModal');
         if (modal) modal.classList.toggle('pres-hud-hidden');
+    }
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        toggleMetaPanel();
     }
     if (e.key === ' ') {
         e.preventDefault();
@@ -192,6 +205,9 @@ function renderPlayer() {
     parts.push(`<button class="player-mrv2-btn" onclick="openInRV(${asset.id})" title="Open in RV (ShotGrid)">🎬 RV</button>`);
     parts.push(`<button class="player-mrv2-btn player-review-btn" onclick="openReviewInMrv2(${asset.id})" title="Open in mrViewer2 with burn-in overlays (hierarchy, watermark, frame counter)">📋 Review</button>`);
     meta.innerHTML = parts.join('');
+
+    // Update generation metadata panel if it's open
+    if (metaPanelVisible) renderMetaPanel();
 
     // Set up overlay after content is rendered
     requestAnimationFrame(() => setupOverlay(asset));
@@ -812,6 +828,128 @@ function openPlayerDirect() {
 }
 
 // ═══════════════════════════════════════════
+//  GENERATION METADATA PANEL (Tab key toggle)
+// ═══════════════════════════════════════════
+
+let metaPanelVisible = false;
+
+function toggleMetaPanel() {
+    const panel = document.getElementById('playerMetaPanel');
+    if (!panel) return;
+
+    metaPanelVisible = !metaPanelVisible;
+    panel.style.display = metaPanelVisible ? 'flex' : 'none';
+
+    // Add class to player-body for layout adjustment
+    const body = panel.closest('.player-body');
+    if (body) body.classList.toggle('meta-open', metaPanelVisible);
+
+    if (metaPanelVisible) {
+        renderMetaPanel();
+    }
+}
+
+function renderMetaPanel() {
+    const container = document.getElementById('metaPanelContent');
+    if (!container) return;
+
+    const asset = state.playerAssets?.[state.playerIndex];
+    if (!asset) {
+        container.innerHTML = '<div class="meta-empty">No asset loaded.</div>';
+        return;
+    }
+
+    // Parse metadata JSON
+    let meta = {};
+    try { meta = typeof asset.metadata === 'string' ? JSON.parse(asset.metadata || '{}') : (asset.metadata || {}); } catch { meta = {}; }
+    const gen = meta.generation;
+
+    if (!gen || Object.keys(gen).length === 0) {
+        container.innerHTML = `
+            <div class="meta-empty">
+                <div style="font-size:1.6rem;margin-bottom:8px;">🤖</div>
+                No generation metadata for this asset.
+                <div style="margin-top:8px;font-size:0.72rem;color:#666;">
+                    Generation info is automatically captured when saving from ComfyUI via the SaveToMediaVault node.
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '';
+
+    // Model
+    if (gen.model) {
+        html += metaRow('🧠', 'Model', gen.model);
+    }
+
+    // Sampler + Scheduler
+    if (gen.sampler || gen.scheduler) {
+        const parts = [];
+        if (gen.sampler) parts.push(gen.sampler);
+        if (gen.scheduler) parts.push(gen.scheduler);
+        html += metaRow('🎛️', 'Sampler', parts.join(' / '));
+    }
+
+    // Steps + CFG
+    if (gen.steps != null || gen.cfg != null) {
+        const parts = [];
+        if (gen.steps != null) parts.push(`${gen.steps} steps`);
+        if (gen.cfg != null) parts.push(`CFG ${gen.cfg}`);
+        html += metaRow('⚙️', 'Settings', parts.join(', '));
+    }
+
+    // Denoise
+    if (gen.denoise != null) {
+        html += metaRow('🔽', 'Denoise', gen.denoise);
+    }
+
+    // Seed
+    if (gen.seed != null) {
+        html += metaRow('🎲', 'Seed', gen.seed);
+    }
+
+    // VAE
+    if (gen.vae) {
+        html += metaRow('📦', 'VAE', gen.vae);
+    }
+
+    // LoRAs
+    if (gen.loras && gen.loras.length) {
+        const loraHtml = gen.loras.map(l => `<div class="meta-lora">${esc(l.name)} <span class="meta-dim">@ ${l.strength}</span></div>`).join('');
+        html += `<div class="meta-section"><div class="meta-label">🔗 LoRAs</div><div class="meta-value">${loraHtml}</div></div>`;
+    }
+
+    // Upscale model
+    if (gen.upscale_model) {
+        html += metaRow('🔍', 'Upscaler', gen.upscale_model);
+    }
+
+    // Prompt
+    if (gen.prompt) {
+        const promptText = Array.isArray(gen.prompt) ? gen.prompt.join('\\n---\\n') : gen.prompt;
+        html += `<div class="meta-section meta-section-prompt">
+            <div class="meta-label">📝 Prompt</div>
+            <div class="meta-prompt">${esc(promptText)}</div>
+        </div>`;
+    }
+
+    // File info section
+    html += '<div class="meta-divider"></div>';
+    if (asset.width && asset.height) html += metaRow('📐', 'Resolution', `${asset.width}×${asset.height}`);
+    if (asset.codec) html += metaRow('🔧', 'Codec', asset.codec);
+    if (asset.file_size) html += metaRow('📦', 'Size', formatSize(asset.file_size));
+    if (asset.created_at) html += metaRow('📅', 'Created', new Date(asset.created_at).toLocaleString());
+
+    container.innerHTML = html;
+}
+
+function metaRow(icon, label, value) {
+    return `<div class="meta-section"><div class="meta-label">${icon} ${label}</div><div class="meta-value">${esc(String(value))}</div></div>`;
+}
+
+// ═══════════════════════════════════════════
 //  POP-OUT PLAYER (separate window for second monitor)
 // ═══════════════════════════════════════════
 
@@ -1026,6 +1164,7 @@ window.toggleOverlayOption = toggleOverlayOption;
 window.editWatermarkText = editWatermarkText;
 window.popoutPlayer = popoutPlayer;
 window.togglePresentationMode = togglePresentationMode;
+window.toggleMetaPanel = toggleMetaPanel;
 
 // Open player by asset ID (for format variant sub-menu)
 function openPlayerById(assetId) {
