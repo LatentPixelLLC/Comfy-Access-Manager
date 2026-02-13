@@ -7,6 +7,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const { initDb, closeDb } = require('./database');
 const WatcherService = require('./services/WatcherService');
 
@@ -23,6 +24,21 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Serve thumbnails directory
 app.use('/thumbnails', express.static(path.join(__dirname, '..', 'thumbnails')));
+
+// Ensure key folders exist on startup
+const { getSetting } = require('./database');
+['data', 'thumbnails'].forEach(dir => {
+    const p = path.join(__dirname, '..', dir);
+    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+});
+// Exports folder — inside vault if configured, otherwise top-level
+setTimeout(() => {
+    try {
+        const vaultRoot = getSetting('vault_root');
+        const exportsDir = vaultRoot ? path.join(vaultRoot, 'exports') : path.join(__dirname, '..', 'exports');
+        if (!fs.existsSync(exportsDir)) fs.mkdirSync(exportsDir, { recursive: true });
+    } catch (e) { /* DB not ready yet, will be created on first export */ }
+}, 2000);
 
 // ─── API Routes ───
 const projectRoutes = require('./routes/projectRoutes');
