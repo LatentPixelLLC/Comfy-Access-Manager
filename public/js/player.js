@@ -70,6 +70,7 @@ export function openPlayer(index) {
 
 function closePlayer() {
     destroyFrameCache();
+    destroyCachedPlayback();
     document.getElementById('playerModal').style.display = 'none';
     document.removeEventListener('keydown', playerKeyHandler);
 
@@ -114,34 +115,53 @@ function playerKeyHandler(e) {
         if (presentationMode) { togglePresentationMode(); return; }
         closePlayer();
     }
-    // Arrow keys: frame step if video playing, otherwise asset navigation
+
+    // Helper: step frame via transport API (preferred) or fallback
+    function keyFrameStep(delta) {
+        e.preventDefault();
+        if (playerTransportAPI) {
+            playerTransportAPI.stepFrame(delta);
+        } else if (cachedPlaybackState && frameCache?.ready) {
+            cachedPause();
+            const newIdx = Math.max(0, Math.min(cachedPlaybackState.frameIdx + delta, frameCache.frames.length - 1));
+            cachedPlaybackState.frameIdx = newIdx;
+            cachedPlaybackState.startFrame = newIdx;
+            cachedPlaybackState.startTime = performance.now();
+            showCachedFrame(newIdx / frameCache.fps);
+        } else {
+            const video = document.querySelector('#playerContent video');
+            if (video) {
+                video.pause();
+                const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
+                video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta * (1 / fps)));
+            }
+        }
+    }
+
+    // Helper: toggle play/pause via transport API (preferred) or fallback
+    function keyTogglePlay() {
+        e.preventDefault();
+        if (playerTransportAPI) {
+            playerTransportAPI.togglePlayPause();
+        } else if (cachedPlaybackState && frameCache?.ready) {
+            if (cachedPlaybackState.playing) cachedPause();
+            else cachedPlay();
+        } else {
+            const video = document.querySelector('#playerContent video');
+            if (video) video.paused ? video.play() : video.pause();
+        }
+    }
+
+    // Arrow keys: frame step if video/cache present, otherwise asset navigation
     if (e.key === 'ArrowRight') {
         const video = document.querySelector('#playerContent video');
-        if (video) {
-            e.preventDefault();
-            video.pause();
-            const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
-            const newTime = Math.min(video.duration || 0, video.currentTime + (1 / fps));
-            video.currentTime = newTime;
-            showCachedFrame(newTime);
-        } else {
-            playerNext();
-            if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
-        }
+        if (video || cachedPlaybackState) { keyFrameStep(1); }
+        else { playerNext(); if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); } }
     }
     if (e.key === 'ArrowLeft') {
         const video = document.querySelector('#playerContent video');
-        if (video) {
-            e.preventDefault();
-            video.pause();
-            const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
-            const newTime = Math.max(0, video.currentTime - (1 / fps));
-            video.currentTime = newTime;
-            showCachedFrame(newTime);
-        } else {
-            playerPrev();
-            if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
-        }
+        if (video || cachedPlaybackState) { keyFrameStep(-1); }
+        else { playerPrev(); if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); } }
     }
     // PageDown/PageUp: always navigate between assets
     if (e.key === 'PageDown') {
@@ -161,42 +181,18 @@ function playerKeyHandler(e) {
         e.preventDefault();
         toggleMetaPanel();
     }
-    if (e.key === ' ') {
-        e.preventDefault();
-        const video = document.querySelector('#playerContent video');
-        if (video) video.paused ? video.play() : video.pause();
-    }
+    if (e.key === ' ') { keyTogglePlay(); }
     // Frame stepping: , = prev frame, . = next frame
-    if (e.key === ',' || e.key === '<') {
-        e.preventDefault();
-        const video = document.querySelector('#playerContent video');
-        if (video) {
-            video.pause();
-            const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
-            const newTime = Math.max(0, video.currentTime - (1 / fps));
-            video.currentTime = newTime;
-            showCachedFrame(newTime);
-        }
-    }
-    if (e.key === '.' || e.key === '>') {
-        e.preventDefault();
-        const video = document.querySelector('#playerContent video');
-        if (video) {
-            video.pause();
-            const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
-            const newTime = Math.min(video.duration || 0, video.currentTime + (1 / fps));
-            video.currentTime = newTime;
-            showCachedFrame(newTime);
-        }
-    }
-    // J/K/L shuttle: J = rewind, K = pause, L = play
+    if (e.key === ',' || e.key === '<') { keyFrameStep(-1); }
+    if (e.key === '.' || e.key === '>') { keyFrameStep(1); }
+    // J/K/L shuttle (video only — cache uses fixed fps)
     if (e.key === 'j' || e.key === 'J') {
         const video = document.querySelector('#playerContent video');
-        if (video) { video.playbackRate = Math.max(0.25, (video.playbackRate || 1) - 0.5); video.play(); }
+        if (video && !cachedPlaybackState?.playing) { video.playbackRate = Math.max(0.25, (video.playbackRate || 1) - 0.5); video.play(); }
     }
     if (e.key === 'k' || e.key === 'K') {
-        const video = document.querySelector('#playerContent video');
-        if (video) { video.pause(); video.playbackRate = 1; }
+        if (cachedPlaybackState && frameCache?.ready) { cachedPause(); }
+        else { const video = document.querySelector('#playerContent video'); if (video) { video.pause(); video.playbackRate = 1; } }
     }
     if (e.key === 'l') {
         const video = document.querySelector('#playerContent video');
@@ -220,6 +216,7 @@ function playerPrev() {
 
 function renderPlayer() {
     destroyFrameCache();
+    destroyCachedPlayback();
     const asset = state.playerAssets[state.playerIndex];
     if (!asset) return;
 
@@ -959,8 +956,9 @@ function showCachedFrame(timePos, canvas, ctx, videoEl) {
 }
 
 /**
- * Extract all frames from the video element into ImageBitmap cache.
- * Uses a hidden cloned video + OffscreenCanvas for background extraction.
+ * Fast frame cache builder — plays video at max speed with requestVideoFrameCallback
+ * to capture every decoded frame sequentially (GPU-accelerated, no redundant seeking).
+ * Like RV/DJV: sequential decode is 10-20x faster than seek-per-frame.
  */
 async function buildFrameCache(videoSrc, fps, onProgress) {
     destroyFrameCache();
@@ -972,9 +970,10 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
         const extractor = document.createElement('video');
         extractor.muted = true;
         extractor.preload = 'auto';
+        extractor.playsInline = true;
         extractor.src = videoSrc;
 
-        extractor.addEventListener('loadedmetadata', async () => {
+        extractor.addEventListener('loadedmetadata', () => {
             if (ac.signal.aborted) { resolve(null); return; }
 
             const duration = extractor.duration;
@@ -984,10 +983,10 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
             const w = extractor.videoWidth;
             const h = extractor.videoHeight;
 
-            // Limit: don't try to cache huge clips (>60s at fps)
-            const maxFrames = 1800; // 60s at 30fps
+            // Limit: don't cache huge clips (>60s at fps)
+            const maxFrames = 1800;
             if (totalFrames > maxFrames) {
-                if (onProgress) onProgress(-1, totalFrames); // signal: too large
+                if (onProgress) onProgress(-1, totalFrames);
                 resolve(null);
                 return;
             }
@@ -997,42 +996,180 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
             canvas.height = h;
             const ctx = canvas.getContext('2d', { willReadFrequently: false });
 
-            const frames = new Array(totalFrames);
-            const frameDur = 1 / fps;
-            let extracted = 0;
+            const frames = new Array(totalFrames).fill(null);
+            let captured = 0;
 
-            for (let i = 0; i < totalFrames; i++) {
-                if (ac.signal.aborted) { resolve(null); return; }
+            // Use requestVideoFrameCallback if available (Chrome 83+, Edge)
+            const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 
-                const targetTime = i * frameDur;
-                extractor.currentTime = Math.min(targetTime, duration - 0.001);
+            if (hasRVFC) {
+                // ─── Fast path: play at high speed, capture presented frames ───
+                const captureFrame = (now, metadata) => {
+                    if (ac.signal.aborted) return;
 
-                // Wait for seek to complete
-                await new Promise(r => {
-                    const onSeeked = () => { extractor.removeEventListener('seeked', onSeeked); r(); };
-                    extractor.addEventListener('seeked', onSeeked);
+                    const frameIdx = Math.min(
+                        Math.round(metadata.mediaTime * fps),
+                        totalFrames - 1
+                    );
+
+                    if (frameIdx >= 0 && !frames[frameIdx]) {
+                        ctx.drawImage(extractor, 0, 0, w, h);
+                        try {
+                            // Synchronous — createImageBitmap from canvas is fast
+                            createImageBitmap(canvas).then(bmp => {
+                                if (ac.signal.aborted) { bmp.close(); return; }
+                                frames[frameIdx] = bmp;
+                                captured++;
+                                if (onProgress && captured % 10 === 0) onProgress(captured, totalFrames);
+                            });
+                        } catch { /* skip frame */ }
+                    }
+
+                    // Continue capturing
+                    if (!extractor.ended && !ac.signal.aborted) {
+                        extractor.requestVideoFrameCallback(captureFrame);
+                    }
+                };
+
+                extractor.requestVideoFrameCallback(captureFrame);
+
+                // Play at max speed for fast caching
+                extractor.playbackRate = 8;
+                extractor.play().catch(() => {});
+
+                // When playback ends, finalize the cache
+                extractor.addEventListener('ended', () => {
+                    if (ac.signal.aborted) { resolve(null); return; }
+
+                    // Fill any gaps with nearest neighbor (some frames may have been skipped at high speed)
+                    _fillFrameGaps(frames);
+
+                    frameCache = { frames, fps, duration, width: w, height: h, ready: true };
+                    if (onProgress) onProgress(totalFrames, totalFrames);
+                    extractor.src = ''; // Release video resource
+                    resolve(frameCache);
                 });
-
-                if (ac.signal.aborted) { resolve(null); return; }
-
-                ctx.drawImage(extractor, 0, 0, w, h);
-                try {
-                    frames[i] = await createImageBitmap(canvas);
-                } catch { frames[i] = null; }
-
-                extracted++;
-                if (onProgress && extracted % 5 === 0) onProgress(extracted, totalFrames);
+            } else {
+                // ─── Fallback: seek per frame (slow but universal) ───
+                (async () => {
+                    const frameDur = 1 / fps;
+                    for (let i = 0; i < totalFrames; i++) {
+                        if (ac.signal.aborted) { resolve(null); return; }
+                        extractor.currentTime = Math.min(i * frameDur, duration - 0.001);
+                        await new Promise(r => {
+                            const onSeeked = () => { extractor.removeEventListener('seeked', onSeeked); r(); };
+                            extractor.addEventListener('seeked', onSeeked);
+                        });
+                        if (ac.signal.aborted) { resolve(null); return; }
+                        ctx.drawImage(extractor, 0, 0, w, h);
+                        try { frames[i] = await createImageBitmap(canvas); } catch { frames[i] = null; }
+                        captured++;
+                        if (onProgress && captured % 5 === 0) onProgress(captured, totalFrames);
+                    }
+                    if (ac.signal.aborted) { resolve(null); return; }
+                    frameCache = { frames, fps, duration, width: w, height: h, ready: true };
+                    if (onProgress) onProgress(totalFrames, totalFrames);
+                    extractor.src = '';
+                    resolve(frameCache);
+                })();
             }
-
-            if (ac.signal.aborted) { resolve(null); return; }
-
-            frameCache = { frames, fps, duration, width: w, height: h, ready: true };
-            if (onProgress) onProgress(totalFrames, totalFrames);
-            resolve(frameCache);
         });
 
         extractor.addEventListener('error', () => { resolve(null); });
     });
+}
+
+/** Fill gaps in frame array with nearest available frame (for high-speed capture) */
+function _fillFrameGaps(frames) {
+    // Forward pass: fill nulls with last known good frame
+    let lastGood = null;
+    for (let i = 0; i < frames.length; i++) {
+        if (frames[i]) lastGood = frames[i];
+        else if (lastGood) frames[i] = lastGood;
+    }
+    // Backward pass: fill any remaining leading nulls
+    lastGood = null;
+    for (let i = frames.length - 1; i >= 0; i--) {
+        if (frames[i]) lastGood = frames[i];
+        else if (lastGood) frames[i] = lastGood;
+    }
+}
+
+// ═══════════════════════════════════════════
+//  CACHED PLAYBACK ENGINE (RV-style)
+//  Once cache is ready, all playback runs from
+//  the ImageBitmap array — no video decode needed.
+// ═══════════════════════════════════════════
+
+let cachedPlaybackState = null; // { playing, frameIdx, loop, rafId, startTime, startFrame, onTick }
+let playerTransportAPI = null;  // { stepFrame(delta), togglePlayPause() } — set by initTransportControls
+
+function destroyCachedPlayback() {
+    if (cachedPlaybackState?.rafId) cancelAnimationFrame(cachedPlaybackState.rafId);
+    cachedPlaybackState = null;
+    playerTransportAPI = null;
+}
+
+/** Start cached playback from current frame */
+function cachedPlay() {
+    if (!frameCache?.ready || !cachedPlaybackState) return;
+    const st = cachedPlaybackState;
+    st.playing = true;
+    st.startTime = performance.now();
+    st.startFrame = st.frameIdx;
+
+    function tick(now) {
+        if (!st.playing || !frameCache?.ready) return;
+        const elapsed = (now - st.startTime) / 1000;
+        let newFrame = st.startFrame + Math.floor(elapsed * frameCache.fps);
+
+        if (newFrame >= frameCache.frames.length) {
+            if (st.loop) {
+                newFrame = newFrame % frameCache.frames.length;
+                st.startTime = now;
+                st.startFrame = 0;
+            } else {
+                st.frameIdx = frameCache.frames.length - 1;
+                st.playing = false;
+                if (st.onTick) st.onTick(st.frameIdx, false);
+                return;
+            }
+        }
+
+        if (newFrame !== st.frameIdx) {
+            st.frameIdx = newFrame;
+            if (st.onTick) st.onTick(st.frameIdx, true);
+        }
+        st.rafId = requestAnimationFrame(tick);
+    }
+
+    st.rafId = requestAnimationFrame(tick);
+}
+
+/** Pause cached playback */
+function cachedPause() {
+    if (!cachedPlaybackState) return;
+    cachedPlaybackState.playing = false;
+    if (cachedPlaybackState.rafId) {
+        cancelAnimationFrame(cachedPlaybackState.rafId);
+        cachedPlaybackState.rafId = null;
+    }
+}
+
+/** Set cached playback to specific frame index */
+function cachedSeekFrame(frameIdx) {
+    if (!cachedPlaybackState) return;
+    cachedPlaybackState.frameIdx = Math.max(0, Math.min(frameIdx, (frameCache?.frames.length || 1) - 1));
+    // Reset start reference so play() continues from here
+    cachedPlaybackState.startTime = performance.now();
+    cachedPlaybackState.startFrame = cachedPlaybackState.frameIdx;
+}
+
+/** Set cached playback to specific time position */
+function cachedSeekTime(time) {
+    if (!frameCache?.ready) return;
+    const frameIdx = Math.min(Math.floor(time * frameCache.fps), frameCache.frames.length - 1);
+    cachedSeekFrame(frameIdx);
 }
 
 function initTransportControls(container, fps) {
@@ -1051,16 +1188,16 @@ function initTransportControls(container, fps) {
     const cacheBar = transport.querySelector('.pt-cache-bar');
     const cacheFill = transport.querySelector('.pt-cache-fill');
 
-    // Canvas overlay for cached frame display during scrub
+    // Canvas overlay for cached frame display
     const scrubCanvas = document.createElement('canvas');
     scrubCanvas.className = 'pt-scrub-canvas';
     scrubCanvas.style.display = 'none';
-    // Insert canvas right before video so it layers on top
     video.parentElement.insertBefore(scrubCanvas, video);
     const scrubCtx = scrubCanvas.getContext('2d');
 
     let isScrubbing = false;
     const frameDuration = 1 / fps;
+    let useCache = false;  // Flips to true when cache is ready
 
     // Format seconds → MM:SS or HH:MM:SS
     function fmtTime(sec) {
@@ -1071,8 +1208,35 @@ function initTransportControls(container, fps) {
         return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
     }
 
-    // Update UI from video state
+    // ─── Draw a cached frame by index and update transport UI ───
+    function drawCachedFrame(idx) {
+        if (!frameCache?.ready) return;
+        idx = Math.max(0, Math.min(idx, frameCache.frames.length - 1));
+        const bmp = frameCache.frames[idx];
+        if (!bmp) return;
+
+        // Size canvas to video display area
+        const rect = video.getBoundingClientRect();
+        if (scrubCanvas.width !== frameCache.width) scrubCanvas.width = frameCache.width;
+        if (scrubCanvas.height !== frameCache.height) scrubCanvas.height = frameCache.height;
+        scrubCanvas.style.width = rect.width + 'px';
+        scrubCanvas.style.height = rect.height + 'px';
+        scrubCtx.drawImage(bmp, 0, 0);
+
+        // Update transport UI
+        const totalFrames = frameCache.frames.length;
+        const timePos = idx / frameCache.fps;
+        if (!isScrubbing) {
+            scrub.value = (timePos / frameCache.duration) * 1000;
+            fill.style.width = ((timePos / frameCache.duration) * 100) + '%';
+        }
+        timeEl.textContent = `${fmtTime(timePos)} / ${fmtTime(frameCache.duration)}`;
+        frameEl.textContent = `F ${idx} / ${totalFrames}`;
+    }
+
+    // ─── Update UI from video state (used before cache is ready) ───
     function updateTransport() {
+        if (useCache) return; // Cache handles its own UI
         if (!video.duration || !isFinite(video.duration)) return;
         const pct = (video.currentTime / video.duration) * 100;
         if (!isScrubbing) {
@@ -1086,120 +1250,167 @@ function initTransportControls(container, fps) {
         playBtn.textContent = video.paused ? '▶' : '⏸';
     }
 
-    // Update loop on timeupdate (smooth display during playback)
     video.addEventListener('timeupdate', updateTransport);
     video.addEventListener('loadedmetadata', updateTransport);
-    video.addEventListener('play', () => {
-        playBtn.textContent = '⏸';
-        // Hide canvas overlay when playing (show live video)
-        scrubCanvas.style.display = 'none';
-        video.style.display = '';
-    });
-    video.addEventListener('pause', () => { playBtn.textContent = '▶'; });
+    video.addEventListener('play', () => { if (!useCache) { playBtn.textContent = '⏸'; } });
+    video.addEventListener('pause', () => { if (!useCache) { playBtn.textContent = '▶'; } });
 
-    // Show cached frame on canvas (delegated to module-level function)
-    // Closure-bound wrapper for local scrub access
-    const _showCached = (timePos) => showCachedFrame(timePos, scrubCanvas, scrubCtx, video);
+    // ─── Switch to cached playback mode ───
+    function activateCache() {
+        useCache = true;
+        video.pause();
+        video.style.display = 'none';
+        scrubCanvas.style.display = '';
 
-    // Real-time scrubbing: use cache if available, otherwise fallback to video.currentTime
+        // Init cached playback state
+        destroyCachedPlayback();
+        const currentFrame = Math.floor((video.currentTime || 0) * fps);
+        cachedPlaybackState = {
+            playing: false,
+            frameIdx: Math.min(currentFrame, frameCache.frames.length - 1),
+            loop: video.loop,
+            rafId: null,
+            startTime: 0,
+            startFrame: 0,
+            onTick: (idx, playing) => {
+                drawCachedFrame(idx);
+                playBtn.textContent = playing ? '⏸' : '▶';
+            }
+        };
+        // Show first frame
+        drawCachedFrame(cachedPlaybackState.frameIdx);
+        playBtn.textContent = '▶';
+    }
+
+    // ─── Unified toggle play/pause (works for both video and cache) ───
+    function togglePlayPause() {
+        if (useCache) {
+            if (cachedPlaybackState?.playing) {
+                cachedPause();
+                playBtn.textContent = '▶';
+            } else {
+                cachedPlay();
+                playBtn.textContent = '⏸';
+            }
+        } else {
+            video.paused ? video.play() : video.pause();
+        }
+    }
+
+    // ─── Unified frame step ───
+    function stepFrame(delta) {
+        if (useCache && cachedPlaybackState) {
+            cachedPause();
+            const newIdx = Math.max(0, Math.min(cachedPlaybackState.frameIdx + delta, (frameCache?.frames.length || 1) - 1));
+            cachedPlaybackState.frameIdx = newIdx;
+            cachedPlaybackState.startFrame = newIdx;
+            cachedPlaybackState.startTime = performance.now();
+            drawCachedFrame(newIdx);
+            playBtn.textContent = '▶';
+        } else {
+            video.pause();
+            const newTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta * frameDuration));
+            video.currentTime = newTime;
+        }
+    }
+
+    // Expose transport API for keyboard handler
+    playerTransportAPI = { stepFrame, togglePlayPause };
+
+    // ─── Scrub handling ───
     scrub.addEventListener('input', () => {
         isScrubbing = true;
-        if (video.duration && isFinite(video.duration)) {
+        if (useCache && frameCache?.ready) {
+            const seekTo = (scrub.value / 1000) * frameCache.duration;
+            const frameIdx = Math.min(Math.floor(seekTo * frameCache.fps), frameCache.frames.length - 1);
+            fill.style.width = ((scrub.value / 1000) * 100) + '%';
+            drawCachedFrame(frameIdx);
+            cachedSeekFrame(frameIdx);
+        } else if (video.duration && isFinite(video.duration)) {
             const seekTo = (scrub.value / 1000) * video.duration;
             fill.style.width = ((seekTo / video.duration) * 100) + '%';
             timeEl.textContent = `${fmtTime(seekTo)} / ${fmtTime(video.duration)}`;
             const currentFrame = Math.floor(seekTo * fps);
             const totalFrames = Math.floor(video.duration * fps);
             frameEl.textContent = `F ${currentFrame} / ${totalFrames}`;
-
-            // Try cached frame first (instant), fall back to video seek
-            if (!_showCached(seekTo)) {
-                video.currentTime = seekTo;
-            }
+            video.currentTime = seekTo;
         }
     });
 
-    // Pause video while scrubbing for instant frame display
     let wasPlaying = false;
     scrub.addEventListener('mousedown', () => {
-        wasPlaying = !video.paused;
-        if (wasPlaying) video.pause();
+        wasPlaying = useCache ? (cachedPlaybackState?.playing || false) : !video.paused;
+        if (useCache) { cachedPause(); } else if (wasPlaying) { video.pause(); }
         isScrubbing = true;
     });
     scrub.addEventListener('mouseup', () => {
         isScrubbing = false;
-        // Sync video to final scrub position
-        if (video.duration && isFinite(video.duration)) {
-            video.currentTime = (scrub.value / 1000) * video.duration;
+        if (useCache) {
+            if (wasPlaying) cachedPlay();
+        } else {
+            if (video.duration && isFinite(video.duration)) {
+                video.currentTime = (scrub.value / 1000) * video.duration;
+            }
+            if (wasPlaying) video.play();
         }
-        // Switch back from canvas to video
-        scrubCanvas.style.display = 'none';
-        video.style.display = '';
-        if (wasPlaying) video.play();
     });
-    // Touch support
     scrub.addEventListener('touchstart', () => {
-        wasPlaying = !video.paused;
-        if (wasPlaying) video.pause();
+        wasPlaying = useCache ? (cachedPlaybackState?.playing || false) : !video.paused;
+        if (useCache) { cachedPause(); } else if (wasPlaying) { video.pause(); }
         isScrubbing = true;
     }, { passive: true });
     scrub.addEventListener('touchend', () => {
         isScrubbing = false;
-        if (video.duration && isFinite(video.duration)) {
-            video.currentTime = (scrub.value / 1000) * video.duration;
+        if (useCache) {
+            if (wasPlaying) cachedPlay();
+        } else {
+            if (video.duration && isFinite(video.duration)) {
+                video.currentTime = (scrub.value / 1000) * video.duration;
+            }
+            if (wasPlaying) video.play();
         }
-        scrubCanvas.style.display = 'none';
-        video.style.display = '';
-        if (wasPlaying) video.play();
     });
 
-    // Click video to toggle play/pause
-    video.addEventListener('click', () => {
-        video.paused ? video.play() : video.pause();
-    });
+    // Click canvas or video to toggle play/pause
+    scrubCanvas.addEventListener('click', togglePlayPause);
+    video.addEventListener('click', togglePlayPause);
 
     // Buttons
-    playBtn.addEventListener('click', () => { video.paused ? video.play() : video.pause(); });
-    prevBtn.addEventListener('click', () => {
-        video.pause();
-        const newTime = Math.max(0, video.currentTime - frameDuration);
-        video.currentTime = newTime;
-        _showCached(newTime);
-    });
-    nextBtn.addEventListener('click', () => {
-        video.pause();
-        const newTime = Math.min(video.duration, video.currentTime + frameDuration);
-        video.currentTime = newTime;
-        _showCached(newTime);
-    });
+    playBtn.addEventListener('click', togglePlayPause);
+    prevBtn.addEventListener('click', () => stepFrame(-1));
+    nextBtn.addEventListener('click', () => stepFrame(1));
     loopBtn.addEventListener('click', () => {
-        video.loop = !video.loop;
-        loopBtn.classList.toggle('active', video.loop);
+        const isLoop = !video.loop;
+        video.loop = isLoop;
+        if (cachedPlaybackState) cachedPlaybackState.loop = isLoop;
+        loopBtn.classList.toggle('active', isLoop);
     });
 
     // Pointer events to prevent node drag in player
     transport.addEventListener('pointerdown', (e) => e.stopPropagation());
+    scrubCanvas.style.pointerEvents = 'auto'; // Allow click on canvas
 
     // Start frame caching in background after video loads
     video.addEventListener('loadedmetadata', () => {
         const totalFrames = Math.ceil(video.duration * fps);
         if (totalFrames > 1800) {
-            // Too many frames — show "too long" message
             if (cacheBar) { cacheBar.title = 'Clip too long for frame cache (>60s)'; cacheFill.style.width = '0%'; }
             return;
         }
         if (cacheBar) { cacheBar.style.display = ''; }
         buildFrameCache(video.src, fps, (done, total) => {
             if (done === -1) {
-                // Clip too long
                 if (cacheBar) cacheBar.style.display = 'none';
                 return;
             }
             if (cacheFill) cacheFill.style.width = ((done / total) * 100) + '%';
-            if (done >= total && cacheBar) {
-                // Caching complete — fade out bar
-                setTimeout(() => { cacheBar.style.opacity = '0'; }, 500);
-                setTimeout(() => { cacheBar.style.display = 'none'; }, 1000);
+            if (done >= total) {
+                // Cache complete — switch to cached playback engine
+                activateCache();
+                if (cacheBar) {
+                    setTimeout(() => { cacheBar.style.opacity = '0'; }, 500);
+                    setTimeout(() => { cacheBar.style.display = 'none'; }, 1000);
+                }
             }
         });
     }, { once: true });
