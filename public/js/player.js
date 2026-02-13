@@ -1004,8 +1004,6 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
             // Use requestVideoFrameCallback if available (Chrome 83+, Edge)
             const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 
-            console.log(`[CACHE] hasRVFC=${hasRVFC}, totalFrames=${totalFrames}, w=${w}, h=${h}, duration=${duration}, fps=${fps}`);
-
             if (hasRVFC) {
                 // ─── Fast path: play at high speed, capture presented frames ───
                 const captureFrame = (now, metadata) => {
@@ -1043,20 +1041,14 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
 
                 // When playback ends, wait for ALL createImageBitmap promises, THEN finalize
                 extractor.addEventListener('ended', async () => {
-                    console.log(`[CACHE] Video ended. captured=${captured}, pendingBitmaps=${pendingBitmaps.length}, totalFrames=${totalFrames}`);
-                    if (ac.signal.aborted) { console.log('[CACHE] Aborted after ended'); resolve(null); return; }
+                    if (ac.signal.aborted) { resolve(null); return; }
 
                     // Wait for all pending bitmap creations to finish
                     await Promise.all(pendingBitmaps);
-                    if (ac.signal.aborted) { console.log('[CACHE] Aborted after Promise.all'); resolve(null); return; }
-
-                    const nonNull = frames.filter(f => f !== null).length;
-                    console.log(`[CACHE] After Promise.all: ${nonNull}/${totalFrames} frames non-null`);
+                    if (ac.signal.aborted) { resolve(null); return; }
 
                     // Fill any gaps with nearest neighbor (some frames may have been skipped at high speed)
                     _fillFrameGaps(frames);
-                    const afterFill = frames.filter(f => f !== null).length;
-                    console.log(`[CACHE] After gap fill: ${afterFill}/${totalFrames} frames non-null`);
 
                     frameCache = { frames, fps, duration, width: w, height: h, ready: true };
                     if (onProgress) onProgress(totalFrames, totalFrames);
@@ -1224,15 +1216,14 @@ function initTransportControls(container, fps) {
 
     // ─── Draw a cached frame by index and update transport UI ───
     function drawCachedFrame(idx) {
-        if (!frameCache?.ready) { console.log('[CACHE] drawCachedFrame: cache not ready'); return; }
+        if (!frameCache?.ready) return;
         idx = Math.max(0, Math.min(idx, frameCache.frames.length - 1));
         const bmp = frameCache.frames[idx];
-        if (!bmp) { console.log(`[CACHE] drawCachedFrame: frame ${idx} is null/undefined (type=${typeof bmp})`); return; }
+        if (!bmp) return;
 
         // Size canvas to player content area (video is hidden, its rect is 0×0)
         const container = video.parentElement || document.getElementById('playerContent');
         const rect = scrubCanvas._cachedRect || container.getBoundingClientRect();
-        console.log(`[CACHE] drawCachedFrame idx=${idx}, bmp=${bmp.width}x${bmp.height}, rect=${rect.width}x${rect.height}, canvas=${scrubCanvas.width}x${scrubCanvas.height}, canvasStyle=${scrubCanvas.style.display}`);
         if (scrubCanvas.width !== frameCache.width) scrubCanvas.width = frameCache.width;
         if (scrubCanvas.height !== frameCache.height) scrubCanvas.height = frameCache.height;
         scrubCanvas.style.width = rect.width + 'px';
@@ -1273,13 +1264,11 @@ function initTransportControls(container, fps) {
 
     // ─── Switch to cached playback mode ───
     function activateCache() {
-        console.log(`[CACHE] activateCache called. frameCache.ready=${frameCache?.ready}, frames=${frameCache?.frames?.length}, first frame type=${frameCache?.frames?.[0]?.constructor?.name}`);
         useCache = true;
         video.pause();
 
         // Capture video display rect BEFORE hiding it (hidden elements return 0×0)
         const videoRect = video.getBoundingClientRect();
-        console.log(`[CACHE] videoRect: ${videoRect.width}x${videoRect.height}`);
         scrubCanvas._cachedRect = videoRect;
 
         video.style.visibility = 'hidden';
