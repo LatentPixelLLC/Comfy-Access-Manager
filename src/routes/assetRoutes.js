@@ -1352,21 +1352,25 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         args.push(...filePaths);
         if (compareArgs) args.push(...compareArgs);
     } else if (allImages && allFiles.length > 2) {
-        // 3+ images: put each in its own subdirectory to prevent sequence detection.
-        // mrv2 only detects sequences from sibling files in the same folder.
-        // With each file alone in a folder, no sequence can form.
+        // 3+ images: put all in ONE temp directory with digit-free names.
+        // mrv2 version_regex matches _v### and similar numeric patterns to build
+        // sequences. By stripping ALL digits from filenames, no sequence can form.
+        // Using single-letter names (A.png, B.png…) is the simplest digit-free scheme.
+        // Same directory = mrv2 loads them as a playlist = arrow key scrubbing works.
         const os = require('os');
         const tmpDir = path.join(os.tmpdir(), `dmv-mrv2-${Date.now()}`);
+        fs.mkdirSync(tmpDir, { recursive: true });
         const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
         for (let i = 0; i < allFiles.length; i++) {
             const fp = allFiles[i];
-            const subDir = path.join(tmpDir, letters[i % 26] + (i >= 26 ? String(Math.floor(i / 26)) : ''));
-            fs.mkdirSync(subDir, { recursive: true });
-            const dest = path.join(subDir, path.basename(fp));
+            const ext = path.extname(fp).toLowerCase();
+            // Letter-only name: A.png, B.png, … Z.png, AA.png, AB.png, …
+            const letter = i < 26 ? letters[i] : letters[Math.floor(i / 26) - 1] + letters[i % 26];
+            const dest = path.join(tmpDir, letter + ext);
             try {
-                fs.linkSync(fp, dest);  // Hard link: instant, zero disk space (same volume)
+                fs.linkSync(fp, dest);
             } catch {
-                fs.copyFileSync(fp, dest);  // Fallback: copy (cross-drive)
+                fs.copyFileSync(fp, dest);
             }
             args.push(dest);
         }
@@ -1380,7 +1384,7 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         if (compareArgs) args.push(...compareArgs);
     }
     execFile(exePath, args, { cwd });
-    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (isolated dirs)' : ''}`);
+    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (letter-names)' : ''}`);
 
     // Restore window to previous position/monitor after it opens
     if (savedRect) {
