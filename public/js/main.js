@@ -25,6 +25,7 @@ async function checkSetup() {
         state.settings = await api('/api/settings');
 
         document.getElementById('assetCount').textContent = `${status.assets} assets`;
+        document.getElementById('appVersion').textContent = status.version ? `v${status.version}` : '';
         document.getElementById('statusIndicator').className = 'status-dot' + (status.vaultConfigured ? '' : ' warning');
 
         if (!status.vaultConfigured) {
