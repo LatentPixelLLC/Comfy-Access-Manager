@@ -154,11 +154,12 @@ function playerKeyHandler(e) {
 
     // Arrow keys: frame step if video/cache present, otherwise asset navigation
     if (e.key === 'ArrowRight') {
+        e.preventDefault();
         const video = document.querySelector('#playerContent video');
         if (video || cachedPlaybackState) { keyFrameStep(1); }
         else { playerNext(); if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); } }
-    }
-    if (e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
         const video = document.querySelector('#playerContent video');
         if (video || cachedPlaybackState) { keyFrameStep(-1); }
         else { playerPrev(); if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); } }
@@ -1237,6 +1238,8 @@ function cachedPlay() {
             st.frameIdx = newFrame;
             if (st.onTick) st.onTick(st.frameIdx, true);
         }
+        // Always schedule next frame — even when frame index hasn't changed.
+        // At 24fps on a 60Hz monitor, the same frame must persist for 2-3 refreshes.
         st.rafId = requestAnimationFrame(tick);
     }
 
