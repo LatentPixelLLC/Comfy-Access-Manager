@@ -15,6 +15,27 @@ let compareRoles = [];        // Array of { role, assets } for comparison
 let compareActiveIdx = 0;     // Index into compareRoles for toggle mode
 
 // ═══════════════════════════════════════════
+//  OVERLAY STATE
+// ═══════════════════════════════════════════
+let overlayEnabled = false;
+let overlayOptions = loadOverlayPrefs();
+let overlayRafId = null;
+let overlayCanvas = null;
+let overlayCtx = null;
+
+function loadOverlayPrefs() {
+    try {
+        const saved = localStorage.getItem('dmv_overlay_prefs');
+        if (saved) return JSON.parse(saved);
+    } catch {}
+    return { burnIn: true, watermark: true, safeAreas: false, frameCounter: true, watermarkText: 'INTERNAL REVIEW' };
+}
+
+function saveOverlayPrefs() {
+    try { localStorage.setItem('dmv_overlay_prefs', JSON.stringify(overlayOptions)); } catch {}
+}
+
+// ═══════════════════════════════════════════
 //  MEDIA PLAYER
 // ═══════════════════════════════════════════
 
@@ -46,6 +67,9 @@ function closePlayer() {
     // Stop video if playing
     const video = document.querySelector('#playerContent video');
     if (video) video.pause();
+
+    // Clean up overlay
+    cleanupOverlay();
 }
 
 function playerKeyHandler(e) {
@@ -145,6 +169,314 @@ function renderPlayer() {
     parts.push(`<button class="player-mrv2-btn" onclick="openInMrViewer2(${asset.id})" title="Open in mrViewer2">🎬 mrViewer2</button>`);
     parts.push(`<button class="player-mrv2-btn" onclick="openInRV(${asset.id})" title="Open in RV (ShotGrid)">🎬 RV</button>`);
     meta.innerHTML = parts.join('');
+
+    // Set up overlay after content is rendered
+    requestAnimationFrame(() => setupOverlay(asset));
+}
+
+// ═══════════════════════════════════════════
+//  REVIEW OVERLAY SYSTEM
+// ═══════════════════════════════════════════
+
+function setupOverlay(asset) {
+    // Stop any existing overlay loop
+    if (overlayRafId) { cancelAnimationFrame(overlayRafId); overlayRafId = null; }
+
+    // Find the media element (video or image)
+    const content = document.getElementById('playerContent');
+    const mediaEl = content.querySelector('video') || content.querySelector('img');
+    if (!mediaEl) return;
+
+    // Remove existing overlay canvas
+    const existing = content.querySelector('.overlay-canvas');
+    if (existing) existing.remove();
+
+    // Make content container position:relative for overlay positioning
+    content.style.position = 'relative';
+
+    // Create canvas overlay
+    overlayCanvas = document.createElement('canvas');
+    overlayCanvas.className = 'overlay-canvas';
+    overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:10;';
+    content.appendChild(overlayCanvas);
+    overlayCtx = overlayCanvas.getContext('2d');
+
+    // Store asset info on canvas for rendering
+    overlayCanvas._asset = asset;
+    overlayCanvas._mediaEl = mediaEl;
+
+    // Size the canvas to match media once loaded
+    const sizeCanvas = () => {
+        const rect = mediaEl.getBoundingClientRect();
+        const containerRect = content.getBoundingClientRect();
+        overlayCanvas.width = rect.width;
+        overlayCanvas.height = rect.height;
+        // Position canvas exactly over the media
+        overlayCanvas.style.left = (rect.left - containerRect.left) + 'px';
+        overlayCanvas.style.top = (rect.top - containerRect.top) + 'px';
+        overlayCanvas.style.width = rect.width + 'px';
+        overlayCanvas.style.height = rect.height + 'px';
+    };
+
+    if (mediaEl.tagName === 'VIDEO') {
+        mediaEl.addEventListener('loadeddata', sizeCanvas, { once: true });
+        mediaEl.addEventListener('playing', sizeCanvas, { once: true });
+        // Also try immediately if already loaded
+        if (mediaEl.readyState >= 2) sizeCanvas();
+    } else {
+        if (mediaEl.complete) sizeCanvas();
+        else mediaEl.addEventListener('load', sizeCanvas, { once: true });
+    }
+
+    // Resize handler
+    const resizeObs = new ResizeObserver(sizeCanvas);
+    resizeObs.observe(mediaEl);
+    overlayCanvas._resizeObs = resizeObs;
+
+    // Start render loop
+    renderOverlayToolbar();
+    if (overlayEnabled) startOverlayLoop();
+}
+
+function startOverlayLoop() {
+    if (overlayRafId) cancelAnimationFrame(overlayRafId);
+
+    function loop() {
+        drawOverlay();
+        overlayRafId = requestAnimationFrame(loop);
+    }
+    overlayRafId = requestAnimationFrame(loop);
+}
+
+function stopOverlayLoop() {
+    if (overlayRafId) { cancelAnimationFrame(overlayRafId); overlayRafId = null; }
+    if (overlayCtx && overlayCanvas) {
+        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    }
+}
+
+function drawOverlay() {
+    if (!overlayCanvas || !overlayCtx || !overlayEnabled) return;
+    const ctx = overlayCtx;
+    const w = overlayCanvas.width;
+    const h = overlayCanvas.height;
+    if (w === 0 || h === 0) return;
+
+    const asset = overlayCanvas._asset;
+    const mediaEl = overlayCanvas._mediaEl;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const fontSize = Math.max(12, Math.min(w * 0.018, 22));
+    const padding = fontSize * 0.8;
+
+    // ─── Safe Areas ───
+    if (overlayOptions.safeAreas) {
+        // Action safe = 90% of frame
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([8, 4]);
+        const ax = w * 0.05, ay = h * 0.05, aw = w * 0.9, ah = h * 0.9;
+        ctx.strokeRect(ax, ay, aw, ah);
+
+        // Title safe = 80% of frame
+        ctx.strokeStyle = 'rgba(255, 200, 0, 0.35)';
+        ctx.setLineDash([4, 4]);
+        const tx = w * 0.1, ty = h * 0.1, tw = w * 0.8, th = h * 0.8;
+        ctx.strokeRect(tx, ty, tw, th);
+        ctx.setLineDash([]);
+
+        // Labels
+        ctx.font = `${fontSize * 0.6}px monospace`;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.fillText('ACTION SAFE', ax + 4, ay + fontSize * 0.7);
+        ctx.fillStyle = 'rgba(255, 200, 0, 0.35)';
+        ctx.fillText('TITLE SAFE', tx + 4, ty + fontSize * 0.7);
+
+        // Center crosshair
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 8]);
+        ctx.beginPath();
+        ctx.moveTo(w / 2, h * 0.4); ctx.lineTo(w / 2, h * 0.6);
+        ctx.moveTo(w * 0.4, h / 2); ctx.lineTo(w * 0.6, h / 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // ─── Burn-in Text (top-left: metadata, top-right: resolution/codec) ───
+    if (overlayOptions.burnIn) {
+        ctx.font = `bold ${fontSize}px monospace`;
+        ctx.textBaseline = 'top';
+
+        // Semi-transparent background strip at top
+        const stripH = fontSize * 2.6;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(0, 0, w, stripH);
+
+        // Top-left: hierarchy info
+        ctx.fillStyle = '#ffffff';
+        const hierarchy = [];
+        if (asset.project_name) hierarchy.push(asset.project_name);
+        if (asset.sequence_name) hierarchy.push(asset.sequence_name);
+        if (asset.shot_name) hierarchy.push(asset.shot_name);
+        const hierStr = hierarchy.length > 0 ? hierarchy.join(' › ') : '';
+
+        ctx.fillText(hierStr || asset.vault_name, padding, padding * 0.5);
+
+        // Second line: filename + role
+        ctx.font = `${fontSize * 0.85}px monospace`;
+        ctx.fillStyle = '#cccccc';
+        let line2 = asset.vault_name;
+        if (asset.role_name) line2 += `  [${asset.role_name}]`;
+        ctx.fillText(line2, padding, padding * 0.5 + fontSize * 1.2);
+
+        // Top-right: resolution + codec + fps
+        ctx.textAlign = 'right';
+        ctx.font = `bold ${fontSize}px monospace`;
+        ctx.fillStyle = '#ffffff';
+        const techParts = [];
+        if (asset.width && asset.height) techParts.push(`${asset.width}×${asset.height}`);
+        if (asset.codec) techParts.push(asset.codec.toUpperCase());
+        if (asset.fps) techParts.push(`${asset.fps}fps`);
+        ctx.fillText(techParts.join('  •  '), w - padding, padding * 0.5);
+
+        // File size on second line top-right
+        ctx.font = `${fontSize * 0.85}px monospace`;
+        ctx.fillStyle = '#cccccc';
+        ctx.fillText(formatSize(asset.file_size), w - padding, padding * 0.5 + fontSize * 1.2);
+
+        ctx.textAlign = 'left';
+    }
+
+    // ─── Frame Counter + Timecode (bottom-left) ───
+    if (overlayOptions.frameCounter && mediaEl.tagName === 'VIDEO') {
+        const fps = asset.fps || 24;
+        const currentTime = mediaEl.currentTime || 0;
+        const totalDuration = mediaEl.duration || 0;
+        const currentFrame = Math.floor(currentTime * fps);
+        const totalFrames = Math.floor(totalDuration * fps);
+
+        // Timecode: HH:MM:SS:FF
+        const tc = timeToTimecode(currentTime, fps);
+        const tcTotal = timeToTimecode(totalDuration, fps);
+
+        ctx.font = `bold ${fontSize * 1.1}px monospace`;
+        ctx.textBaseline = 'bottom';
+
+        // Background strip at bottom-left
+        const tcText = `${tc}  F${String(currentFrame).padStart(5, '0')} / ${totalFrames}`;
+        const tcWidth = ctx.measureText(tcText).width + padding * 2;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(0, h - fontSize * 2.2, tcWidth, fontSize * 2.2);
+
+        ctx.fillStyle = '#00ff88';
+        ctx.fillText(tc, padding, h - padding * 0.6);
+
+        ctx.font = `${fontSize * 0.85}px monospace`;
+        ctx.fillStyle = '#aaaaaa';
+        ctx.fillText(`F${String(currentFrame).padStart(5, '0')} / ${totalFrames}`, padding, h - padding * 0.6 - fontSize * 1.1);
+    }
+
+    // ─── Watermark (center, semi-transparent) ───
+    if (overlayOptions.watermark && overlayOptions.watermarkText) {
+        const wmText = overlayOptions.watermarkText;
+        const wmSize = Math.max(16, w * 0.04);
+        ctx.font = `bold ${wmSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Measure and draw
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+        ctx.save();
+        ctx.translate(w / 2, h / 2);
+        ctx.rotate(-Math.PI / 12); // Slight diagonal
+        ctx.fillText(wmText, 0, 0);
+        ctx.restore();
+
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+    }
+}
+
+function timeToTimecode(seconds, fps) {
+    const totalFrames = Math.floor(seconds * fps);
+    const ff = totalFrames % fps;
+    const totalSeconds = Math.floor(seconds);
+    const ss = totalSeconds % 60;
+    const mm = Math.floor(totalSeconds / 60) % 60;
+    const hh = Math.floor(totalSeconds / 3600);
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}:${String(ff).padStart(2, '0')}`;
+}
+
+// ─── Overlay Toolbar ───
+
+function renderOverlayToolbar() {
+    // Insert toolbar into player header if not already there
+    let toolbar = document.getElementById('overlayToolbar');
+    if (!toolbar) {
+        toolbar = document.createElement('div');
+        toolbar.id = 'overlayToolbar';
+        toolbar.className = 'overlay-toolbar';
+        const header = document.querySelector('.player-header');
+        if (header) {
+            // Insert before close button
+            const closeBtn = header.querySelector('.player-close');
+            header.insertBefore(toolbar, closeBtn);
+        }
+    }
+
+    toolbar.innerHTML = `
+        <button class="overlay-toggle ${overlayEnabled ? 'active' : ''}" 
+                onclick="toggleOverlayMaster()" title="Toggle review overlays">
+            🎬 Overlay ${overlayEnabled ? 'ON' : 'OFF'}
+        </button>
+        ${overlayEnabled ? `
+            <button class="overlay-opt-btn ${overlayOptions.burnIn ? 'active' : ''}" 
+                    onclick="toggleOverlayOption('burnIn')" title="Burn-in metadata text">🔤</button>
+            <button class="overlay-opt-btn ${overlayOptions.frameCounter ? 'active' : ''}" 
+                    onclick="toggleOverlayOption('frameCounter')" title="Frame counter + timecode">🎞️</button>
+            <button class="overlay-opt-btn ${overlayOptions.watermark ? 'active' : ''}" 
+                    onclick="toggleOverlayOption('watermark')" title="Watermark text">💧</button>
+            <button class="overlay-opt-btn ${overlayOptions.safeAreas ? 'active' : ''}" 
+                    onclick="toggleOverlayOption('safeAreas')" title="Safe area guides">📐</button>
+            <button class="overlay-opt-btn" onclick="editWatermarkText()" title="Edit watermark text">✏️</button>
+        ` : ''}
+    `;
+}
+
+function toggleOverlayMaster() {
+    overlayEnabled = !overlayEnabled;
+    renderOverlayToolbar();
+    if (overlayEnabled) {
+        startOverlayLoop();
+    } else {
+        stopOverlayLoop();
+    }
+}
+
+function toggleOverlayOption(key) {
+    overlayOptions[key] = !overlayOptions[key];
+    saveOverlayPrefs();
+    renderOverlayToolbar();
+}
+
+function editWatermarkText() {
+    const newText = prompt('Watermark text:', overlayOptions.watermarkText || 'INTERNAL REVIEW');
+    if (newText !== null) {
+        overlayOptions.watermarkText = newText;
+        saveOverlayPrefs();
+    }
+}
+
+function cleanupOverlay() {
+    if (overlayRafId) { cancelAnimationFrame(overlayRafId); overlayRafId = null; }
+    if (overlayCanvas && overlayCanvas._resizeObs) {
+        overlayCanvas._resizeObs.disconnect();
+    }
+    // Remove toolbar
+    const toolbar = document.getElementById('overlayToolbar');
+    if (toolbar) toolbar.remove();
 }
 
 // ═══════════════════════════════════════════
@@ -422,6 +754,9 @@ window.setCompareMode = setCompareMode;
 window.setCompareActive = setCompareActive;
 window.swapCompareAsset = swapCompareAsset;
 window.exitCompareMode = exitCompareMode;
+window.toggleOverlayMaster = toggleOverlayMaster;
+window.toggleOverlayOption = toggleOverlayOption;
+window.editWatermarkText = editWatermarkText;
 
 // Open player by asset ID (for format variant sub-menu)
 function openPlayerById(assetId) {
