@@ -1485,6 +1485,199 @@ router.post('/open-compare', (req, res) => {
     }
 });
 
+// ═══════════════════════════════════════════
+//  REVIEW MODE — FFmpeg burn-in overlays
+// ═══════════════════════════════════════════
+
+/**
+ * Build FFmpeg drawtext/drawbox filter string for review overlays.
+ * Returns a complex filter string with burn-in, watermark, safe areas, frame counter.
+ */
+function buildReviewFilters(opts) {
+    const {
+        burnIn = true,
+        watermark = true,
+        safeAreas = false,
+        frameCounter = true,
+        watermarkText = 'INTERNAL REVIEW',
+        hierarchy = '',       // "Project > Sequence > Shot | Role"
+        techInfo = '',        // "1920×1080 | H264 | 24fps"
+        isVideo = true,
+    } = opts;
+
+    // Escape special characters for FFmpeg drawtext
+    const esc = (s) => s.replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/\\/g, '\\\\').replace(/%/g, '%%');
+
+    const filters = [];
+
+    // --- Top burn-in bar: hierarchy + tech info ---
+    if (burnIn && (hierarchy || techInfo)) {
+        filters.push("drawbox=x=0:y=0:w=iw:h=36:color=black@0.65:t=fill");
+        if (hierarchy) {
+            filters.push(`drawtext=text='${esc(hierarchy)}':x=10:y=10:fontsize=16:fontcolor=white:font=Arial`);
+        }
+        if (techInfo) {
+            filters.push(`drawtext=text='${esc(techInfo)}':x=w-text_w-10:y=10:fontsize=14:fontcolor=white@0.7:font=Arial`);
+        }
+    }
+
+    // --- Bottom frame counter bar ---
+    if (frameCounter) {
+        filters.push("drawbox=x=0:y=ih-36:w=iw:h=36:color=black@0.65:t=fill");
+        if (isVideo) {
+            // Frame number (left) and timecode (right) for video
+            filters.push("drawtext=text='Frame %{frame_num}':start_number=1:x=10:y=ih-26:fontsize=16:fontcolor=white:font=Arial");
+            filters.push("drawtext=text='%{pts\\:hms}':x=w-text_w-10:y=ih-26:fontsize=16:fontcolor=white@0.8:font=Arial");
+        } else {
+            // Just filename for images
+            filters.push(`drawtext=text='${esc(opts.filename || '')}':x=10:y=ih-26:fontsize=14:fontcolor=white@0.8:font=Arial`);
+        }
+    }
+
+    // --- Center watermark ---
+    if (watermark && watermarkText) {
+        filters.push(`drawtext=text='${esc(watermarkText)}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=56:fontcolor=white@0.12:font=Arial`);
+    }
+
+    // --- Safe areas (title safe 90%, action safe 93%) ---
+    if (safeAreas) {
+        // Action safe (93%) — subtle yellow
+        const ax = 'iw*0.035', ay = 'ih*0.035', aw = 'iw*0.93', ah = 'ih*0.93';
+        filters.push(`drawbox=x=${ax}:y=${ay}:w=${aw}:h=${ah}:color=yellow@0.25:t=1`);
+        // Title safe (90%) — subtle red
+        const tx = 'iw*0.05', ty = 'ih*0.05', tw = 'iw*0.9', th = 'ih*0.9';
+        filters.push(`drawbox=x=${tx}:y=${ty}:w=${tw}:h=${th}:color=red@0.3:t=1`);
+    }
+
+    return filters.join(',');
+}
+
+// POST /api/assets/:id/open-review — Open file with burn-in overlays in external player
+router.post('/:id/open-review', async (req, res) => {
+    const { execFile } = require('child_process');
+    const os = require('os');
+    const db = getDb();
+
+    // Get asset with full hierarchy info
+    const asset = db.prepare(`
+        SELECT a.*, 
+            p.name as project_name, p.code as project_code,
+            s.name as sequence_name, s.code as sequence_code,
+            sh.name as shot_name, sh.code as shot_code,
+            r.name as role_name, r.code as role_code
+        FROM assets a
+        LEFT JOIN projects p ON p.id = a.project_id
+        LEFT JOIN sequences s ON s.id = a.sequence_id
+        LEFT JOIN shots sh ON sh.id = a.shot_id
+        LEFT JOIN roles r ON r.id = a.role_id
+        WHERE a.id = ?
+    `).get(req.params.id);
+
+    if (!asset || !fs.existsSync(asset.file_path)) {
+        return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Find FFmpeg
+    const ffmpegPath = ThumbnailService.findFFmpeg();
+    if (!ffmpegPath) {
+        return res.status(500).json({ error: 'FFmpeg not found — required for review mode' });
+    }
+
+    // Find external player
+    const exePath = findMrViewer2();
+    if (!exePath) {
+        return res.status(404).json({ error: 'mrViewer2 not found — install from https://mrv2.sourceforge.io/' });
+    }
+
+    // Overlay options from client
+    const {
+        burnIn = true,
+        watermark = true,
+        safeAreas = false,
+        frameCounter = true,
+        watermarkText = 'INTERNAL REVIEW',
+    } = req.body || {};
+
+    // Build hierarchy string: "Project > Sequence > Shot | Role"
+    const hierParts = [];
+    if (asset.project_name) hierParts.push(asset.project_name);
+    if (asset.sequence_name) hierParts.push(asset.sequence_name);
+    if (asset.shot_name) hierParts.push(asset.shot_name);
+    let hierarchy = hierParts.join(' > ');
+    if (asset.role_name) hierarchy += (hierarchy ? '  |  ' : '') + asset.role_name;
+
+    // Build tech info string
+    const techParts = [];
+    if (asset.width && asset.height) techParts.push(`${asset.width}x${asset.height}`);
+    if (asset.codec) techParts.push(asset.codec);
+    if (asset.fps) techParts.push(`${asset.fps}fps`);
+    const techInfo = techParts.join(' | ');
+
+    const isVideo = (asset.media_type === 'video');
+    const ext = path.extname(asset.file_path).toLowerCase();
+    const tmpDir = path.join(os.tmpdir(), `dmv-review-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    // Output to temp file (always .mp4 for video, .png for images)
+    const outExt = isVideo ? '.mp4' : '.png';
+    const outFile = path.join(tmpDir, `review${outExt}`);
+
+    // Build filter string
+    const filterStr = buildReviewFilters({
+        burnIn, watermark, safeAreas, frameCounter, watermarkText,
+        hierarchy, techInfo, isVideo,
+        filename: asset.vault_name,
+    });
+
+    if (!filterStr) {
+        // No overlays selected — just open normally
+        launchInMrv2(exePath, [asset.file_path]);
+        return res.json({ success: true, mode: 'direct' });
+    }
+
+    // Build FFmpeg args
+    const args = ['-y', '-i', asset.file_path];
+
+    if (isVideo) {
+        // Video: transcode with overlays (use NVENC if available, fall back to libx264)
+        args.push(
+            '-vf', filterStr,
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '18',
+            '-c:a', 'copy',
+            outFile
+        );
+    } else {
+        // Image: apply overlays to single frame
+        args.push(
+            '-vf', filterStr,
+            '-frames:v', '1',
+            outFile
+        );
+    }
+
+    console.log(`[Review] Generating overlay file for: ${asset.vault_name}`);
+    res.json({ success: true, mode: 'processing', message: 'Generating review file with overlays...' });
+
+    // Run FFmpeg asynchronously — open file when done
+    execFile(ffmpegPath, args, { timeout: 300000 }, (err) => {
+        if (err) {
+            console.error(`[Review] FFmpeg error:`, err.message?.substring(0, 200));
+            return;
+        }
+        console.log(`[Review] Generated: ${outFile}`);
+
+        // Open in mrViewer2
+        launchInMrv2(exePath, [outFile]);
+
+        // Clean up temp dir after 1 hour
+        setTimeout(() => {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        }, 3600000);
+    });
+});
+
 // POST /api/assets/:id/open-external — Open file in external player
 router.post('/:id/open-external', (req, res) => {
     const db = getDb();

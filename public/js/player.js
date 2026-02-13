@@ -168,6 +168,7 @@ function renderPlayer() {
     }
     parts.push(`<button class="player-mrv2-btn" onclick="openInMrViewer2(${asset.id})" title="Open in mrViewer2">🎬 mrViewer2</button>`);
     parts.push(`<button class="player-mrv2-btn" onclick="openInRV(${asset.id})" title="Open in RV (ShotGrid)">🎬 RV</button>`);
+    parts.push(`<button class="player-mrv2-btn player-review-btn" onclick="openReviewInMrv2(${asset.id})" title="Open in mrViewer2 with burn-in overlays (hierarchy, watermark, frame counter)">📋 Review</button>`);
     meta.innerHTML = parts.join('');
 
     // Set up overlay after content is rendered
@@ -539,6 +540,31 @@ async function openInRV(assetId) {
     }
 }
 
+async function openReviewInMrv2(assetId) {
+    try {
+        const opts = loadOverlayPrefs();
+        showToast('Generating review file with overlays...', 4000);
+        const res = await api(`/api/assets/${assetId}/open-review`, {
+            method: 'POST',
+            body: {
+                burnIn: opts.burnIn,
+                watermark: opts.watermark,
+                safeAreas: opts.safeAreas,
+                frameCounter: opts.frameCounter,
+                watermarkText: opts.watermarkText || 'INTERNAL REVIEW',
+            }
+        });
+        if (res.mode === 'direct') {
+            showToast('Launched in mrViewer2 (no overlays selected)');
+        } else {
+            showToast('Review file generating — mrViewer2 will open when ready');
+        }
+        window.blur();
+    } catch (err) {
+        showToast('Failed to generate review: ' + err.message, 5000);
+    }
+}
+
 async function openCompareInRV() {
     if (state.selectedAssets.length < 2) {
         showToast('Select at least 2 clips to compare (Ctrl-click or Shift-click)', 4000);
@@ -748,6 +774,7 @@ window.openInExternalPlayer = openInExternalPlayer;
 window.openInMrViewer2 = openInMrViewer2;
 window.openCompareInMrViewer2 = openCompareInMrViewer2;
 window.openInRV = openInRV;
+window.openReviewInMrv2 = openReviewInMrv2;
 window.openCompareInRV = openCompareInRV;
 window.openRoleCompare = openRoleCompare;
 window.setCompareMode = setCompareMode;

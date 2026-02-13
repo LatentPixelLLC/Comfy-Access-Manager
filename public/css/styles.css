@@ -1150,6 +1150,13 @@ label {
 .player-mrv2-btn:hover {
     background: var(--accent-light);
 }
+.player-review-btn {
+    background: #7c6f3a;
+    color: #f5f0e0;
+}
+.player-review-btn:hover {
+    background: #9e8c4a;
+}
 
 /* ─── Overlay Toolbar ─── */
 .overlay-toolbar {

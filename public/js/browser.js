@@ -704,6 +704,7 @@ async function showContextMenu(event, assetIdx) {
             html += `<div class="ctx-item" data-action="play">▶️ Play ${ext}</div>`;
             html += `<div class="ctx-item" data-action="mrv2">🎬 mrViewer2 ${ext}</div>`;
             html += `<div class="ctx-item" data-action="rv">🎬 RV ${ext}</div>`;
+            html += `<div class="ctx-item" data-action="review">📋 Review (overlays)</div>`;
         } else {
             // Multiple formats — show sub-menus
             html += `<div class="ctx-item ctx-item-parent">▶️ Play`;
@@ -730,6 +731,7 @@ async function showContextMenu(event, assetIdx) {
             }
             html += `</div></div>`;
         }
+        html += `<div class="ctx-item" data-action="review">📋 Review (overlays)</div>`;
         html += `<div class="ctx-item" data-action="star">${asset.starred ? '☆' : '⭐'} ${asset.starred ? 'Unstar' : 'Star'}</div>`;
         html += `<div class="ctx-separator"></div>`;
     }
@@ -776,6 +778,7 @@ async function showContextMenu(event, assetIdx) {
             case 'play': openPlayer(assetIdx); break;
             case 'mrv2': window.openInMrViewer2?.(asset.id); break;
             case 'rv': window.openInRV?.(asset.id); break;
+            case 'review': window.openReviewInMrv2?.(asset.id); break;
             case 'star': toggleStar(asset.id); break;
             case 'move': showMoveToSequenceModal(); break;
             case 'role': showAssignRoleModal(); break;
