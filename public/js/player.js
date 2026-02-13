@@ -69,6 +69,7 @@ export function openPlayer(index) {
 }
 
 function closePlayer() {
+    destroyFrameCache();
     document.getElementById('playerModal').style.display = 'none';
     document.removeEventListener('keydown', playerKeyHandler);
 
@@ -113,11 +114,41 @@ function playerKeyHandler(e) {
         if (presentationMode) { togglePresentationMode(); return; }
         closePlayer();
     }
-    if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+    // Arrow keys: frame step if video playing, otherwise asset navigation
+    if (e.key === 'ArrowRight') {
+        const video = document.querySelector('#playerContent video');
+        if (video) {
+            e.preventDefault();
+            video.pause();
+            const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
+            const newTime = Math.min(video.duration || 0, video.currentTime + (1 / fps));
+            video.currentTime = newTime;
+            showCachedFrame(newTime);
+        } else {
+            playerNext();
+            if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
+        }
+    }
+    if (e.key === 'ArrowLeft') {
+        const video = document.querySelector('#playerContent video');
+        if (video) {
+            e.preventDefault();
+            video.pause();
+            const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
+            const newTime = Math.max(0, video.currentTime - (1 / fps));
+            video.currentTime = newTime;
+            showCachedFrame(newTime);
+        } else {
+            playerPrev();
+            if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
+        }
+    }
+    // PageDown/PageUp: always navigate between assets
+    if (e.key === 'PageDown') {
         playerNext();
         if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
     }
-    if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+    if (e.key === 'PageUp') {
         playerPrev();
         if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
     }
@@ -142,7 +173,9 @@ function playerKeyHandler(e) {
         if (video) {
             video.pause();
             const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
-            video.currentTime = Math.max(0, video.currentTime - (1 / fps));
+            const newTime = Math.max(0, video.currentTime - (1 / fps));
+            video.currentTime = newTime;
+            showCachedFrame(newTime);
         }
     }
     if (e.key === '.' || e.key === '>') {
@@ -151,7 +184,9 @@ function playerKeyHandler(e) {
         if (video) {
             video.pause();
             const fps = parseFloat(document.querySelector('.player-transport')?.dataset.fps) || 24;
-            video.currentTime = Math.min(video.duration || 0, video.currentTime + (1 / fps));
+            const newTime = Math.min(video.duration || 0, video.currentTime + (1 / fps));
+            video.currentTime = newTime;
+            showCachedFrame(newTime);
         }
     }
     // J/K/L shuttle: J = rewind, K = pause, L = play
@@ -184,6 +219,7 @@ function playerPrev() {
 }
 
 function renderPlayer() {
+    destroyFrameCache();
     const asset = state.playerAssets[state.playerIndex];
     if (!asset) return;
 
@@ -214,6 +250,7 @@ function renderPlayer() {
                 <span class="pt-time">00:00 / 00:00</span>
                 <span class="pt-frame-counter"></span>
                 <button class="pt-btn pt-loop active" title="Loop (L)">🔁</button>
+                <div class="pt-cache-bar" style="display:none" title="Caching frames for instant scrub…"><div class="pt-cache-fill"></div></div>
             </div>
         `;
         initTransportControls(content, fps);
@@ -874,8 +911,129 @@ function openPlayerDirect() {
 }
 
 // ═══════════════════════════════════════════
-//  CUSTOM VIDEO TRANSPORT CONTROLS
+//  CUSTOM VIDEO TRANSPORT CONTROLS + FRAME CACHE
 // ═══════════════════════════════════════════
+
+// Global frame cache state (cleared on asset change)
+let frameCache = null;  // { frames: ImageBitmap[], fps, duration, width, height, ready }
+let frameCacheAbort = null;  // AbortController to cancel caching
+
+function destroyFrameCache() {
+    if (frameCacheAbort) { frameCacheAbort.abort(); frameCacheAbort = null; }
+    if (frameCache?.frames) {
+        for (const bmp of frameCache.frames) { if (bmp) bmp.close(); }
+    }
+    frameCache = null;
+}
+
+/**
+ * Show a cached frame on the scrub canvas overlay — instant, no decode lag.
+ * Can be called from anywhere (keyboard handler, scrub, frame step).
+ * Accepts optional canvas/ctx/video elements, or finds them from DOM.
+ */
+function showCachedFrame(timePos, canvas, ctx, videoEl) {
+    if (!frameCache?.ready) return false;
+    const frameIdx = Math.min(
+        Math.floor(timePos * frameCache.fps),
+        frameCache.frames.length - 1
+    );
+    if (frameIdx < 0 || !frameCache.frames[frameIdx]) return false;
+
+    // Find elements if not provided
+    if (!canvas) canvas = document.querySelector('.pt-scrub-canvas');
+    if (!canvas) return false;
+    if (!ctx) ctx = canvas.getContext('2d');
+    if (!videoEl) videoEl = document.querySelector('#playerContent video');
+
+    // Size canvas to match video display size
+    const rect = (videoEl || canvas).getBoundingClientRect();
+    if (canvas.width !== frameCache.width) canvas.width = frameCache.width;
+    if (canvas.height !== frameCache.height) canvas.height = frameCache.height;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    canvas.style.display = '';
+    if (videoEl) videoEl.style.display = 'none';
+
+    ctx.drawImage(frameCache.frames[frameIdx], 0, 0);
+    return true;
+}
+
+/**
+ * Extract all frames from the video element into ImageBitmap cache.
+ * Uses a hidden cloned video + OffscreenCanvas for background extraction.
+ */
+async function buildFrameCache(videoSrc, fps, onProgress) {
+    destroyFrameCache();
+
+    const ac = new AbortController();
+    frameCacheAbort = ac;
+
+    return new Promise((resolve) => {
+        const extractor = document.createElement('video');
+        extractor.muted = true;
+        extractor.preload = 'auto';
+        extractor.src = videoSrc;
+
+        extractor.addEventListener('loadedmetadata', async () => {
+            if (ac.signal.aborted) { resolve(null); return; }
+
+            const duration = extractor.duration;
+            if (!isFinite(duration) || duration <= 0) { resolve(null); return; }
+
+            const totalFrames = Math.ceil(duration * fps);
+            const w = extractor.videoWidth;
+            const h = extractor.videoHeight;
+
+            // Limit: don't try to cache huge clips (>60s at fps)
+            const maxFrames = 1800; // 60s at 30fps
+            if (totalFrames > maxFrames) {
+                if (onProgress) onProgress(-1, totalFrames); // signal: too large
+                resolve(null);
+                return;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d', { willReadFrequently: false });
+
+            const frames = new Array(totalFrames);
+            const frameDur = 1 / fps;
+            let extracted = 0;
+
+            for (let i = 0; i < totalFrames; i++) {
+                if (ac.signal.aborted) { resolve(null); return; }
+
+                const targetTime = i * frameDur;
+                extractor.currentTime = Math.min(targetTime, duration - 0.001);
+
+                // Wait for seek to complete
+                await new Promise(r => {
+                    const onSeeked = () => { extractor.removeEventListener('seeked', onSeeked); r(); };
+                    extractor.addEventListener('seeked', onSeeked);
+                });
+
+                if (ac.signal.aborted) { resolve(null); return; }
+
+                ctx.drawImage(extractor, 0, 0, w, h);
+                try {
+                    frames[i] = await createImageBitmap(canvas);
+                } catch { frames[i] = null; }
+
+                extracted++;
+                if (onProgress && extracted % 5 === 0) onProgress(extracted, totalFrames);
+            }
+
+            if (ac.signal.aborted) { resolve(null); return; }
+
+            frameCache = { frames, fps, duration, width: w, height: h, ready: true };
+            if (onProgress) onProgress(totalFrames, totalFrames);
+            resolve(frameCache);
+        });
+
+        extractor.addEventListener('error', () => { resolve(null); });
+    });
+}
 
 function initTransportControls(container, fps) {
     const video = container.querySelector('video');
@@ -890,6 +1048,16 @@ function initTransportControls(container, fps) {
     const loopBtn = transport.querySelector('.pt-loop');
     const timeEl = transport.querySelector('.pt-time');
     const frameEl = transport.querySelector('.pt-frame-counter');
+    const cacheBar = transport.querySelector('.pt-cache-bar');
+    const cacheFill = transport.querySelector('.pt-cache-fill');
+
+    // Canvas overlay for cached frame display during scrub
+    const scrubCanvas = document.createElement('canvas');
+    scrubCanvas.className = 'pt-scrub-canvas';
+    scrubCanvas.style.display = 'none';
+    // Insert canvas right before video so it layers on top
+    video.parentElement.insertBefore(scrubCanvas, video);
+    const scrubCtx = scrubCanvas.getContext('2d');
 
     let isScrubbing = false;
     const frameDuration = 1 / fps;
@@ -921,20 +1089,33 @@ function initTransportControls(container, fps) {
     // Update loop on timeupdate (smooth display during playback)
     video.addEventListener('timeupdate', updateTransport);
     video.addEventListener('loadedmetadata', updateTransport);
-    video.addEventListener('play', () => { playBtn.textContent = '⏸'; });
+    video.addEventListener('play', () => {
+        playBtn.textContent = '⏸';
+        // Hide canvas overlay when playing (show live video)
+        scrubCanvas.style.display = 'none';
+        video.style.display = '';
+    });
     video.addEventListener('pause', () => { playBtn.textContent = '▶'; });
 
-    // Real-time scrubbing: seek on every input event (as slider drags)
+    // Show cached frame on canvas (delegated to module-level function)
+    // Closure-bound wrapper for local scrub access
+    const _showCached = (timePos) => showCachedFrame(timePos, scrubCanvas, scrubCtx, video);
+
+    // Real-time scrubbing: use cache if available, otherwise fallback to video.currentTime
     scrub.addEventListener('input', () => {
         isScrubbing = true;
         if (video.duration && isFinite(video.duration)) {
             const seekTo = (scrub.value / 1000) * video.duration;
-            video.currentTime = seekTo;
             fill.style.width = ((seekTo / video.duration) * 100) + '%';
             timeEl.textContent = `${fmtTime(seekTo)} / ${fmtTime(video.duration)}`;
             const currentFrame = Math.floor(seekTo * fps);
             const totalFrames = Math.floor(video.duration * fps);
             frameEl.textContent = `F ${currentFrame} / ${totalFrames}`;
+
+            // Try cached frame first (instant), fall back to video seek
+            if (!_showCached(seekTo)) {
+                video.currentTime = seekTo;
+            }
         }
     });
 
@@ -947,6 +1128,13 @@ function initTransportControls(container, fps) {
     });
     scrub.addEventListener('mouseup', () => {
         isScrubbing = false;
+        // Sync video to final scrub position
+        if (video.duration && isFinite(video.duration)) {
+            video.currentTime = (scrub.value / 1000) * video.duration;
+        }
+        // Switch back from canvas to video
+        scrubCanvas.style.display = 'none';
+        video.style.display = '';
         if (wasPlaying) video.play();
     });
     // Touch support
@@ -957,6 +1145,11 @@ function initTransportControls(container, fps) {
     }, { passive: true });
     scrub.addEventListener('touchend', () => {
         isScrubbing = false;
+        if (video.duration && isFinite(video.duration)) {
+            video.currentTime = (scrub.value / 1000) * video.duration;
+        }
+        scrubCanvas.style.display = 'none';
+        video.style.display = '';
         if (wasPlaying) video.play();
     });
 
@@ -969,11 +1162,15 @@ function initTransportControls(container, fps) {
     playBtn.addEventListener('click', () => { video.paused ? video.play() : video.pause(); });
     prevBtn.addEventListener('click', () => {
         video.pause();
-        video.currentTime = Math.max(0, video.currentTime - frameDuration);
+        const newTime = Math.max(0, video.currentTime - frameDuration);
+        video.currentTime = newTime;
+        _showCached(newTime);
     });
     nextBtn.addEventListener('click', () => {
         video.pause();
-        video.currentTime = Math.min(video.duration, video.currentTime + frameDuration);
+        const newTime = Math.min(video.duration, video.currentTime + frameDuration);
+        video.currentTime = newTime;
+        _showCached(newTime);
     });
     loopBtn.addEventListener('click', () => {
         video.loop = !video.loop;
@@ -982,6 +1179,30 @@ function initTransportControls(container, fps) {
 
     // Pointer events to prevent node drag in player
     transport.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+    // Start frame caching in background after video loads
+    video.addEventListener('loadedmetadata', () => {
+        const totalFrames = Math.ceil(video.duration * fps);
+        if (totalFrames > 1800) {
+            // Too many frames — show "too long" message
+            if (cacheBar) { cacheBar.title = 'Clip too long for frame cache (>60s)'; cacheFill.style.width = '0%'; }
+            return;
+        }
+        if (cacheBar) { cacheBar.style.display = ''; }
+        buildFrameCache(video.src, fps, (done, total) => {
+            if (done === -1) {
+                // Clip too long
+                if (cacheBar) cacheBar.style.display = 'none';
+                return;
+            }
+            if (cacheFill) cacheFill.style.width = ((done / total) * 100) + '%';
+            if (done >= total && cacheBar) {
+                // Caching complete — fade out bar
+                setTimeout(() => { cacheBar.style.opacity = '0'; }, 500);
+                setTimeout(() => { cacheBar.style.display = 'none'; }, 1000);
+            }
+        });
+    }, { once: true });
 }
 
 // ═══════════════════════════════════════════

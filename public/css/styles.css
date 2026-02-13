@@ -1299,6 +1299,7 @@ label {
     min-height: 400px;
 }
 .player-content {
+    position: relative;
     max-width: 100%; max-height: 70vh;
     display: flex; align-items: center; justify-content: center;
     flex-direction: column;
@@ -1314,6 +1315,7 @@ label {
 
 /* ─── Custom Video Transport Bar ─── */
 .player-transport {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1424,6 +1426,37 @@ label {
     white-space: nowrap;
     min-width: 75px;
     text-align: center;
+}
+
+/* Frame cache overlay canvas (shown during scrub for instant display) */
+.pt-scrub-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    z-index: 2;
+    pointer-events: none;
+    display: none;
+    background: #000;
+}
+
+/* Cache progress bar (small bar under transport) */
+.pt-cache-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: rgba(255,255,255,0.08);
+    z-index: 5;
+    transition: opacity 0.4s;
+}
+.pt-cache-fill {
+    height: 100%;
+    width: 0%;
+    background: #6cf;
+    border-radius: 1px;
+    transition: width 0.15s linear;
 }
 
 .player-info {
