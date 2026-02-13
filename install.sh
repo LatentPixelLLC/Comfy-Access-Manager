@@ -81,16 +81,58 @@ echo "         Done."
 # ─── [6/6] mrViewer2 ───
 echo "  [6/6] Checking mrViewer2..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    if ls /Applications/mrv2*.app &>/dev/null 2>&1; then
+    # macOS — check /Applications for mrv2 or mrViewer
+    if ls /Applications/mrv2*.app /Applications/mrViewer*.app &>/dev/null 2>&1; then
         echo "         mrViewer2 found in /Applications."
     else
         echo ""
         echo "         mrViewer2 is optional but recommended for pro video playback"
         echo "         (EXR, ProRes, HDR, DPX, etc.)"
         echo ""
-        echo "         Download from: https://mrv2.sourceforge.io/"
-        echo "         Install: drag mrv2.app to /Applications/"
-        echo ""
+        read -p "         Install mrViewer2? (y/N): " INSTALL_MRV2
+        if [[ "$INSTALL_MRV2" =~ ^[Yy]$ ]]; then
+            echo "         Downloading mrViewer2 (this may take a minute)..."
+            mkdir -p tools
+            curl -L -o tools/mrv2-installer.dmg \
+                "https://sourceforge.net/projects/mrv2/files/latest/download" \
+                --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" \
+                --progress-bar
+
+            if [ -f tools/mrv2-installer.dmg ] && [ -s tools/mrv2-installer.dmg ]; then
+                echo "         Mounting disk image..."
+                MOUNT_OUTPUT=$(hdiutil attach tools/mrv2-installer.dmg -nobrowse 2>&1)
+                VOLUME=$(echo "$MOUNT_OUTPUT" | grep "/Volumes/" | awk -F'\t' '{print $NF}' | head -1)
+
+                if [ -n "$VOLUME" ] && [ -d "$VOLUME" ]; then
+                    MRV2_APP=$(find "$VOLUME" -maxdepth 1 -name "*.app" -type d 2>/dev/null | head -1)
+                    if [ -n "$MRV2_APP" ]; then
+                        echo "         Installing to /Applications/..."
+                        cp -R "$MRV2_APP" /Applications/
+                        # Remove quarantine flag so macOS doesn't block it
+                        APP_NAME=$(basename "$MRV2_APP")
+                        xattr -cr "/Applications/$APP_NAME" 2>/dev/null
+                        echo "         ✅ mrViewer2 installed!"
+                    else
+                        echo "         Could not find app in disk image."
+                        echo "         Opening disk image — drag the app to /Applications/..."
+                        open tools/mrv2-installer.dmg
+                        sleep 3
+                    fi
+                    hdiutil detach "$VOLUME" -quiet 2>/dev/null
+                else
+                    echo "         Could not mount disk image."
+                    echo "         Opening it for manual install — drag the app to /Applications/..."
+                    open tools/mrv2-installer.dmg
+                    sleep 3
+                fi
+                rm -f tools/mrv2-installer.dmg 2>/dev/null
+            else
+                echo "         Download failed."
+                echo "         Install manually from: https://mrv2.sourceforge.io/"
+            fi
+        else
+            echo "         Skipping. You can install later from: https://mrv2.sourceforge.io/"
+        fi
     fi
 else
     # Linux — check if mrv2 exists
@@ -109,9 +151,17 @@ mkdir -p data thumbnails
 
 echo ""
 echo "  ============================================="
-echo "    Installation Complete!"
+echo "    ✅ Installation Complete!"
 echo "  ============================================="
 echo ""
-echo "  To start DMV, run:  ./start.sh"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "  To start DMV:"
+    echo "    Double-click start.command"
+    echo "    — or —"
+    echo "    ./start.sh"
+else
+    echo "  To start DMV, run:  ./start.sh"
+fi
+echo ""
 echo "  Then open:  http://localhost:7700"
 echo ""
