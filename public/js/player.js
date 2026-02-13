@@ -1030,182 +1030,182 @@ async function buildFrameCache(videoSrc, fps, onProgress, externalAbort) {
 }
 
 /**
- * WebCodecs path: fetch video as ArrayBuffer → mp4box demux → VideoDecoder → ImageBitmap[].
- * Decodes every single frame at full GPU speed. No browser compositor involved.
+ * WebCodecs path: fetch → mp4box demux → VideoDecoder → ImageBitmap[].
+ * Split into 3 phases to avoid async race conditions in mp4box callbacks:
+ *   Phase 1: Download video file
+ *   Phase 2: Demux — parse MP4 container and collect all encoded samples (fully sync)
+ *   Phase 3: Decode — validate config, decode frames with VideoDecoder
  */
 async function _buildCacheWebCodecs(videoSrc, fps, onProgress, ac) {
-    // 1. Download entire video file
+    // ── Phase 1: Download ──
     console.log('[FrameCache] WC: fetching video...');
     const response = await fetch(videoSrc, { signal: ac.signal });
     const buffer = await response.arrayBuffer();
     console.log('[FrameCache] WC: downloaded', (buffer.byteLength / 1024 / 1024).toFixed(1), 'MB');
     if (ac.signal.aborted) return null;
 
-    return new Promise((resolve, reject) => {
+    // ── Phase 2: Demux (all mp4box callbacks are synchronous — no awaits!) ──
+    const demux = await _demuxMP4(buffer);
+    if (!demux) return null;
+
+    const { track, trak, samples, duration } = demux;
+
+    // Get coded dimensions from sample entry
+    const sampleEntry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
+    const w = sampleEntry?.width || track.track_width || 0;
+    const h = sampleEntry?.height || track.track_height || 0;
+    if (!w || !h) { console.warn('[FrameCache] Could not determine video dimensions'); return null; }
+
+    const totalFrames = Math.ceil(duration * fps);
+    if (totalFrames > 1800) { if (onProgress) onProgress(-1, totalFrames); return null; }
+
+    console.log('[FrameCache] WC: demuxed', samples.length, 'samples, codec:', track.codec, w + '×' + h);
+
+    // ── Phase 3: Decode (async is fine here — no mp4box interaction) ──
+    const description = _getCodecDescription(trak);
+
+    let config = { codec: track.codec, codedWidth: w, codedHeight: h, hardwareAcceleration: 'prefer-hardware' };
+    if (description) config.description = description;
+
+    // Validate config with fallback chain
+    let supported = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
+    if (!supported.supported) {
+        config.hardwareAcceleration = 'no-preference';
+        supported = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
+    }
+    if (!supported.supported && description) {
+        delete config.description;
+        supported = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
+    }
+    if (!supported.supported) { console.warn('[FrameCache] Codec not supported:', track.codec); return null; }
+
+    console.log('[FrameCache] WC: config accepted, decoding', totalFrames, 'frames...');
+    return _decodeAllFrames(samples, supported.config || config, totalFrames, fps, w, h, duration, onProgress, ac);
+}
+
+/**
+ * Phase 2: Demux MP4 container with mp4box.js — extract track info and all encoded samples.
+ * CRITICAL: onReady is NOT async — everything is synchronous so mp4box can deliver
+ * samples during appendBuffer/flush without race conditions.
+ */
+function _demuxMP4(buffer) {
+    return new Promise((resolve) => {
         const file = MP4Box.createFile();
-        let decoder = null;
-        let totalFrames = 0;
-        let captured = 0;
-        let frames = [];
-        let w = 0, h = 0, duration = 0;
-        const pendingBitmaps = [];
-        let samplesProcessed = 0;
-        let totalSamplesExpected = 0;
+        let trackInfo = null;
+        const collectedSamples = [];
+        let expectedSamples = 0;
+        let resolved = false;
 
-        // Abort handler — clean up decoder
-        const onAbort = () => {
-            try { if (decoder && decoder.state !== 'closed') decoder.close(); } catch {}
-            resolve(null);
+        const finish = () => {
+            if (resolved) return;
+            resolved = true;
+            if (!trackInfo || collectedSamples.length === 0) {
+                resolve(null);
+            } else {
+                resolve({
+                    track: trackInfo.track,
+                    trak: trackInfo.trak,
+                    samples: collectedSamples,
+                    duration: trackInfo.info.duration / trackInfo.info.timescale
+                });
+            }
         };
-        ac.signal.addEventListener('abort', onAbort, { once: true });
 
-        file.onReady = async (info) => {
-            console.log('[FrameCache] WC: mp4box onReady, tracks:', info.videoTracks?.length, 'duration:', info.duration / info.timescale);
-            if (ac.signal.aborted) return;
-
+        file.onReady = (info) => {
+            // NOT async — must be fully synchronous so samples arrive during appendBuffer/flush
             const track = info.videoTracks?.[0];
-            if (!track) { console.warn('[FrameCache] WC: no video track found'); resolve(null); return; }
+            if (!track) { finish(); return; }
 
-            // Use coded dimensions from video sample entry, falling back to track dimensions
             const trak = file.getTrackById(track.id);
-            const sampleEntry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
-            w = sampleEntry?.width || track.track_width || track.video?.width || 0;
-            h = sampleEntry?.height || track.track_height || track.video?.height || 0;
-            if (!w || !h) { console.warn('[FrameCache] Could not determine video dimensions'); resolve(null); return; }
+            trackInfo = { track, trak, info };
+            expectedSamples = track.nb_samples;
 
-            duration = info.duration / info.timescale;
-            totalFrames = Math.ceil(duration * fps);
-            totalSamplesExpected = track.nb_samples;
-
-            // Limit: don't cache huge clips (>60s at fps)
-            if (totalFrames > 1800) {
-                if (onProgress) onProgress(-1, totalFrames);
-                resolve(null);
-                return;
-            }
-
-            frames = new Array(totalFrames).fill(null);
-
-            // Extract codec description (avcC / hvcC / vpcC / av1C box)
-            const description = _getCodecDescription(trak);
-
-            // Build config and validate with isConfigSupported() before calling configure()
-            let config = {
-                codec: track.codec,
-                codedWidth: w,
-                codedHeight: h,
-                hardwareAcceleration: 'prefer-hardware'
+            file.onSamples = (id, ref, samps) => {
+                collectedSamples.push(...samps);
+                if (collectedSamples.length >= expectedSamples) finish();
             };
-            if (description) config.description = description;
-
-            // Check if config is supported; if not, retry without HW accel and/or description
-            let supported = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
-            if (!supported.supported) {
-                console.warn('[FrameCache] Config rejected with HW accel, trying without. codec:', track.codec, 'dims:', w, 'x', h);
-                config.hardwareAcceleration = 'no-preference';
-                supported = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
-            }
-            if (!supported.supported && description) {
-                console.warn('[FrameCache] Config rejected with description, trying without');
-                delete config.description;
-                supported = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
-            }
-            if (!supported.supported) {
-                console.warn('[FrameCache] Codec not supported by WebCodecs:', track.codec);
-                resolve(null);
-                return;
-            }
-            console.log('[FrameCache] WC: config accepted, codec:', track.codec, 'dims:', w, 'x', h, 'samples:', totalSamplesExpected);
-
-            // OffscreenCanvas for CPU-backed bitmap materialization
-            // VideoFrame bitmaps may live in GPU memory; drawing through canvas
-            // ensures they're CPU-resident so later drawImage calls don't stall on GPU readback
-            const matCanvas = new OffscreenCanvas(w, h);
-            const matCtx = matCanvas.getContext('2d');
-            const cacheStartTime = performance.now();
-
-            decoder = new VideoDecoder({
-                output: (frame) => {
-                    if (ac.signal.aborted) { frame.close(); return; }
-
-                    const frameIdx = Math.min(
-                        Math.round(frame.timestamp / 1e6 * fps),
-                        totalFrames - 1
-                    );
-
-                    // Materialize to CPU: draw VideoFrame → OffscreenCanvas → ImageBitmap
-                    // This prevents GPU-backed textures that stall drawImage under GPU contention
-                    matCtx.drawImage(frame, 0, 0);
-                    frame.close();
-                    const p = createImageBitmap(matCanvas).then(bmp => {
-                        if (ac.signal.aborted) { bmp.close(); return; }
-                        frames[frameIdx] = bmp;
-                        captured++;
-                        if (onProgress && captured % 10 === 0) onProgress(captured, totalFrames);
-                    }).catch(() => {});
-                    pendingBitmaps.push(p);
-                },
-                error: (e) => {
-                    console.warn('[FrameCache] VideoDecoder error:', e.message);
-                    reject(e);
-                }
-            });
-
-            decoder.configure(supported.config || config);
-
-            // Set up sample handler BEFORE starting extraction
-            file.onSamples = (trackId, ref, samples) => {
-                for (const sample of samples) {
-                    if (ac.signal.aborted) break;
-                    decoder.decode(new EncodedVideoChunk({
-                        type: sample.is_sync ? 'key' : 'delta',
-                        timestamp: (1e6 * sample.cts) / sample.timescale,
-                        duration: (1e6 * sample.duration) / sample.timescale,
-                        data: sample.data
-                    }));
-                }
-                samplesProcessed += samples.length;
-
-                // All samples fed — flush decoder and finalize
-                if (samplesProcessed >= totalSamplesExpected) {
-                    decoder.flush().then(async () => {
-                        await Promise.all(pendingBitmaps);
-                        if (ac.signal.aborted) return;
-                        ac.signal.removeEventListener('abort', onAbort);
-
-                        _fillFrameGaps(frames);
-                        if (onProgress) onProgress(totalFrames, totalFrames);
-
-                        const elapsed = ((performance.now() - cacheStartTime) / 1000).toFixed(1);
-                        const gaps = frames.filter(f => !f).length;
-                        console.log(`[FrameCache] ✅ WebCodecs complete: ${totalFrames} frames in ${elapsed}s (${gaps} gaps filled), codec: ${track.codec}, ${w}×${h}`);
-                        try { decoder.close(); } catch {}
-                        resolve({ frames, fps, duration, width: w, height: h, ready: true });
-                    }).catch(() => resolve(null));
-                }
-            };
-
             file.setExtractionOptions(track.id);
             file.start();
-            // Flush AFTER start — must happen after onSamples is set and extraction started.
-            // appendBuffer() triggers onReady synchronously, but onReady is async (has awaits).
-            // If flush() runs in the outer scope, it completes before start() is called,
-            // and mp4box has nothing left to process → onSamples never fires.
-            file.flush();
         };
 
-        file.onError = (e) => {
-            console.warn('[FrameCache] mp4box parse error:', e);
-            resolve(null);
-        };
+        file.onError = () => finish();
 
-        // Feed buffer to mp4box — triggers onReady synchronously during appendBuffer.
-        // NOTE: Do NOT call file.flush() here — onReady is async (has awaits),
-        // so flush must happen inside onReady after start() to ensure onSamples fires.
-        console.log('[FrameCache] WC: feeding buffer to mp4box...');
         buffer.fileStart = 0;
         file.appendBuffer(buffer);
-        console.log('[FrameCache] WC: appendBuffer complete');
+        file.flush();
+
+        // If all samples were delivered synchronously (common for single-buffer feeds)
+        if (trackInfo && collectedSamples.length >= expectedSamples) {
+            finish();
+        }
+        // Safety timeout if samples don't arrive
+        setTimeout(() => { if (!resolved) { console.warn('[FrameCache] mp4box sample extraction timed out'); finish(); } }, 5000);
+    });
+}
+
+/**
+ * Phase 3: Decode all collected samples with VideoDecoder → ImageBitmap array.
+ * Samples are pre-collected from demux phase — no mp4box interaction needed.
+ */
+function _decodeAllFrames(samples, config, totalFrames, fps, w, h, duration, onProgress, ac) {
+    const frames = new Array(totalFrames).fill(null);
+    const pendingBitmaps = [];
+    let captured = 0;
+
+    // OffscreenCanvas materializes GPU-backed VideoFrames to CPU memory
+    const matCanvas = new OffscreenCanvas(w, h);
+    const matCtx = matCanvas.getContext('2d');
+    const cacheStartTime = performance.now();
+
+    return new Promise((resolve) => {
+        const decoder = new VideoDecoder({
+            output: (frame) => {
+                if (ac.signal.aborted) { frame.close(); return; }
+                const frameIdx = Math.min(Math.round(frame.timestamp / 1e6 * fps), totalFrames - 1);
+                matCtx.drawImage(frame, 0, 0);
+                frame.close();
+                const p = createImageBitmap(matCanvas).then(bmp => {
+                    if (ac.signal.aborted) { bmp.close(); return; }
+                    frames[frameIdx] = bmp;
+                    captured++;
+                    if (onProgress && captured % 10 === 0) onProgress(captured, totalFrames);
+                }).catch(() => {});
+                pendingBitmaps.push(p);
+            },
+            error: (e) => {
+                console.warn('[FrameCache] VideoDecoder error:', e.message);
+                try { decoder.close(); } catch {}
+                resolve(null);
+            }
+        });
+
+        decoder.configure(config);
+
+        // Feed all encoded samples to decoder
+        for (const sample of samples) {
+            if (ac.signal.aborted) break;
+            decoder.decode(new EncodedVideoChunk({
+                type: sample.is_sync ? 'key' : 'delta',
+                timestamp: (1e6 * sample.cts) / sample.timescale,
+                duration: (1e6 * sample.duration) / sample.timescale,
+                data: sample.data
+            }));
+        }
+
+        // Flush decoder — waits for all queued frames to be decoded
+        decoder.flush().then(async () => {
+            await Promise.all(pendingBitmaps);
+            if (ac.signal.aborted) { resolve(null); return; }
+
+            _fillFrameGaps(frames);
+            if (onProgress) onProgress(totalFrames, totalFrames);
+
+            const elapsed = ((performance.now() - cacheStartTime) / 1000).toFixed(1);
+            const gaps = frames.filter(f => !f).length;
+            console.log(`[FrameCache] ✅ WebCodecs: ${totalFrames} frames in ${elapsed}s (${gaps} gaps), codec: ${config.codec}, ${w}×${h}`);
+            try { decoder.close(); } catch {}
+            resolve({ frames, fps, duration, width: w, height: h, ready: true });
+        }).catch(() => resolve(null));
     });
 }
 
