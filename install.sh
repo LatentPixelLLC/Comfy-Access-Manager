@@ -93,15 +93,59 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         if [[ "$INSTALL_MRV2" =~ ^[Yy]$ ]]; then
             mkdir -p tools
             DOWNLOAD_OK=false
+            MAC_ARCH=$(uname -m)
 
-            # --- Strategy 1: Use SourceForge API to find exact download URL ---
-            echo "         Finding latest mrViewer2 version..."
-            API_JSON=$(curl -s --connect-timeout 10 \
-                "https://sourceforge.net/projects/mrv2/best_release.json" 2>/dev/null || true)
+            # --- Strategy 1: GitHub Releases (most reliable) ---
+            echo "         Finding latest mrViewer2 version on GitHub..."
+            GH_JSON=$(curl -s --connect-timeout 10 \
+                "https://api.github.com/repos/ggarra13/mrv2/releases/latest" 2>/dev/null || true)
 
-            if [ -n "$API_JSON" ]; then
-                # Parse the macOS filename from JSON using python3 (ships with macOS)
-                DMG_PATH=$(echo "$API_JSON" | python3 -c "
+            if [ -n "$GH_JSON" ]; then
+                # Pick the correct macOS DMG for this architecture
+                if [ "$MAC_ARCH" = "arm64" ]; then
+                    ARCH_FILTER="Darwin-arm64"
+                else
+                    ARCH_FILTER="Darwin-amd64"
+                fi
+
+                # Parse GitHub JSON with python3 to find the right .dmg URL
+                DMG_URL=$(echo "$GH_JSON" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for asset in data.get('assets', []):
+        name = asset.get('name', '')
+        # Prefer OpenGL (mrv2) over Vulkan (vmrv2), must be .dmg
+        if name.startswith('mrv2-') and name.endswith('.dmg') and '${ARCH_FILTER}' in name:
+            print(asset['browser_download_url'])
+            break
+except:
+    pass" 2>/dev/null || true)
+
+                if [ -n "$DMG_URL" ]; then
+                    DMG_NAME=$(basename "$DMG_URL")
+                    echo "         Downloading ${DMG_NAME} from GitHub..."
+                    curl -L -o tools/mrv2-installer.dmg "$DMG_URL" \
+                        --progress-bar --connect-timeout 15 || true
+
+                    if [ -f tools/mrv2-installer.dmg ] && [ -s tools/mrv2-installer.dmg ] && \
+                       ! file tools/mrv2-installer.dmg | grep -q "HTML"; then
+                        DOWNLOAD_OK=true
+                    else
+                        echo "         GitHub download failed, trying SourceForge..."
+                        rm -f tools/mrv2-installer.dmg 2>/dev/null
+                    fi
+                fi
+            fi
+
+            # --- Strategy 2: SourceForge API + mirror URL ---
+            if [ "$DOWNLOAD_OK" = false ]; then
+                echo "         Trying SourceForge..."
+                SF_JSON=$(curl -s --connect-timeout 10 \
+                    "https://sourceforge.net/projects/mrv2/best_release.json" 2>/dev/null || true)
+
+                if [ -n "$SF_JSON" ]; then
+                    DMG_PATH=$(echo "$SF_JSON" | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
@@ -110,48 +154,25 @@ try:
 except:
     pass" 2>/dev/null || true)
 
-                if [ -n "$DMG_PATH" ]; then
-                    # Detect Intel vs Apple Silicon and swap arch if needed
-                    MAC_ARCH=$(uname -m)
-                    if [ "$MAC_ARCH" = "x86_64" ] && echo "$DMG_PATH" | grep -q "arm64"; then
-                        DMG_PATH=$(echo "$DMG_PATH" | sed 's/arm64/amd64/g')
+                    if [ -n "$DMG_PATH" ]; then
+                        if [ "$MAC_ARCH" = "x86_64" ] && echo "$DMG_PATH" | grep -q "arm64"; then
+                            DMG_PATH=$(echo "$DMG_PATH" | sed 's/arm64/amd64/g')
+                        fi
+                        DMG_NAME=$(basename "$DMG_PATH")
+                        echo "         Downloading ${DMG_NAME} from SourceForge..."
+                        curl -L -o tools/mrv2-installer.dmg \
+                            "https://downloads.sourceforge.net/project/mrv2${DMG_PATH}" \
+                            --progress-bar --max-redirs 10 --connect-timeout 15 \
+                            --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" \
+                            || true
+
+                        if [ -f tools/mrv2-installer.dmg ] && [ -s tools/mrv2-installer.dmg ] && \
+                           ! file tools/mrv2-installer.dmg | grep -q "HTML"; then
+                            DOWNLOAD_OK=true
+                        else
+                            rm -f tools/mrv2-installer.dmg 2>/dev/null
+                        fi
                     fi
-
-                    DMG_NAME=$(basename "$DMG_PATH")
-                    echo "         Downloading ${DMG_NAME}..."
-
-                    # Use direct mirror URL (avoids SourceForge HTML "waiting" page)
-                    curl -L -o tools/mrv2-installer.dmg \
-                        "https://downloads.sourceforge.net/project/mrv2${DMG_PATH}" \
-                        --progress-bar --max-redirs 10 --connect-timeout 15 \
-                        --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" \
-                        || true
-
-                    # Verify it's a real disk image, not an HTML redirect page
-                    if [ -f tools/mrv2-installer.dmg ] && [ -s tools/mrv2-installer.dmg ] && \
-                       ! file tools/mrv2-installer.dmg | grep -q "HTML"; then
-                        DOWNLOAD_OK=true
-                    else
-                        echo "         Mirror download returned bad file, trying alternate URL..."
-                        rm -f tools/mrv2-installer.dmg 2>/dev/null
-                    fi
-                fi
-            fi
-
-            # --- Strategy 2: Fallback to /latest/download URL ---
-            if [ "$DOWNLOAD_OK" = false ]; then
-                echo "         Trying alternate download URL..."
-                curl -L -o tools/mrv2-installer.dmg \
-                    "https://sourceforge.net/projects/mrv2/files/latest/download" \
-                    --progress-bar --max-redirs 10 --connect-timeout 15 \
-                    --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" \
-                    || true
-
-                if [ -f tools/mrv2-installer.dmg ] && [ -s tools/mrv2-installer.dmg ] && \
-                   ! file tools/mrv2-installer.dmg | grep -q "HTML"; then
-                    DOWNLOAD_OK=true
-                else
-                    rm -f tools/mrv2-installer.dmg 2>/dev/null
                 fi
             fi
 
