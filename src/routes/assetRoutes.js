@@ -1352,28 +1352,29 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         args.push(...filePaths);
         if (compareArgs) args.push(...compareArgs);
     } else if (allImages && allFiles.length > 2) {
-        // 3+ images: put all in ONE temp directory with digit-free names.
-        // mrv2 version_regex matches _v### and similar numeric patterns to build
-        // sequences. By stripping ALL digits from filenames, no sequence can form.
-        // Using single-letter names (A.png, B.png…) is the simplest digit-free scheme.
-        // Same directory = mrv2 loads them as a playlist = arrow key scrubbing works.
+        // 3+ images: build a proper contiguous frame sequence in a temp directory.
+        // mrv2 uses version_regex to detect sequences from filenames. Vault names
+        // like _v007.._v011 cause "Cannot open" because mrv2 looks for _v001-_v006
+        // which don't exist. By renaming to img.0001.png, img.0002.png, … we create
+        // a complete contiguous sequence starting at 1. mrv2 finds all expected
+        // frames → no errors, and ← → arrow keys scrub through the sequence.
         const os = require('os');
         const tmpDir = path.join(os.tmpdir(), `dmv-mrv2-${Date.now()}`);
         fs.mkdirSync(tmpDir, { recursive: true });
-        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
         for (let i = 0; i < allFiles.length; i++) {
             const fp = allFiles[i];
             const ext = path.extname(fp).toLowerCase();
-            // Letter-only name: A.png, B.png, … Z.png, AA.png, AB.png, …
-            const letter = i < 26 ? letters[i] : letters[Math.floor(i / 26) - 1] + letters[i % 26];
-            const dest = path.join(tmpDir, letter + ext);
+            const frame = String(i + 1).padStart(4, '0');  // 0001, 0002, …
+            const dest = path.join(tmpDir, `img.${frame}${ext}`);
             try {
                 fs.linkSync(fp, dest);
             } catch {
                 fs.copyFileSync(fp, dest);
             }
-            args.push(dest);
         }
+        // Pass just the first frame — mrv2 auto-detects the full sequence
+        const firstFrame = path.join(tmpDir, `img.0001${path.extname(allFiles[0]).toLowerCase()}`);
+        args.push(firstFrame);
         // Clean up temp dir after 60 seconds (mrv2 will have loaded by then)
         setTimeout(() => {
             try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
@@ -1384,7 +1385,7 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
         if (compareArgs) args.push(...compareArgs);
     }
     execFile(exePath, args, { cwd });
-    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (letter-names)' : ''}`);
+    console.log(`[mrViewer2] Launched: ${allFiles.length} file(s)${args.includes('-s') ? ' (single/still)' : allImages && allFiles.length > 2 ? ' (sequence)' : ''}`);
 
     // Restore window to previous position/monitor after it opens
     if (savedRect) {
