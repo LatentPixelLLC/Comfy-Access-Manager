@@ -1333,15 +1333,19 @@ function launchInMrv2(exePath, filePaths, compareArgs) {
     }
 
     const args = [];
-    // For single image files, use -s (single/still) to prevent mrv2 from
-    // scanning for version sequences (its version_regex:_v matches our _vNNN
-    // vault naming, causing "Cannot open" errors for deleted prior versions)
-    if (!compareArgs && filePaths.length === 1) {
-        const ext = path.extname(filePaths[0]).toLowerCase();
-        const imageExts = ['.png', '.jpg', '.jpeg', '.exr', '.tif', '.tiff', '.bmp', '.tga', '.hdr', '.webp', '.gif'];
-        if (imageExts.includes(ext)) {
-            args.push('-s');
-        }
+    // Use -s (single/still) for image files to prevent mrv2 from scanning
+    // for version sequences (its version_regex:_v matches our _vNNN vault
+    // naming, causing "Cannot open" errors or black frames)
+    const imageExts = ['.png', '.jpg', '.jpeg', '.exr', '.tif', '.tiff', '.bmp', '.tga', '.hdr', '.webp', '.gif'];
+    const allFiles = [...filePaths];
+    // If comparing, the B file is inside compareArgs at index 1 (e.g. ['-compare', 'fileB', ...])
+    if (compareArgs) {
+        const bFile = compareArgs[1];
+        if (bFile) allFiles.push(bFile);
+    }
+    const allImages = allFiles.every(f => imageExts.includes(path.extname(f).toLowerCase()));
+    if (allImages && allFiles.length > 0) {
+        args.push('-s');
     }
     args.push(...filePaths);
     if (compareArgs) args.push(...compareArgs);
