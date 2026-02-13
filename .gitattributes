@@ -1,0 +1,3 @@
+# Force Unix line endings for shell scripts (macOS/Linux need LF, not CRLF)
+*.sh text eol=lf
+*.command text eol=lf
