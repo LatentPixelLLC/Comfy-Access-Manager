@@ -942,8 +942,9 @@ function showCachedFrame(timePos, canvas, ctx, videoEl) {
     if (!ctx) ctx = canvas.getContext('2d');
     if (!videoEl) videoEl = document.querySelector('#playerContent video');
 
-    // Size canvas to match video display size
-    const rect = (videoEl || canvas).getBoundingClientRect();
+    // Size canvas to match display area (use container since video may be hidden)
+    const container = (videoEl || canvas).parentElement || document.getElementById('playerContent');
+    const rect = canvas._cachedRect || container.getBoundingClientRect();
     if (canvas.width !== frameCache.width) canvas.width = frameCache.width;
     if (canvas.height !== frameCache.height) canvas.height = frameCache.height;
     canvas.style.width = rect.width + 'px';
@@ -1220,8 +1221,9 @@ function initTransportControls(container, fps) {
         const bmp = frameCache.frames[idx];
         if (!bmp) return;
 
-        // Size canvas to video display area
-        const rect = video.getBoundingClientRect();
+        // Size canvas to player content area (video is hidden, its rect is 0×0)
+        const container = video.parentElement || document.getElementById('playerContent');
+        const rect = scrubCanvas._cachedRect || container.getBoundingClientRect();
         if (scrubCanvas.width !== frameCache.width) scrubCanvas.width = frameCache.width;
         if (scrubCanvas.height !== frameCache.height) scrubCanvas.height = frameCache.height;
         scrubCanvas.style.width = rect.width + 'px';
@@ -1264,6 +1266,11 @@ function initTransportControls(container, fps) {
     function activateCache() {
         useCache = true;
         video.pause();
+
+        // Capture video display rect BEFORE hiding it (hidden elements return 0×0)
+        const videoRect = video.getBoundingClientRect();
+        scrubCanvas._cachedRect = videoRect;
+
         video.style.display = 'none';
         scrubCanvas.style.display = '';
 
