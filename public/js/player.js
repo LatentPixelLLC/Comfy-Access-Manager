@@ -998,6 +998,7 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
 
             const frames = new Array(totalFrames).fill(null);
             let captured = 0;
+            const pendingBitmaps = []; // Track async createImageBitmap promises
 
             // Use requestVideoFrameCallback if available (Chrome 83+, Edge)
             const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
@@ -1015,13 +1016,13 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
                     if (frameIdx >= 0 && !frames[frameIdx]) {
                         ctx.drawImage(extractor, 0, 0, w, h);
                         try {
-                            // Synchronous — createImageBitmap from canvas is fast
-                            createImageBitmap(canvas).then(bmp => {
+                            const p = createImageBitmap(canvas).then(bmp => {
                                 if (ac.signal.aborted) { bmp.close(); return; }
                                 frames[frameIdx] = bmp;
                                 captured++;
                                 if (onProgress && captured % 10 === 0) onProgress(captured, totalFrames);
                             });
+                            pendingBitmaps.push(p);
                         } catch { /* skip frame */ }
                     }
 
@@ -1037,8 +1038,12 @@ async function buildFrameCache(videoSrc, fps, onProgress) {
                 extractor.playbackRate = 8;
                 extractor.play().catch(() => {});
 
-                // When playback ends, finalize the cache
-                extractor.addEventListener('ended', () => {
+                // When playback ends, wait for ALL createImageBitmap promises, THEN finalize
+                extractor.addEventListener('ended', async () => {
+                    if (ac.signal.aborted) { resolve(null); return; }
+
+                    // Wait for all pending bitmap creations to finish
+                    await Promise.all(pendingBitmaps);
                     if (ac.signal.aborted) { resolve(null); return; }
 
                     // Fill any gaps with nearest neighbor (some frames may have been skipped at high speed)
