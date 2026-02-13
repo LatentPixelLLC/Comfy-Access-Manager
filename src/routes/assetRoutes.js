@@ -1405,13 +1405,18 @@ router.post('/open-compare', (req, res) => {
             return res.status(404).json({ error: 'mrViewer2 not found. Install from https://mrv2.sourceforge.io/' });
         }
         let compareArgs = null;
-        if (filePaths.length >= 2) {
+        let mode = 'playlist';
+        if (filePaths.length === 2) {
+            // Exactly 2 → Wipe compare (A vs B)
             const bFile = filePaths.pop();
             compareArgs = ['-compare', bFile, '-compareMode', 'Wipe'];
+            mode = 'wipe';
         }
+        // 3+ files → pass all as-is (flipbook / tile in mrViewer2)
         launchInMrv2(exePath, filePaths, compareArgs);
-        console.log(`[mrViewer2] Compare: ${filePaths.length + (compareArgs ? 1 : 0)} files`);
-        res.json({ success: true, count: filePaths.length + (compareArgs ? 1 : 0), viewer: 'mrviewer2' });
+        const totalCount = filePaths.length + (compareArgs ? 1 : 0);
+        console.log(`[mrViewer2] Compare: ${totalCount} files (${mode})`);
+        res.json({ success: true, count: totalCount, mode, viewer: 'mrviewer2' });
     }
 });
 

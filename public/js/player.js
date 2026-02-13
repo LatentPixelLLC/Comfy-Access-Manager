@@ -186,7 +186,11 @@ async function openCompareInMrViewer2() {
             method: 'POST',
             body: { ids: state.selectedAssets, viewer: 'mrviewer2' }
         });
-        showToast(`Loaded ${res.count} clips in mrViewer2 — use Panel → Compare → Wipe`);
+        if (res.mode === 'wipe') {
+            showToast(`Loaded ${res.count} clips in mrViewer2 — Wipe compare`);
+        } else {
+            showToast(`Loaded ${res.count} clips in mrViewer2 — use ← → to flip, or Panel → Compare → Tile`);
+        }
         window.blur();
     } catch (err) {
         showToast('Failed to launch compare: ' + err.message, 5000);
