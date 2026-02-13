@@ -637,6 +637,23 @@ function clearAssetSelection() {
     renderAssets();
 }
 
+/** Open built-in player with only the selected assets, starting from the first */
+function playSelectedAssets() {
+    if (state.selectedAssets.length === 0) return;
+    // Build a filtered asset list from the selection, preserving grid order
+    const selectedSet = new Set(state.selectedAssets);
+    const filtered = state.assets.filter(a => selectedSet.has(a.id));
+    if (filtered.length === 0) return;
+
+    state.playerAssets = filtered;
+    state.playerIndex = 0;
+
+    // Import-safe: call the player functions on window (from player.js)
+    if (window.openPlayerDirect) {
+        window.openPlayerDirect();
+    }
+}
+
 function updateSelectionToolbar() {
     const toolbar = document.getElementById('selectionToolbar');
     if (!toolbar) return;
@@ -742,8 +759,10 @@ async function showContextMenu(event, assetIdx) {
     html += `<div class="ctx-item" data-action="export">📤 Export${!isSingle ? ` (${count})` : ''}</div>`;
 
     if (count >= 2) {
-        html += `<div class="ctx-item" data-action="compare-mrv2">🎬 Compare in mrViewer2 (${count})</div>`;
-        html += `<div class="ctx-item" data-action="compare-rv">🎬 Compare in RV (${count})</div>`;
+        html += `<div class="ctx-item" data-action="play-all">▶️ Play All (${count})</div>`;
+        html += `<div class="ctx-item" data-action="open-all-mrv2">🎬 Open All in mrViewer2 (${count})</div>`;
+        html += `<div class="ctx-item" data-action="compare-mrv2">🔀 Compare in mrViewer2 (${count})</div>`;
+        html += `<div class="ctx-item" data-action="compare-rv">🔀 Compare in RV (${count})</div>`;
     }
 
     html += `<div class="ctx-separator"></div>`;
@@ -783,6 +802,8 @@ async function showContextMenu(event, assetIdx) {
             case 'move': showMoveToSequenceModal(); break;
             case 'role': showAssignRoleModal(); break;
             case 'export': window.showExportModal?.(); break;
+            case 'play-all': playSelectedAssets(); break;
+            case 'open-all-mrv2': window.openAllInMrv2?.(); break;
             case 'compare-mrv2': window.openCompareInMrViewer2?.(); break;
             case 'compare-rv': window.openCompareInRV?.(); break;
             case 'selectAll': selectAllAssets(); break;

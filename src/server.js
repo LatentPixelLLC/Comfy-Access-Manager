@@ -49,6 +49,7 @@ const roleRoutes = require('./routes/roleRoutes');
 const exportRoutes = require('./routes/exportRoutes');
 const flowRoutes = require('./routes/flowRoutes');
 const transcodeRoutes = require('./routes/transcodeRoutes');
+const updateRoutes = require('./routes/updateRoutes');
 
 app.use('/api/projects', projectRoutes);
 app.use('/api/assets', assetRoutes);
@@ -58,6 +59,7 @@ app.use('/api/roles', roleRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/flow', flowRoutes);
 app.use('/api/transcode', transcodeRoutes);
+app.use('/api/update', updateRoutes);
 
 // ─── SPA fallback ───
 app.get('*', (req, res) => {

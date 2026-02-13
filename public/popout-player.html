@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMV Player</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #000;
+            color: #ccc;
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            cursor: default;
+            user-select: none;
+        }
+
+        /* ─── Top Bar (normal mode) ─── */
+        .popout-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 14px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            min-height: 38px;
+            z-index: 10;
+            transition: opacity 0.3s;
+        }
+        .popout-bar.hidden { display: none; }
+        .bar-left { display: flex; align-items: center; gap: 10px; }
+        .bar-center { display: flex; align-items: center; gap: 10px; }
+        .bar-right { display: flex; align-items: center; gap: 8px; }
+        .bar-title {
+            font-weight: 600; font-size: 0.85rem; color: #ddd;
+            max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .bar-index { font-size: 0.78rem; color: #888; }
+        .bar-meta { font-size: 0.72rem; color: #666; display: flex; gap: 12px; }
+        .bar-btn {
+            background: #2a2a2a; border: 1px solid #444; color: #aaa;
+            padding: 3px 10px; border-radius: 4px; cursor: pointer;
+            font-size: 0.78rem; transition: all 0.2s;
+        }
+        .bar-btn:hover { border-color: #888; color: #ddd; }
+        .bar-btn.active { background: #1a5c2a; color: #00ff88; border-color: #00ff88; }
+        .nav-btn {
+            background: #2a2a2a; border: 1px solid #444; color: #bbb;
+            padding: 4px 14px; border-radius: 4px; cursor: pointer;
+            font-size: 0.9rem; transition: all 0.2s;
+        }
+        .nav-btn:hover { border-color: #888; color: #fff; }
+        .nav-btn:disabled { opacity: 0.3; cursor: default; }
+
+        /* ─── Media Area ─── */
+        .media-area {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            background: #000;
+        }
+        .media-area video, .media-area img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        body.presentation .media-area video,
+        body.presentation .media-area img {
+            max-width: 100vw;
+            max-height: 100vh;
+        }
+
+        /* ─── HUD Overlay (presentation mode) ─── */
+        .hud {
+            display: none;
+            position: absolute;
+            z-index: 20;
+            pointer-events: none;
+        }
+        body.presentation .hud { display: block; }
+
+        .hud-top {
+            top: 0; left: 0; right: 0;
+            padding: 14px 20px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+        }
+        .hud-bottom {
+            bottom: 0; left: 0; right: 0;
+            padding: 14px 20px;
+            background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+        .hud-shot {
+            font-size: 1rem; font-weight: 600; color: rgba(255,255,255,0.85);
+            text-shadow: 0 1px 6px rgba(0,0,0,0.9);
+        }
+        .hud-index {
+            font-size: 0.82rem; color: rgba(255,255,255,0.5);
+            margin-top: 2px;
+        }
+        .hud-frame {
+            font-size: 0.82rem; color: rgba(255,255,255,0.5);
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 1px 6px rgba(0,0,0,0.9);
+        }
+        .hud-res {
+            font-size: 0.72rem; color: rgba(255,255,255,0.35);
+            margin-top: 2px;
+        }
+
+        /* Fade HUD on inactivity */
+        body.presentation.hud-hidden .hud { opacity: 0; transition: opacity 0.5s; }
+        body.presentation .hud { opacity: 1; transition: opacity 0.3s; }
+
+        /* ─── Controls Bar (bottom, presentation mode) ─── */
+        .controls-bar {
+            display: none;
+            position: absolute;
+            bottom: 0; left: 0; right: 0;
+            padding: 8px 20px;
+            background: rgba(0,0,0,0.85);
+            z-index: 30;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            transition: opacity 0.3s;
+        }
+        body.presentation.show-controls .controls-bar { display: flex; }
+        body.presentation.hud-hidden .controls-bar { opacity: 0; pointer-events: none; }
+        body.presentation .controls-bar { opacity: 1; }
+
+        /* ─── Presentation toggle hints ─── */
+        .hint-toast {
+            position: fixed;
+            bottom: 60px; left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.85);
+            color: #ccc;
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.4s;
+            pointer-events: none;
+        }
+        .hint-toast.visible { opacity: 1; }
+
+        /* ─── Overlay Toggle Panel ─── */
+        .overlay-panel {
+            position: absolute;
+            top: 44px; right: 8px;
+            background: rgba(26,26,26,0.95);
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 8px 10px;
+            z-index: 50;
+            display: none;
+            min-width: 160px;
+        }
+        .overlay-panel.open { display: block; }
+        .overlay-panel label {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 0.78rem; color: #aaa; padding: 4px 0;
+            cursor: pointer;
+        }
+        .overlay-panel label:hover { color: #ddd; }
+        .overlay-panel input[type="checkbox"] { accent-color: #7ab87a; }
+    </style>
+</head>
+<body>
+    <!-- Normal mode top bar -->
+    <div class="popout-bar" id="topBar">
+        <div class="bar-left">
+            <span class="bar-title" id="barTitle">—</span>
+            <span class="bar-meta" id="barMeta"></span>
+        </div>
+        <div class="bar-center">
+            <button class="nav-btn" id="btnPrev" title="Previous (PageUp / ←)">◀</button>
+            <span class="bar-index" id="barIndex">—</span>
+            <button class="nav-btn" id="btnNext" title="Next (PageDown / →)">▶</button>
+        </div>
+        <div class="bar-right">
+            <button class="bar-btn" id="btnOverlays" title="Toggle HUD overlays">👁 HUD</button>
+            <button class="bar-btn" id="btnPresentation" title="Presentation Mode (F / F11)">⛶ Present</button>
+        </div>
+    </div>
+
+    <!-- Media viewport -->
+    <div class="media-area" id="mediaArea">
+        <div id="mediaContent" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;"></div>
+
+        <!-- HUD overlays (visible in presentation mode) -->
+        <div class="hud hud-top" id="hudTop">
+            <div class="hud-shot" id="hudShot"></div>
+            <div class="hud-index" id="hudIndex"></div>
+        </div>
+        <div class="hud hud-bottom" id="hudBottom">
+            <div>
+                <div class="hud-frame" id="hudFrame"></div>
+            </div>
+            <div>
+                <div class="hud-res" id="hudRes"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Overlay toggle panel -->
+    <div class="overlay-panel" id="overlayPanel">
+        <label><input type="checkbox" id="ovShotName" checked> Shot Name</label>
+        <label><input type="checkbox" id="ovIndex" checked> Clip Index</label>
+        <label><input type="checkbox" id="ovFrame" checked> Frame Counter</label>
+        <label><input type="checkbox" id="ovResolution"> Resolution</label>
+    </div>
+
+    <!-- Toast hint -->
+    <div class="hint-toast" id="hintToast"></div>
+
+    <script>
+    // ═══════════════════════════════════════
+    //  STATE
+    // ═══════════════════════════════════════
+    let assets = [];
+    let currentIndex = 0;
+    let isPresentation = false;
+    let hudTimeout = null;
+    let frameRaf = null;
+    const origin = window.location.origin;
+
+    // Overlay prefs (persisted)
+    let overlayPrefs = loadPrefs();
+    function loadPrefs() {
+        try { return JSON.parse(localStorage.getItem('dmv_popout_hud') || 'null') || {}; } catch { return {}; }
+    }
+    function savePrefs() {
+        try { localStorage.setItem('dmv_popout_hud', JSON.stringify(overlayPrefs)); } catch {}
+    }
+
+    // Apply saved prefs to checkboxes
+    document.getElementById('ovShotName').checked = overlayPrefs.shotName !== false;
+    document.getElementById('ovIndex').checked = overlayPrefs.index !== false;
+    document.getElementById('ovFrame').checked = overlayPrefs.frame !== false;
+    document.getElementById('ovResolution').checked = overlayPrefs.resolution === true;
+
+    // ═══════════════════════════════════════
+    //  COMMUNICATION WITH MAIN WINDOW
+    // ═══════════════════════════════════════
+    window.addEventListener('message', (e) => {
+        if (e.origin !== origin) return;
+        const msg = e.data;
+
+        if (msg.type === 'dmv-popout-init') {
+            assets = msg.assets || [];
+            currentIndex = msg.index || 0;
+            renderMedia();
+            document.title = `DMV Player — ${assets.length} clip${assets.length !== 1 ? 's' : ''}`;
+        }
+
+        if (msg.type === 'dmv-popout-navigate') {
+            currentIndex = msg.index;
+            renderMedia();
+        }
+    });
+
+    // Tell opener we're ready
+    if (window.opener) {
+        window.opener.postMessage({ type: 'dmv-popout-ready' }, origin);
+    }
+
+    // Notify main window on close
+    window.addEventListener('beforeunload', () => {
+        if (window.opener) {
+            window.opener.postMessage({ type: 'dmv-popout-closed' }, origin);
+        }
+    });
+
+    // ═══════════════════════════════════════
+    //  RENDER
+    // ═══════════════════════════════════════
+    function renderMedia() {
+        const asset = assets[currentIndex];
+        if (!asset) return;
+
+        const content = document.getElementById('mediaContent');
+        const fileUrl = `${origin}/api/assets/${asset.id}/file`;
+
+        // Clean up previous frame counter
+        if (frameRaf) { cancelAnimationFrame(frameRaf); frameRaf = null; }
+
+        const browserCodecs = new Set(['h264', 'h265', 'hevc', 'vp8', 'vp9', 'av1', 'avc', 'avc1']);
+        const needsTranscode = asset.media_type === 'video' && asset.codec && !browserCodecs.has(asset.codec.toLowerCase());
+
+        if (asset.media_type === 'video') {
+            const videoUrl = needsTranscode ? `${origin}/api/assets/${asset.id}/stream` : fileUrl;
+            content.innerHTML = `<video controls autoplay loop src="${videoUrl}" style="max-width:100%;max-height:100%;object-fit:contain;"></video>`;
+            // Start frame counter after video loads
+            const video = content.querySelector('video');
+            if (video) {
+                video.addEventListener('loadedmetadata', () => startFrameCounter(video, asset));
+            }
+        } else if (asset.media_type === 'image' || asset.media_type === 'exr') {
+            content.innerHTML = `<img src="${fileUrl}" alt="${esc(asset.vault_name)}" style="max-width:100%;max-height:100%;object-fit:contain;">`;
+        } else if (asset.media_type === 'audio') {
+            content.innerHTML = `
+                <div style="text-align:center;padding:40px;">
+                    <div style="font-size:5rem;margin-bottom:20px;">🔊</div>
+                    <audio controls autoplay src="${fileUrl}" style="width:400px;"></audio>
+                </div>`;
+        } else {
+            content.innerHTML = `<div style="text-align:center;padding:40px;color:#888;"><div style="font-size:4rem;">📎</div><p>No preview available</p></div>`;
+        }
+
+        // Update bar
+        document.getElementById('barTitle').textContent = asset.vault_name || asset.original_name || '—';
+        document.getElementById('barIndex').textContent = `${currentIndex + 1} / ${assets.length}`;
+        document.getElementById('btnPrev').disabled = currentIndex <= 0;
+        document.getElementById('btnNext').disabled = currentIndex >= assets.length - 1;
+
+        // Meta
+        const parts = [];
+        if (asset.width && asset.height) parts.push(`${asset.width}×${asset.height}`);
+        if (asset.codec) parts.push(asset.codec);
+        if (asset.fps) parts.push(`${asset.fps} fps`);
+        document.getElementById('barMeta').textContent = parts.join('  •  ');
+
+        // HUD
+        updateHud(asset);
+    }
+
+    function updateHud(asset) {
+        if (!asset) return;
+        const prefs = getActivePrefs();
+
+        document.getElementById('hudShot').textContent = prefs.shotName ? (asset.vault_name || '') : '';
+        document.getElementById('hudIndex').textContent = prefs.index ? `${currentIndex + 1} / ${assets.length}` : '';
+        document.getElementById('hudRes').textContent = prefs.resolution && asset.width ? `${asset.width}×${asset.height}` : '';
+        // Frame counter updated in RAF loop for video, static for images
+        if (asset.media_type !== 'video') {
+            document.getElementById('hudFrame').textContent = '';
+        }
+    }
+
+    function getActivePrefs() {
+        return {
+            shotName: document.getElementById('ovShotName').checked,
+            index: document.getElementById('ovIndex').checked,
+            frame: document.getElementById('ovFrame').checked,
+            resolution: document.getElementById('ovResolution').checked,
+        };
+    }
+
+    function startFrameCounter(video, asset) {
+        const fps = asset.fps || 24;
+        const hudFrame = document.getElementById('hudFrame');
+
+        function tick() {
+            if (!getActivePrefs().frame) {
+                hudFrame.textContent = '';
+            } else {
+                const frame = Math.floor(video.currentTime * fps);
+                const total = Math.floor(video.duration * fps) || '?';
+                hudFrame.textContent = `Frame ${frame} / ${total}`;
+            }
+            frameRaf = requestAnimationFrame(tick);
+        }
+        frameRaf = requestAnimationFrame(tick);
+    }
+
+    // ═══════════════════════════════════════
+    //  NAVIGATION
+    // ═══════════════════════════════════════
+    function goNext() {
+        if (currentIndex < assets.length - 1) { currentIndex++; renderMedia(); syncToMain(); }
+    }
+    function goPrev() {
+        if (currentIndex > 0) { currentIndex--; renderMedia(); syncToMain(); }
+    }
+    function syncToMain() {
+        if (window.opener) {
+            window.opener.postMessage({ type: 'dmv-popout-navigate', index: currentIndex }, origin);
+        }
+    }
+
+    document.getElementById('btnNext').onclick = goNext;
+    document.getElementById('btnPrev').onclick = goPrev;
+
+    // ═══════════════════════════════════════
+    //  PRESENTATION MODE
+    // ═══════════════════════════════════════
+    function togglePresentation() {
+        isPresentation = !isPresentation;
+        document.body.classList.toggle('presentation', isPresentation);
+        document.getElementById('btnPresentation').classList.toggle('active', isPresentation);
+
+        if (isPresentation) {
+            document.documentElement.requestFullscreen?.().catch(() => {});
+            showHint('Presentation Mode — press F or Esc to exit. Move mouse for controls.');
+            resetHudTimer();
+        } else {
+            if (document.fullscreenElement) document.exitFullscreen?.();
+            document.body.classList.remove('hud-hidden', 'show-controls');
+        }
+    }
+
+    // Exit presentation when fullscreen exits
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && isPresentation) {
+            isPresentation = false;
+            document.body.classList.remove('presentation', 'hud-hidden', 'show-controls');
+            document.getElementById('btnPresentation').classList.remove('active');
+        }
+    });
+
+    // Auto-hide HUD after inactivity
+    function resetHudTimer() {
+        document.body.classList.remove('hud-hidden');
+        clearTimeout(hudTimeout);
+        hudTimeout = setTimeout(() => {
+            if (isPresentation) document.body.classList.add('hud-hidden');
+        }, 3000);
+    }
+
+    document.addEventListener('mousemove', () => {
+        if (isPresentation) resetHudTimer();
+    });
+
+    document.getElementById('btnPresentation').onclick = togglePresentation;
+
+    // ═══════════════════════════════════════
+    //  OVERLAY PANEL
+    // ═══════════════════════════════════════
+    const overlayPanel = document.getElementById('overlayPanel');
+    document.getElementById('btnOverlays').onclick = () => {
+        overlayPanel.classList.toggle('open');
+    };
+
+    // Close panel on click outside
+    document.addEventListener('click', (e) => {
+        if (!overlayPanel.contains(e.target) && e.target.id !== 'btnOverlays') {
+            overlayPanel.classList.remove('open');
+        }
+    });
+
+    // Save prefs on change
+    document.querySelectorAll('.overlay-panel input').forEach(cb => {
+        cb.addEventListener('change', () => {
+            overlayPrefs = {
+                shotName: document.getElementById('ovShotName').checked,
+                index: document.getElementById('ovIndex').checked,
+                frame: document.getElementById('ovFrame').checked,
+                resolution: document.getElementById('ovResolution').checked,
+            };
+            savePrefs();
+            const asset = assets[currentIndex];
+            if (asset) updateHud(asset);
+        });
+    });
+
+    // ═══════════════════════════════════════
+    //  KEYBOARD
+    // ═══════════════════════════════════════
+    document.addEventListener('keydown', (e) => {
+        switch (e.key) {
+            case 'ArrowRight': case 'PageDown': goNext(); break;
+            case 'ArrowLeft': case 'PageUp': goPrev(); break;
+            case 'f': case 'F': togglePresentation(); break;
+            case 'F11': e.preventDefault(); togglePresentation(); break;
+            case 'Escape':
+                if (isPresentation) togglePresentation();
+                break;
+            case ' ':
+                e.preventDefault();
+                const video = document.querySelector('#mediaContent video');
+                if (video) video.paused ? video.play() : video.pause();
+                break;
+            case 'h': case 'H':
+                // Toggle HUD visibility in presentation mode
+                if (isPresentation) {
+                    document.body.classList.toggle('hud-hidden');
+                }
+                break;
+        }
+    });
+
+    // ═══════════════════════════════════════
+    //  HINT TOAST
+    // ═══════════════════════════════════════
+    function showHint(text, duration = 4000) {
+        const toast = document.getElementById('hintToast');
+        toast.textContent = text;
+        toast.classList.add('visible');
+        setTimeout(() => toast.classList.remove('visible'), duration);
+    }
+
+    function esc(str) {
+        const d = document.createElement('div');
+        d.textContent = str || '';
+        return d.innerHTML;
+    }
+
+    // ═══════════════════════════════════════
+    //  INITIAL STATE (if opened directly)
+    // ═══════════════════════════════════════
+    if (!window.opener) {
+        document.getElementById('barTitle').textContent = 'Waiting for content...';
+        document.getElementById('barIndex').textContent = 'Open from main DMV window';
+    }
+    </script>
+</body>
+</html>

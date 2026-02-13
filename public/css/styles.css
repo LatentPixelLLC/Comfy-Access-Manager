@@ -1096,6 +1096,190 @@ label {
     transition: var(--transition);
 }
 .player-close:hover { color: var(--danger); }
+
+/* ─── Import mode descriptions ─── */
+.import-mode-option {
+    padding: 6px 0 2px 0;
+}
+.import-mode-desc {
+    font-size: 0.75rem;
+    color: #777;
+    margin: 2px 0 0 28px;
+    line-height: 1.4;
+}
+.import-mode-desc strong {
+    color: #aaa;
+}
+
+/* ─── Move Confirmation Modal ─── */
+.move-confirm-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 50000;
+}
+.move-confirm-card {
+    background: var(--bg-card);
+    border: 1px solid #ffaa00;
+    border-radius: 10px;
+    padding: 24px 28px;
+    max-width: 520px; width: 90vw;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+}
+.move-confirm-card h3 {
+    margin: 0 0 12px 0;
+    font-size: 1.05rem;
+    color: #ffaa00;
+}
+.move-confirm-card p {
+    font-size: 0.85rem;
+    color: #ccc;
+    line-height: 1.55;
+    margin: 0 0 10px 0;
+}
+.move-confirm-card .warn-highlight {
+    background: rgba(255,170,0,0.1);
+    border-left: 3px solid #ffaa00;
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin: 12px 0;
+    font-size: 0.82rem;
+    color: #dda;
+}
+.move-confirm-card .alt-tip {
+    font-size: 0.78rem;
+    color: #888;
+    margin: 14px 0 0 0;
+    line-height: 1.5;
+}
+.move-confirm-actions {
+    display: flex; gap: 10px; justify-content: flex-end;
+    margin-top: 18px;
+}
+.move-confirm-actions button {
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: all 0.2s;
+}
+.move-confirm-actions .btn-cancel {
+    background: var(--bg-input);
+    color: var(--text-dim);
+}
+.move-confirm-actions .btn-cancel:hover {
+    background: #444; color: #fff;
+}
+.move-confirm-actions .btn-confirm-move {
+    background: #7a5a00;
+    color: #ffe0a0;
+    border-color: #ffaa00;
+    font-weight: 600;
+}
+.move-confirm-actions .btn-confirm-move:hover {
+    background: #996e00;
+}
+
+/* ─── Player Action Buttons (Pop Out, Present) ─── */
+.player-actions {
+    display: flex; align-items: center; gap: 6px;
+    margin-left: auto; margin-right: 12px;
+}
+.player-actions button {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.75rem;
+    transition: var(--transition);
+    white-space: nowrap;
+}
+.player-actions button:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+/* ─── Presentation Mode (Inline Player) ─── */
+.presentation-mode .player-container {
+    position: fixed;
+    inset: 0;
+    width: 100vw; max-width: 100vw;
+    height: 100vh; max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    z-index: 100001;
+}
+.presentation-mode .player-header,
+.presentation-mode .player-info {
+    display: none !important;
+}
+.presentation-mode .player-body {
+    flex: 1;
+    min-height: 100vh;
+}
+.presentation-mode .player-content {
+    max-width: 100vw;
+    max-height: 100vh;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+.presentation-mode .player-content video,
+.presentation-mode .player-content img {
+    max-width: 100vw;
+    max-height: 100vh;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+/* ─── Presentation HUD Overlays ─── */
+.pres-hud {
+    position: absolute;
+    left: 0; right: 0;
+    z-index: 10;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+    padding: 12px 20px;
+    color: #fff;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+.pres-hud-top {
+    top: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,0.65) 0%, transparent 100%);
+    display: flex; justify-content: space-between; align-items: center;
+}
+.pres-hud-bottom {
+    bottom: 0;
+    background: linear-gradient(0deg, rgba(0,0,0,0.65) 0%, transparent 100%);
+    display: flex; justify-content: space-between; align-items: center;
+}
+.pres-hud-shot {
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+.pres-hud-index {
+    font-size: 0.8rem;
+    opacity: 0.8;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+.pres-hud-frame {
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+.pres-hud-res {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+.pres-hud-hidden .pres-hud {
+    opacity: 0;
+}
 .player-body {
     flex: 1; display: flex; align-items: center; justify-content: center;
     background: #000; overflow: hidden;

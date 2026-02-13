@@ -201,20 +201,29 @@
                         <div id="renamePreview" class="preview-box">Select files and project to preview...</div>
                     </div>
 
-                    <div class="import-mode-group" style="margin:12px 0; display:flex; flex-direction:column; gap:6px;">
+                    <div class="import-mode-group" style="margin:12px 0; display:flex; flex-direction:column; gap:8px;">
                         <label style="font-size:0.85em; color:#aaa; margin-bottom:2px;">Import Mode <span class="help-icon" data-tip="Move = relocates files into the vault folder. Copy = duplicates files (originals stay). Register = just adds to database, files don't move.">?</span></label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;" title="Moves files from source into the vault folder structure. Original files are removed.">
-                            <input type="radio" name="importMode" value="move" checked>
-                            <span>📦 Move into vault (default)</span>
-                        </label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;" title="Copies files into the vault, keeping the originals at their source location.">
-                            <input type="radio" name="importMode" value="copy">
-                            <span>📋 Copy into vault (keep originals)</span>
-                        </label>
-                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;" title="Files stay at their current location. Only a database reference is created. Good for network drives or large files.">
-                            <input type="radio" name="importMode" value="register">
-                            <span>📍 Register in place (files stay where they are)</span>
-                        </label>
+                        <div class="import-mode-option">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="radio" name="importMode" value="move" checked>
+                                <span>📦 Move into vault (default)</span>
+                            </label>
+                            <div class="import-mode-desc">Files are <strong>moved and renamed</strong> using the ShotGrid naming convention. Originals are removed from their source location. Best for organizing raw deliveries.</div>
+                        </div>
+                        <div class="import-mode-option">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="radio" name="importMode" value="copy">
+                                <span>📋 Copy into vault (keep originals)</span>
+                            </label>
+                            <div class="import-mode-desc">Files are <strong>copied and renamed</strong> into the vault. Originals stay untouched at their source location. Safest option if you want to keep your source files.</div>
+                        </div>
+                        <div class="import-mode-option">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="radio" name="importMode" value="register">
+                                <span>📍 Register in place (files stay where they are)</span>
+                            </label>
+                            <div class="import-mode-desc">Files stay exactly where they are — only a database reference is created. Good for network drives or files you can't move. No files are renamed or relocated.</div>
+                        </div>
                         <div id="registerWarning" style="display:none; font-size:0.8em; color:#ffaa00; margin-left:24px;">⚠️ Files remain on their current drive/network. If moved or deleted externally, MediaVault will show broken references.</div>
                     </div>
 
@@ -381,6 +390,14 @@
                 <div class="settings-section">
                     <h3>📊 System Info</h3>
                     <div id="systemInfo"></div>
+                    <div id="updateSection" style="margin-top:12px;">
+                        <div id="updateStatus" style="display:none;margin-bottom:8px;padding:10px 14px;border-radius:6px;font-size:0.85rem;line-height:1.5;"></div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button id="btnCheckUpdate" onclick="checkForUpdates()" style="font-size:0.8rem;">🔄 Check for Updates</button>
+                            <button id="btnApplyUpdate" onclick="applyUpdate()" style="display:none;font-size:0.8rem;background:var(--success);color:#000;">⬇️ Update Now</button>
+                        </div>
+                        <div id="updateChangelog" style="display:none;margin-top:10px;padding:10px 14px;background:var(--bg-dark);border-radius:6px;font-size:0.78rem;max-height:200px;overflow-y:auto;white-space:pre-wrap;color:var(--text-dim);"></div>
+                    </div>
                 </div>
 
                 <!-- ─── Keyboard Shortcuts ─── -->
@@ -404,6 +421,10 @@
                     <button onclick="playerPrev()" title="Previous">◀</button>
                     <span id="playerIndex"></span>
                     <button onclick="playerNext()" title="Next">▶</button>
+                </div>
+                <div class="player-actions">
+                    <button onclick="popoutPlayer()" title="Pop out to separate window (for second monitor)">⧉ Pop Out</button>
+                    <button onclick="togglePresentationMode()" title="Presentation mode — fullscreen with minimal overlays (F)">⛶ Present</button>
                 </div>
                 <button class="player-close" onclick="closePlayer()">✕</button>
             </div>

@@ -23,6 +23,14 @@ let overlayRafId = null;
 let overlayCanvas = null;
 let overlayCtx = null;
 
+// ═══════════════════════════════════════════
+//  POP-OUT PLAYER STATE
+// ═══════════════════════════════════════════
+let popoutWindow = null;
+let presentationMode = false;
+let presentationFrameRaf = null;
+let hudTimeout = null;
+
 function loadOverlayPrefs() {
     try {
         const saved = localStorage.getItem('dmv_overlay_prefs');
@@ -92,9 +100,23 @@ function playerKeyHandler(e) {
     }
 
     // Normal player key handling
-    if (e.key === 'Escape') closePlayer();
-    if (e.key === 'ArrowRight') playerNext();
-    if (e.key === 'ArrowLeft') playerPrev();
+    if (e.key === 'Escape') {
+        if (presentationMode) { togglePresentationMode(); return; }
+        closePlayer();
+    }
+    if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        playerNext();
+        if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        playerPrev();
+        if (presentationMode) { ensurePresentationHud(); resetPresentationHudTimer(); }
+    }
+    if (e.key === 'f' || e.key === 'F') togglePresentationMode();
+    if ((e.key === 'h' || e.key === 'H') && presentationMode) {
+        const modal = document.getElementById('playerModal');
+        if (modal) modal.classList.toggle('pres-hud-hidden');
+    }
     if (e.key === ' ') {
         e.preventDefault();
         const video = document.querySelector('#playerContent video');
@@ -530,6 +552,23 @@ async function openCompareInMrViewer2() {
     }
 }
 
+async function openAllInMrv2() {
+    if (state.selectedAssets.length < 1) {
+        showToast('Select clips to open (Ctrl-click or Shift-click)', 4000);
+        return;
+    }
+    try {
+        const res = await api('/api/assets/open-compare', {
+            method: 'POST',
+            body: { ids: state.selectedAssets, viewer: 'mrviewer2', mode: 'files' }
+        });
+        showToast(`Loaded ${res.count} clips — PageUp/PageDown to switch clips, F4 for Files panel`, 6000);
+        window.blur();
+    } catch (err) {
+        showToast('Failed to launch mrViewer2: ' + err.message, 5000);
+    }
+}
+
 async function openInRV(assetId) {
     try {
         await api(`/api/assets/${assetId}/open-external`, { method: 'POST', body: { player: 'rv' } });
@@ -762,17 +801,218 @@ function exitCompareMode() {
     closePlayer();
 }
 
+/**
+ * Open built-in player using whatever is already set in state.playerAssets/playerIndex.
+ * Called by browser.js playSelectedAssets() which pre-populates the filtered list.
+ */
+function openPlayerDirect() {
+    renderPlayer();
+    document.getElementById('playerModal').style.display = 'flex';
+    document.addEventListener('keydown', playerKeyHandler);
+}
+
+// ═══════════════════════════════════════════
+//  POP-OUT PLAYER (separate window for second monitor)
+// ═══════════════════════════════════════════
+
+function popoutPlayer() {
+    // If pop-out already open, focus it
+    if (popoutWindow && !popoutWindow.closed) {
+        popoutWindow.focus();
+        sendToPopout('dmv-popout-init', {
+            assets: state.playerAssets,
+            index: state.playerIndex
+        });
+        return;
+    }
+
+    // Open new window — sized for a secondary monitor
+    popoutWindow = window.open(
+        '/popout-player.html',
+        'dmv-player',
+        'width=1280,height=720,menubar=no,toolbar=no,status=no,resizable=yes'
+    );
+
+    if (!popoutWindow) {
+        showToast('Pop-up blocked — allow pop-ups for this site', 4000);
+        return;
+    }
+
+    // Listen for messages from the pop-out
+    window.addEventListener('message', handlePopoutMessage);
+
+    // Close the inline modal since we're popping out
+    closePlayer();
+}
+
+function handlePopoutMessage(e) {
+    if (e.origin !== window.location.origin) return;
+    const msg = e.data;
+
+    if (msg.type === 'dmv-popout-ready') {
+        // Pop-out window is ready — send it the assets
+        sendToPopout('dmv-popout-init', {
+            assets: state.playerAssets,
+            index: state.playerIndex
+        });
+    }
+
+    if (msg.type === 'dmv-popout-navigate') {
+        // Pop-out navigated — keep main window state in sync
+        state.playerIndex = msg.index;
+    }
+
+    if (msg.type === 'dmv-popout-closed') {
+        popoutWindow = null;
+        window.removeEventListener('message', handlePopoutMessage);
+    }
+}
+
+function sendToPopout(type, data) {
+    if (popoutWindow && !popoutWindow.closed) {
+        popoutWindow.postMessage({ type, ...data }, window.location.origin);
+    }
+}
+
+// ═══════════════════════════════════════════
+//  PRESENTATION MODE (fullscreen in main player)
+// ═══════════════════════════════════════════
+
+function togglePresentationMode() {
+    const modal = document.getElementById('playerModal');
+    const container = document.querySelector('.player-container');
+    if (!modal || !container) return;
+
+    presentationMode = !presentationMode;
+
+    if (presentationMode) {
+        modal.classList.add('presentation-mode');
+        modal.requestFullscreen?.().catch(() => {});
+        ensurePresentationHud();
+        showToast('Presentation Mode — F to exit, H to toggle HUD, ←→ to navigate', 4000);
+        resetPresentationHudTimer();
+    } else {
+        modal.classList.remove('presentation-mode');
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        removePresentationHud();
+    }
+}
+
+function ensurePresentationHud() {
+    const content = document.getElementById('playerContent');
+    if (!content) return;
+
+    // Remove old if exists
+    removePresentationHud();
+
+    const prefs = loadPresentationPrefs();
+    const asset = state.playerAssets[state.playerIndex];
+    if (!asset) return;
+
+    // Top HUD — shot name + index
+    const hudTop = document.createElement('div');
+    hudTop.className = 'pres-hud pres-hud-top';
+    hudTop.id = 'presHudTop';
+    hudTop.innerHTML = `
+        <div class="pres-hud-shot" id="presHudShot">${prefs.shotName !== false ? esc(asset.vault_name || '') : ''}</div>
+        <div class="pres-hud-index" id="presHudIndex">${prefs.index !== false ? `${state.playerIndex + 1} / ${state.playerAssets.length}` : ''}</div>
+    `;
+    content.appendChild(hudTop);
+
+    // Bottom HUD — frame counter + resolution
+    const hudBot = document.createElement('div');
+    hudBot.className = 'pres-hud pres-hud-bottom';
+    hudBot.id = 'presHudBottom';
+    hudBot.innerHTML = `
+        <div class="pres-hud-frame" id="presHudFrame"></div>
+        <div class="pres-hud-res" id="presHudRes">${prefs.resolution && asset.width ? `${asset.width}×${asset.height}` : ''}</div>
+    `;
+    content.appendChild(hudBot);
+
+    // Start frame counter for video
+    const video = content.querySelector('video');
+    if (video && prefs.frame !== false) {
+        startPresentationFrameCounter(video, asset);
+    }
+}
+
+function removePresentationHud() {
+    if (presentationFrameRaf) { cancelAnimationFrame(presentationFrameRaf); presentationFrameRaf = null; }
+    document.getElementById('presHudTop')?.remove();
+    document.getElementById('presHudBottom')?.remove();
+    clearTimeout(hudTimeout);
+}
+
+function updatePresentationHud() {
+    const prefs = loadPresentationPrefs();
+    const asset = state.playerAssets?.[state.playerIndex];
+    if (!asset) return;
+
+    const shotEl = document.getElementById('presHudShot');
+    const idxEl = document.getElementById('presHudIndex');
+    const resEl = document.getElementById('presHudRes');
+
+    if (shotEl) shotEl.textContent = prefs.shotName !== false ? (asset.vault_name || '') : '';
+    if (idxEl) idxEl.textContent = prefs.index !== false ? `${state.playerIndex + 1} / ${state.playerAssets.length}` : '';
+    if (resEl) resEl.textContent = prefs.resolution && asset.width ? `${asset.width}×${asset.height}` : '';
+}
+
+function startPresentationFrameCounter(video, asset) {
+    const fps = asset.fps || 24;
+    const frameEl = document.getElementById('presHudFrame');
+    if (!frameEl) return;
+
+    function tick() {
+        const frame = Math.floor(video.currentTime * fps);
+        const total = Math.floor(video.duration * fps) || '?';
+        frameEl.textContent = `Frame ${frame} / ${total}`;
+        presentationFrameRaf = requestAnimationFrame(tick);
+    }
+    presentationFrameRaf = requestAnimationFrame(tick);
+}
+
+function resetPresentationHudTimer() {
+    const modal = document.getElementById('playerModal');
+    if (!modal) return;
+    modal.classList.remove('pres-hud-hidden');
+    clearTimeout(hudTimeout);
+    hudTimeout = setTimeout(() => {
+        if (presentationMode) modal.classList.add('pres-hud-hidden');
+    }, 3000);
+}
+
+function loadPresentationPrefs() {
+    try { return JSON.parse(localStorage.getItem('dmv_pres_hud') || 'null') || {}; } catch { return {}; }
+}
+
+// Exit presentation mode when fullscreen exits
+document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && presentationMode) {
+        presentationMode = false;
+        const modal = document.getElementById('playerModal');
+        if (modal) modal.classList.remove('presentation-mode', 'pres-hud-hidden');
+        removePresentationHud();
+    }
+});
+
+// Mouse movement shows HUD in presentation mode
+document.addEventListener('mousemove', () => {
+    if (presentationMode) resetPresentationHudTimer();
+});
+
 // ═══════════════════════════════════════════
 //  EXPOSE ON WINDOW (for HTML onclick handlers)
 // ═══════════════════════════════════════════
 
 window.openPlayer = openPlayer;
+window.openPlayerDirect = openPlayerDirect;
 window.closePlayer = closePlayer;
 window.playerPrev = playerPrev;
 window.playerNext = playerNext;
 window.openInExternalPlayer = openInExternalPlayer;
 window.openInMrViewer2 = openInMrViewer2;
 window.openCompareInMrViewer2 = openCompareInMrViewer2;
+window.openAllInMrv2 = openAllInMrv2;
 window.openInRV = openInRV;
 window.openReviewInMrv2 = openReviewInMrv2;
 window.openCompareInRV = openCompareInRV;
@@ -784,6 +1024,8 @@ window.exitCompareMode = exitCompareMode;
 window.toggleOverlayMaster = toggleOverlayMaster;
 window.toggleOverlayOption = toggleOverlayOption;
 window.editWatermarkText = editWatermarkText;
+window.popoutPlayer = popoutPlayer;
+window.togglePresentationMode = togglePresentationMode;
 
 // Open player by asset ID (for format variant sub-menu)
 function openPlayerById(assetId) {

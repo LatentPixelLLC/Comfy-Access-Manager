@@ -619,6 +619,144 @@ async function deleteRole(id, name) {
 }
 
 // ═══════════════════════════════════════════
+//  UPDATE CHECKER
+// ═══════════════════════════════════════════
+
+let _pendingUpdate = null;
+
+/** Check GitHub stable branch for a newer version */
+async function checkForUpdates(silent = false) {
+    const btn = document.getElementById('btnCheckUpdate');
+    const statusEl = document.getElementById('updateStatus');
+    const applyBtn = document.getElementById('btnApplyUpdate');
+    const changelogEl = document.getElementById('updateChangelog');
+
+    if (btn) btn.disabled = true;
+    if (btn) btn.textContent = '⏳ Checking...';
+
+    try {
+        const result = await api('/api/update/check?force=true');
+        _pendingUpdate = result;
+
+        if (result.error) {
+            if (!silent) {
+                statusEl.style.display = 'block';
+                statusEl.style.background = 'rgba(255, 82, 82, 0.15)';
+                statusEl.style.border = '1px solid rgba(255, 82, 82, 0.3)';
+                statusEl.innerHTML = `⚠️ Couldn't check for updates: ${esc(result.error)}`;
+            }
+            return;
+        }
+
+        if (result.hasUpdate) {
+            statusEl.style.display = 'block';
+            statusEl.style.background = 'rgba(0, 255, 136, 0.1)';
+            statusEl.style.border = '1px solid rgba(0, 255, 136, 0.3)';
+            statusEl.innerHTML = `🎉 <strong>Update available!</strong> v${esc(result.currentVersion)} → v${esc(result.remoteVersion)}`;
+            applyBtn.style.display = 'inline-block';
+
+            if (result.changelog) {
+                changelogEl.style.display = 'block';
+                changelogEl.textContent = result.changelog;
+            } else {
+                changelogEl.style.display = 'none';
+            }
+
+            // Show toast on any tab if not silent
+            if (!silent) showToast(`Update available: v${result.remoteVersion}`, 5000);
+        } else {
+            if (!silent) {
+                statusEl.style.display = 'block';
+                statusEl.style.background = 'rgba(136, 136, 136, 0.1)';
+                statusEl.style.border = '1px solid rgba(136, 136, 136, 0.2)';
+                statusEl.innerHTML = `✅ You're on the latest version (v${esc(result.currentVersion)})`;
+                applyBtn.style.display = 'none';
+                changelogEl.style.display = 'none';
+            }
+        }
+    } catch (err) {
+        if (!silent) {
+            statusEl.style.display = 'block';
+            statusEl.style.background = 'rgba(255, 82, 82, 0.15)';
+            statusEl.style.border = '1px solid rgba(255, 82, 82, 0.3)';
+            statusEl.innerHTML = `⚠️ Update check failed: ${esc(err.message)}`;
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🔄 Check for Updates';
+        }
+    }
+}
+
+/** Download and apply the update, then poll for server restart */
+async function applyUpdate() {
+    const statusEl = document.getElementById('updateStatus');
+    const applyBtn = document.getElementById('btnApplyUpdate');
+    const checkBtn = document.getElementById('btnCheckUpdate');
+
+    if (!confirm('Apply update now?\n\nThe server will restart briefly. Your data is safe.')) return;
+
+    applyBtn.disabled = true;
+    applyBtn.textContent = '⏳ Updating...';
+    if (checkBtn) checkBtn.disabled = true;
+
+    statusEl.style.display = 'block';
+    statusEl.style.background = 'rgba(255, 170, 0, 0.15)';
+    statusEl.style.border = '1px solid rgba(255, 170, 0, 0.3)';
+    statusEl.innerHTML = '⬇️ Downloading update...';
+
+    try {
+        const result = await api('/api/update/apply', { method: 'POST' });
+        statusEl.innerHTML = `✅ ${esc(result.message || 'Updated!')} Waiting for restart...`;
+
+        // Poll /api/update/health until server comes back
+        setTimeout(() => pollForRestart(), 3000);
+    } catch (err) {
+        // Network error likely means server is restarting (good sign)
+        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+            statusEl.innerHTML = '🔄 Server restarting...';
+            setTimeout(() => pollForRestart(), 3000);
+        } else {
+            statusEl.style.background = 'rgba(255, 82, 82, 0.15)';
+            statusEl.style.border = '1px solid rgba(255, 82, 82, 0.3)';
+            statusEl.innerHTML = `❌ Update failed: ${esc(err.message)}`;
+            applyBtn.disabled = false;
+            applyBtn.textContent = '⬇️ Update Now';
+            if (checkBtn) checkBtn.disabled = false;
+        }
+    }
+}
+
+/** Poll server until it's back up after restart */
+function pollForRestart(attempts = 0) {
+    const statusEl = document.getElementById('updateStatus');
+    if (attempts > 30) { // 60 seconds max
+        statusEl.innerHTML = '⚠️ Server taking too long to restart. Try refreshing the page manually.';
+        return;
+    }
+
+    fetch('/api/update/health')
+        .then(r => r.json())
+        .then(data => {
+            statusEl.style.background = 'rgba(0, 255, 136, 0.15)';
+            statusEl.style.border = '1px solid rgba(0, 255, 136, 0.3)';
+            statusEl.innerHTML = `✅ Updated to v${data.version}! Reloading...`;
+            setTimeout(() => window.location.reload(), 1000);
+        })
+        .catch(() => {
+            statusEl.innerHTML = `🔄 Server restarting... (${attempts + 1}s)`;
+            setTimeout(() => pollForRestart(attempts + 1), 2000);
+        });
+}
+
+/** Auto-check on app load (silent — only shows if update available) */
+export function autoCheckForUpdates() {
+    // Delay to let the app finish loading
+    setTimeout(() => checkForUpdates(true), 5000);
+}
+
+// ═══════════════════════════════════════════
 //  EXPOSE ON WINDOW (for HTML onclick handlers)
 // ═══════════════════════════════════════════
 
@@ -643,3 +781,5 @@ window.updateRoleColor = updateRoleColor;
 window.startRoleRename = startRoleRename;
 window.deleteRole = deleteRole;
 window.loadRoles = loadRoles;
+window.checkForUpdates = checkForUpdates;
+window.applyUpdate = applyUpdate;

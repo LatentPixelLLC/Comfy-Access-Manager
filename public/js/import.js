@@ -295,6 +295,13 @@ async function executeImport() {
     const projectId = document.getElementById('importProject').value;
     if (!projectId || !state.selectedFiles.length) return;
 
+    // ─── Move-mode confirmation gate ───
+    const importMode = document.querySelector('input[name="importMode"]:checked')?.value || 'move';
+    if (importMode === 'move') {
+        const confirmed = await showMoveConfirmation(state.selectedFiles.length);
+        if (!confirmed) return;
+    }
+
     const seqId = document.getElementById('importSequence')?.value || undefined;
     const shotId = document.getElementById('importShot')?.value || undefined;
     const roleId = document.getElementById('importRole')?.value || undefined;
@@ -313,8 +320,7 @@ async function executeImport() {
     resultDiv.style.display = 'none';
 
     try {
-        // Determine import mode from radio buttons
-        const importMode = document.querySelector('input[name="importMode"]:checked')?.value || 'move';
+        // Import mode already determined above (for the confirmation gate)
         const keepOriginals = importMode === 'copy';
         const registerInPlace = importMode === 'register';
 
@@ -470,6 +476,53 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 });
+
+// ═══════════════════════════════════════════
+//  MOVE-MODE CONFIRMATION DIALOG
+// ═══════════════════════════════════════════
+
+function showMoveConfirmation(fileCount) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'move-confirm-overlay';
+        overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+
+        const plural = fileCount === 1 ? 'file' : 'files';
+
+        overlay.innerHTML = `
+            <div class="move-confirm-card">
+                <h3>⚠️ Move & Rename — Are you sure?</h3>
+                <p>You're about to <strong>move ${fileCount} ${plural}</strong> into the vault folder structure. This will:</p>
+                <div class="warn-highlight">
+                    <strong>• Rename files</strong> using the ShotGrid naming convention<br>
+                    <strong>• Move files</strong> from their current location into the vault<br>
+                    <strong>• Delete the originals</strong> — the source files will be removed
+                </div>
+                <p>Original file names and locations <strong>cannot be recovered</strong> after this operation.</p>
+                <div class="alt-tip">
+                    <strong>💡 Alternatives:</strong><br>
+                    <em>Copy into vault</em> — does the same renaming but keeps your originals untouched.<br>
+                    <em>Register in place</em> — files stay exactly where they are, nothing is moved or renamed.
+                </div>
+                <div class="move-confirm-actions">
+                    <button class="btn-cancel" id="moveConfirmCancel">Cancel</button>
+                    <button class="btn-confirm-move" id="moveConfirmOk">Yes, Move & Rename</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#moveConfirmCancel').onclick = () => { overlay.remove(); resolve(false); };
+        overlay.querySelector('#moveConfirmOk').onclick = () => { overlay.remove(); resolve(true); };
+
+        // Escape key cancels
+        const escHandler = (e) => {
+            if (e.key === 'Escape') { overlay.remove(); resolve(false); document.removeEventListener('keydown', escHandler); }
+        };
+        document.addEventListener('keydown', escHandler);
+    });
+}
 
 // ═══════════════════════════════════════════
 //  EXPOSE ON WINDOW (for HTML onclick handlers)

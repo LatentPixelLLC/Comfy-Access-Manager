@@ -438,6 +438,28 @@ Already has UI in Settings tab (Site URL, Script Name, API Key fields + Test/Syn
 **Goal**: AI object detection (YOLO) on camera feeds  
 Potential future link: auto-import detected clips into DMV.
 
+### 📋 Review Mode — FFmpeg Burn-In Overlays for mrViewer2
+**Status**: Pinned — blocked by FFmpeg drawtext bug  
+**Goal**: Open assets in mrv2 with burned-in review overlays (project hierarchy, frame counter, resolution, watermark, safe areas)  
+**Commit so far**: `bb8f8e8` — endpoint, UI button, context menu all working. Font fix + error logging uncommitted in `assetRoutes.js`.
+
+**What's done:**
+- `POST /api/assets/:id/open-review` endpoint in `assetRoutes.js` (generates temp file with overlays, opens in mrv2)
+- `buildReviewFilters(opts)` function generates FFmpeg `-vf` drawtext/drawbox chain
+- `findFontFile()` helper resolves platform font paths for FFmpeg
+- "📋 Review" button in player toolbar + right-click context menu in browser
+- `openReviewInMrv2(assetId)` in `player.js` with overlay preference support
+
+**The Bug:**
+FFmpeg's drawtext filter fails when chaining 3+ filters that use expressions (`y=ih-26`, `x=w-text_w-10`). Error: `Failed to configure input pad on Parsed_drawtext_N`. Static numeric x/y values work fine; expressions break it. Same result with `-vf` and `-filter_complex`. Tested extensively — it's an FFmpeg filtergraph issue, not escaping.
+
+**Fix approaches when resuming:**
+1. **Pre-calculate expressions** — ffprobe the video dimensions first, compute `ih-26` as actual pixels, use static values
+2. **`-filter_script`** — write filters to a temp `.txt` file (may bypass parser)
+3. **Two-pass** — render in 2 FFmpeg calls (2 drawtext max per pass)
+
+**Cleanup needed:** Delete `test_ffmpeg_filter.js` and `test_arial.ttf` from project root.
+
 ---
 
 ## 🧪 Development Commands

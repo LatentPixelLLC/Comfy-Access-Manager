@@ -1433,9 +1433,10 @@ router.get('/viewer-status', (req, res) => {
 
 // POST /api/assets/open-compare — Open multiple files in external viewer for A/B compare
 // Accepts optional `viewer` body param: 'mrviewer2' (default) or 'rv'
+// Accepts optional `mode` body param: 'compare' (default) or 'files' (just load all, no compare)
 router.post('/open-compare', (req, res) => {
     const db = getDb();
-    const { ids, viewer } = req.body || {};
+    const { ids, viewer, mode: requestedMode } = req.body || {};
     if (!ids || !Array.isArray(ids) || ids.length < 1) {
         return res.status(400).json({ error: 'Provide an array of asset ids' });
     }
@@ -1464,11 +1465,20 @@ router.post('/open-compare', (req, res) => {
         console.log(`[RV] Compare: ${filePaths.length} files`);
         res.json({ success: true, count: filePaths.length, viewer: 'rv' });
     } else {
-        // mrViewer2 compare mode (default)
+        // mrViewer2 (default)
         const exePath = findMrViewer2();
         if (!exePath) {
             return res.status(404).json({ error: 'mrViewer2 not found. Install from https://mrv2.sourceforge.io/' });
         }
+
+        // "files" mode = load all into Files panel, no compare flags
+        if (requestedMode === 'files') {
+            launchInMrv2(exePath, filePaths, null);
+            console.log(`[mrViewer2] Files panel: ${filePaths.length} clips`);
+            return res.json({ success: true, count: filePaths.length, mode: 'files', viewer: 'mrviewer2' });
+        }
+
+        // Default: compare mode
         let compareArgs = null;
         let mode = 'playlist';
         if (filePaths.length === 2) {
@@ -1493,6 +1503,31 @@ router.post('/open-compare', (req, res) => {
  * Build FFmpeg drawtext/drawbox filter string for review overlays.
  * Returns a complex filter string with burn-in, watermark, safe areas, frame counter.
  */
+/**
+ * Find a usable font file for FFmpeg drawtext.
+ * Returns the fontfile= parameter string (with escaped path for FFmpeg).
+ */
+function findFontFile() {
+    const isWin = process.platform === 'win32';
+    const candidates = isWin ? [
+        'C:/Windows/Fonts/arial.ttf',
+        'C:/Windows/Fonts/segoeui.ttf',
+        'C:/Windows/Fonts/calibri.ttf',
+    ] : [
+        '/System/Library/Fonts/Helvetica.ttc',        // macOS
+        '/System/Library/Fonts/SFNSText.ttf',         // macOS
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  // Linux
+        '/usr/share/fonts/TTF/DejaVuSans.ttf',        // Linux alt
+    ];
+    for (const f of candidates) {
+        if (fs.existsSync(f)) {
+            // FFmpeg needs forward slashes and escaped colons
+            return f.replace(/\\/g, '/').replace(/:/g, '\\:');
+        }
+    }
+    return null; // Will fall back to font=Arial and hope fontconfig works
+}
+
 function buildReviewFilters(opts) {
     const {
         burnIn = true,
@@ -1506,7 +1541,16 @@ function buildReviewFilters(opts) {
     } = opts;
 
     // Escape special characters for FFmpeg drawtext
-    const esc = (s) => s.replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/\\/g, '\\\\').replace(/%/g, '%%');
+    // Order matters: escape backslash FIRST, then others
+    const esc = (s) => s
+        .replace(/\\/g, '\\\\')
+        .replace(/:/g, '\\:')
+        .replace(/'/g, "'\\\\''")
+        .replace(/%/g, '%%');
+
+    // Font specification — prefer fontfile (works everywhere), fallback to font name
+    const fontPath = findFontFile();
+    const fontParam = fontPath ? `fontfile='${fontPath}'` : 'font=Arial';
 
     const filters = [];
 
@@ -1514,10 +1558,10 @@ function buildReviewFilters(opts) {
     if (burnIn && (hierarchy || techInfo)) {
         filters.push("drawbox=x=0:y=0:w=iw:h=36:color=black@0.65:t=fill");
         if (hierarchy) {
-            filters.push(`drawtext=text='${esc(hierarchy)}':x=10:y=10:fontsize=16:fontcolor=white:font=Arial`);
+            filters.push(`drawtext=text='${esc(hierarchy)}':x=10:y=10:fontsize=16:fontcolor=white:${fontParam}`);
         }
         if (techInfo) {
-            filters.push(`drawtext=text='${esc(techInfo)}':x=w-text_w-10:y=10:fontsize=14:fontcolor=white@0.7:font=Arial`);
+            filters.push(`drawtext=text='${esc(techInfo)}':x=w-text_w-10:y=10:fontsize=14:fontcolor=white@0.7:${fontParam}`);
         }
     }
 
@@ -1526,17 +1570,17 @@ function buildReviewFilters(opts) {
         filters.push("drawbox=x=0:y=ih-36:w=iw:h=36:color=black@0.65:t=fill");
         if (isVideo) {
             // Frame number (left) and timecode (right) for video
-            filters.push("drawtext=text='Frame %{frame_num}':start_number=1:x=10:y=ih-26:fontsize=16:fontcolor=white:font=Arial");
-            filters.push("drawtext=text='%{pts\\:hms}':x=w-text_w-10:y=ih-26:fontsize=16:fontcolor=white@0.8:font=Arial");
+            filters.push(`drawtext=text='Frame %{frame_num}':start_number=1:x=10:y=ih-26:fontsize=16:fontcolor=white:${fontParam}`);
+            filters.push(`drawtext=text='%{pts\\:hms}':x=w-text_w-10:y=ih-26:fontsize=16:fontcolor=white@0.8:${fontParam}`);
         } else {
             // Just filename for images
-            filters.push(`drawtext=text='${esc(opts.filename || '')}':x=10:y=ih-26:fontsize=14:fontcolor=white@0.8:font=Arial`);
+            filters.push(`drawtext=text='${esc(opts.filename || '')}':x=10:y=ih-26:fontsize=14:fontcolor=white@0.8:${fontParam}`);
         }
     }
 
     // --- Center watermark ---
     if (watermark && watermarkText) {
-        filters.push(`drawtext=text='${esc(watermarkText)}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=56:fontcolor=white@0.12:font=Arial`);
+        filters.push(`drawtext=text='${esc(watermarkText)}':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=56:fontcolor=white@0.12:${fontParam}`);
     }
 
     // --- Safe areas (title safe 90%, action safe 93%) ---
@@ -1661,9 +1705,14 @@ router.post('/:id/open-review', async (req, res) => {
     res.json({ success: true, mode: 'processing', message: 'Generating review file with overlays...' });
 
     // Run FFmpeg asynchronously — open file when done
-    execFile(ffmpegPath, args, { timeout: 300000 }, (err) => {
+    execFile(ffmpegPath, args, { timeout: 300000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) {
-            console.error(`[Review] FFmpeg error:`, err.message?.substring(0, 200));
+            // Log the actual FFmpeg error (stderr has the real info)
+            const errText = (stderr || err.message || '').toString();
+            // Find the last meaningful line (skip the banner)
+            const lines = errText.split('\n').filter(l => l.trim());
+            const lastLines = lines.slice(-5).join('\n');
+            console.error(`[Review] FFmpeg failed:\n${lastLines}`);
             return;
         }
         console.log(`[Review] Generated: ${outFile}`);

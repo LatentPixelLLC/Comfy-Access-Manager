@@ -8,7 +8,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { loadProjects, loadTree, initFileDropZone } from './browser.js';
 import { loadImportTab } from './import.js';
-import { loadSettings, loadHotkeys, loadRoles, openFolderPicker } from './settings.js';
+import { loadSettings, loadHotkeys, loadRoles, openFolderPicker, autoCheckForUpdates } from './settings.js';
 import './export.js';
 
 // ═══════════════════════════════════════════
@@ -34,6 +34,7 @@ async function checkSetup() {
             loadProjects();
             loadSettings();
             loadRoles();
+            autoCheckForUpdates();  // Silent check — shows notification only if update available
         }
     } catch (err) {
         console.error('Setup check failed:', err);
