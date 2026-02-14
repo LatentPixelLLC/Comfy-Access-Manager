@@ -1216,8 +1216,9 @@ function rvPush(pushExe, filePaths, mode = 'set', compareArgs = null) {
     const cwd = path.dirname(pushExe);
 
     // Build rvpush arguments
+    // Note: rvpush doesn't support compare flags (-wipe, -tile, etc.)
+    // Those are only valid for the rv executable itself
     const args = [mode, ...filePaths];
-    if (compareArgs) args.push(...compareArgs);
 
     // Set RVPUSH_RV_EXECUTABLE_PATH=none so rvpush never auto-launches RV
     // (we handle launching ourselves with -network to ensure future pushes work)
@@ -1251,15 +1252,29 @@ function launchInRV(exePath, filePaths, compareArgs) {
     const cwd = path.dirname(exePath);
     const pushExe = findRvPush();
 
-    // If rvpush is available, try pushing to a running session first
-    if (pushExe) {
-        const pushResult = rvPush(pushExe, filePaths, 'set', compareArgs);
+    // If rvpush is available and we're NOT in compare mode, try pushing to running session
+    // (rvpush can't set compare/wipe/tile modes — those require a fresh launch)
+    if (pushExe && !compareArgs) {
+        const pushResult = rvPush(pushExe, filePaths, 'set');
         if (pushResult.success) return;
     }
 
-    // No running RV (or no rvpush) — launch fresh with -network enabled
-    const args = ['-network', ...filePaths];
+    // For compare mode, kill existing RV first (can't set wipe mode via rvpush)
+    if (compareArgs) {
+        try {
+            if (process.platform === 'win32') {
+                spawnSync('taskkill', ['/F', '/IM', 'rv.exe'], { windowsHide: true, stdio: 'ignore' });
+            } else {
+                spawnSync('pkill', ['-x', 'RV'], { stdio: 'ignore' });
+            }
+        } catch { /* not running, that's fine */ }
+    }
+
+    // Launch fresh with -network enabled
+    // IMPORTANT: RV flags (-wipe, -tile, -compare) must come BEFORE file paths
+    const args = ['-network'];
     if (compareArgs) args.push(...compareArgs);
+    args.push(...filePaths);
     execFile(exePath, args, { cwd });
     console.log(`[RV] Launched new session (-network): ${filePaths.length} file(s)${compareArgs ? ' (' + compareArgs[0].replace('-', '') + ' mode)' : ''}`);
 }
