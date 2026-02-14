@@ -251,8 +251,8 @@ router.get('/compare-targets-by-path', (req, res) => {
     `).get(normalized);
     if (!asset) return res.status(404).json({ error: 'Asset not found in vault' });
 
-    // Helper to group results by role
-    function groupByRole(rows) {
+    // Helper to group results by role — includes current asset marked with is_current
+    function groupByRole(rows, currentId) {
         const roleMap = new Map();
         for (const s of rows) {
             const key = s.role_id || 0;
@@ -268,27 +268,48 @@ router.get('/compare-targets-by-path', (req, res) => {
             roleMap.get(key).assets.push({
                 id: s.id, vault_name: s.vault_name, version: s.version,
                 file_ext: s.file_ext, file_path: s.file_path,
-                shot_name: s.shot_name || null, seq_name: s.seq_name || null
+                created_at: s.created_at || null,
+                shot_name: s.shot_name || null, seq_name: s.seq_name || null,
+                is_current: s.id === currentId
             });
         }
         return [...roleMap.values()];
     }
 
-    const baseCols = `a.id, a.vault_name, a.version, a.file_ext, a.media_type, a.file_size, a.file_path,
+    // Build hierarchy tree for the dialog's left panel
+    function buildHierarchy(projectId) {
+        const proj = db.prepare('SELECT id, name, code FROM projects WHERE id = ?').get(projectId);
+        if (!proj) return null;
+        const seqs = db.prepare('SELECT id, name, code FROM sequences WHERE project_id = ? ORDER BY sort_order, name').all(projectId);
+        const shots = db.prepare('SELECT id, sequence_id, name, code FROM shots WHERE project_id = ? ORDER BY sort_order, code').all(projectId);
+        return {
+            ...proj,
+            sequences: seqs.map(s => ({
+                ...s,
+                shots: shots.filter(sh => sh.sequence_id === s.id)
+            }))
+        };
+    }
+
+    // All roles for filter panel
+    const allRoles = db.prepare('SELECT id, name, code, icon, color FROM roles ORDER BY sort_order, name').all();
+    const hierarchy = asset.project_id ? buildHierarchy(asset.project_id) : null;
+
+    const baseCols = `a.id, a.vault_name, a.version, a.file_ext, a.media_type, a.file_size, a.file_path, a.created_at,
                a.role_id, r.name AS role_name, r.code AS role_code, r.icon AS role_icon, r.color AS role_color,
                r.sort_order AS role_sort`;
     const baseJoin = `FROM assets a LEFT JOIN roles r ON a.role_id = r.id`;
     const baseOrder = `ORDER BY r.sort_order ASC, r.name ASC, a.version DESC`;
 
-    // 1) Try shot-level siblings
+    // 1) Try shot-level siblings (includes current asset — no id != ? exclusion)
     if (asset.shot_id) {
         const siblings = db.prepare(`
             SELECT ${baseCols} ${baseJoin}
-            WHERE a.shot_id = ? AND a.project_id = ? AND a.id != ?
+            WHERE a.shot_id = ? AND a.project_id = ?
             ${baseOrder}
-        `).all(asset.shot_id, asset.project_id, asset.id);
+        `).all(asset.shot_id, asset.project_id);
         if (siblings.length > 0) {
-            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'shot', roles: groupByRole(siblings) });
+            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'shot', roles: groupByRole(siblings, asset.id), allRoles, hierarchy });
         }
     }
 
@@ -297,11 +318,11 @@ router.get('/compare-targets-by-path', (req, res) => {
         const seqSiblings = db.prepare(`
             SELECT ${baseCols}, sh.name AS shot_name ${baseJoin}
             LEFT JOIN shots sh ON a.shot_id = sh.id
-            WHERE a.sequence_id = ? AND a.project_id = ? AND a.id != ?
+            WHERE a.sequence_id = ? AND a.project_id = ?
             ${baseOrder}
-        `).all(asset.sequence_id, asset.project_id, asset.id);
+        `).all(asset.sequence_id, asset.project_id);
         if (seqSiblings.length > 0) {
-            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'sequence', roles: groupByRole(seqSiblings) });
+            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'sequence', roles: groupByRole(seqSiblings, asset.id), allRoles, hierarchy });
         }
     }
 
@@ -311,16 +332,16 @@ router.get('/compare-targets-by-path', (req, res) => {
             SELECT ${baseCols}, sh.name AS shot_name, sq.name AS seq_name ${baseJoin}
             LEFT JOIN shots sh ON a.shot_id = sh.id
             LEFT JOIN sequences sq ON a.sequence_id = sq.id
-            WHERE a.project_id = ? AND a.id != ?
+            WHERE a.project_id = ?
             ${baseOrder}
-        `).all(asset.project_id, asset.id);
+        `).all(asset.project_id);
         if (projSiblings.length > 0) {
-            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'project', roles: groupByRole(projSiblings) });
+            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'project', roles: groupByRole(projSiblings, asset.id), allRoles, hierarchy });
         }
     }
 
     // Nothing found at any level
-    res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'none', roles: [] });
+    res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'none', roles: [], allRoles, hierarchy });
 });
 
 
