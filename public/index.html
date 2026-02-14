@@ -9,14 +9,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Digital Media Vault</title>
+    <title>Comfy Asset Manager</title>
     <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
     <!-- ═══ SETUP OVERLAY (first-time vault config) ═══ -->
     <div id="setupOverlay" class="overlay" style="display:none;">
         <div class="setup-card">
-            <h1>🗄️ Digital Media Vault</h1>
+            <h1>🗄️ Comfy Asset Manager</h1>
             <p class="subtitle">Local Digital Asset Manager</p>
             <p>Choose where to store your organized media files:</p>
             <div class="vault-path-picker">
@@ -31,7 +31,7 @@
     <!-- ═══ TOP BAR ═══ -->
     <header id="topBar">
         <div class="topbar-left">
-            <span class="logo" title="Digital Media Vault — Local Asset Manager">🗄️ DMV</span>
+            <span class="logo" title="Comfy Asset Manager">🗄️ CAM</span>
             <nav class="tabs">
                 <button class="tab active" data-tab="projects" onclick="switchTab('projects')" title="View and manage all projects">📁 Projects</button>
                 <button class="tab" data-tab="browser" onclick="switchTab('browser')" title="Browse assets with tree navigation, filters, and grid/list views">🔍 Browser</button>
@@ -42,7 +42,7 @@
         <div class="topbar-right">
             <span id="statusIndicator" class="status-dot" title="Green = vault configured and running. Yellow = needs setup."></span>
             <span id="assetCount" class="stat" title="Total assets across all projects">0 assets</span>
-            <span id="appVersion" class="stat" style="opacity:0.5; font-size:0.75em;" title="Digital Media Vault version"></span>
+            <span id="appVersion" class="stat" style="opacity:0.5; font-size:0.75em;" title="Comfy Asset Manager version"></span>
         </div>
     </header>
 

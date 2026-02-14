@@ -1,12 +1,10 @@
-# Digital Media Vault (DMV)
+# Comfy Asset Manager (CAM)
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
-A local media asset manager for creative production — organize, browse, import, export, and play media files with a project-based hierarchy.
-
-Built for artists and studios who work with video, images, EXR sequences, 3D files, and audio, and want a fast way to manage them without cloud services.
+A local media asset manager for creative production — organize, browse, import, export, and play media files with a project-based hierarchy and ComfyUI integration.
 
 ---
 
@@ -27,7 +25,9 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
   - **Copy** — Files are copied into the vault; originals stay at source
   - **Register in Place** — Files stay where they are; only a database reference is created (ideal for network drives, large files)
 - **ShotGrid naming convention**: Files are auto-renamed following industry-standard patterns (e.g., `EDA1500_comp_v001.exr` — the folder path encodes Project/Sequence, so filenames start at the most specific level)
+- **Inline Sequence/Shot creation** — "+" buttons next to dropdowns let you create sequences and shots without leaving the Import tab
 - **Drag-and-drop** files directly onto the browser for quick import
+- **Keep original filenames** option — skip auto-rename when you just want to organize
 - Progress bar for batch imports
 
 ### Media Browsing
@@ -35,13 +35,18 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 - **Filter** by media type (video, image, EXR, audio, 3D, document), sequence, or search text
 - **Breadcrumb navigation**: Project → Sequence → Shot → Role
 - **Tree panel** on the left for quick hierarchy navigation
-- **Selection toolbar**: Select All, Move to Sequence, Set Role, Export, Compare, Delete
-- **Right-click context menu** on asset tiles for quick actions
+- **Selection toolbar**: Select All, Move to Sequence, Set Role, Export, Compare in RV, Delete
+- **Right-click context menus** on assets, shots, sequences, and projects for quick actions
 
 ### Built-in Media Player
 - Click any asset to open the **built-in player** (images, video, audio)
+- **Custom video transport** with real-time scrubbing, frame stepping (← → arrow keys), and J/K/L shuttle control
+- **Frame cache engine** — RV-style sequential decode for instant scrubbing via WebCodecs + mp4box.js
+- **Pop-out player** — open media in a separate window with presentation mode
+- **Play All** — play all assets in current view as a playlist
 - Navigate between assets with Previous/Next buttons
 - Shows metadata: resolution, duration, FPS, codec, file size
+- **ComfyUI metadata panel** — press Tab to see generation workflow info
 - **On-the-fly transcoding** — ProRes, DNxHR, and other pro codecs are automatically transcoded to H.264 for browser playback via FFmpeg
 
 ### Export & Transcode
@@ -53,11 +58,15 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 - **Copy mode** (no re-encode) for fast container changes
 - ~~Exports~~ Exported files are organized in hierarchical folders and auto-registered back into the vault
 
-### External Player Support
+### External Player Support (RV / OpenRV)
 - **RV (OpenRV / ShotGrid)** integration for professional playback (EXR, ProRes, HDR, etc.)
-- **Player comparison**: Select two assets and compare side-by-side in RV with wipe mode
+- **A/B wipe comparison**: Select two assets → Compare in RV with side-by-side wipe mode
 - **Persistent RV sessions** — send multiple assets to a running RV instance via rvpush
-- **MediaVault RV plugin** — Compare To submenu with role-based version switching
+- **CAM RV plugin** — right-click menu inside RV with:
+  - Compare To / Switch To — browse assets by role with Qt tree/table picker dialog
+  - Prev/Next Version — step through version history of the current asset
+  - Hierarchical fallback: searches shot → sequence → project for related assets
+- **Bundled OpenRV** — auto-downloaded by install.bat (no manual build required)
 - Also supports any custom external player (set the path in Settings)
 
 ### ComfyUI Integration
@@ -70,7 +79,7 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 - **Dynamic cascading dropdowns**: Project → Sequence → Shot → Role → Asset
 - **🔄 Refresh button** on each node re-queries the vault — including new **projects and roles** — without restarting ComfyUI
 - **3-tier asset resolution**: ComfyUI mapping → exact vault name match → fuzzy search
-- Point DMV at your **ComfyUI output folder** for auto-import of generated files
+- Point CAM at your **ComfyUI output folder** for auto-import of generated files
 - Setup: junction link `custom_nodes\mediavault` → `C:\MediaVault\comfyui`
 
 ### Watch Folders
@@ -168,7 +177,7 @@ http://localhost:7700
 
 ### 2. Set Your Vault Root
 
-On first launch, you'll see a **Setup** screen asking you to set your **Vault Root Path**. This is the folder where DMV will store all your media files.
+On first launch, you'll see a **Setup** screen asking you to set your **Vault Root Path**. This is the folder where CAM will store all your media files.
 
 - Click the folder icon to browse and select a directory
 - This can be any folder — an external drive, a NAS mount, or a local directory
@@ -322,7 +331,7 @@ Digital-Media-Vault/
 
 ### "FFmpeg not found"
 FFmpeg is **automatically installed** by `install.bat` (Windows) or `install.sh` (Mac/Linux) — you should not need to install it manually. If you still see this error:
-- **Windows**: Re-run `install.bat` — it downloads a portable FFmpeg to `tools/ffmpeg/` and DMV finds it automatically
+- **Windows**: Re-run `install.bat` — it downloads a portable FFmpeg to `tools/ffmpeg/` and CAM finds it automatically
 - **macOS**: Re-run `./install.sh` — it installs FFmpeg via Homebrew
 - **Linux**: Re-run `./install.sh` — it installs FFmpeg via apt
 - If you prefer a manual install, download from [ffmpeg.org](https://ffmpeg.org/download.html) and add the `bin/` folder to your system PATH
@@ -339,14 +348,14 @@ Get-NetTCPConnection -LocalPort 7700 | ForEach-Object { Stop-Process -Id $_.Owni
 ```
 
 ### Video Won't Play in Browser
-Some professional codecs (ProRes, DNxHR) can't play directly in a web browser. DMV automatically transcodes these on-the-fly when you click Play. If it's not working, make sure FFmpeg is installed.
+Some professional codecs (ProRes, DNxHR) can't play directly in a web browser. CAM automatically transcodes these on-the-fly when you click Play. If it's not working, make sure FFmpeg is installed.
 
 ### Thumbnails Not Generating
 - For **images**: Make sure the `sharp` npm package installed correctly (`npm install`)
 - For **videos**: FFmpeg is required — verify with `ffmpeg -version`
 
 ### RV Not Detected
-DMV auto-discovers RV / OpenRV in standard locations:
+CAM auto-discovers RV / OpenRV in standard locations:
 - **Windows**: `C:\Program Files\Autodesk\RV*` or `C:\Program Files\Shotgun\RV*`
 - **macOS**: `/Applications/RV*.app`
 - **Linux**: `/usr/local/rv*` or `/opt/rv*`
@@ -371,7 +380,7 @@ The database is created automatically at `data/mediavault.db` on first run. Thum
 
 ## Naming Convention
 
-DMV follows **ShotGrid/Flow Production Tracking** naming standards. The folder structure encodes the full hierarchy (Project/Sequence/Shot/), so filenames start at the most specific level — no redundant project or sequence prefixes.
+CAM follows **ShotGrid/Flow Production Tracking** naming standards. The folder structure encodes the full hierarchy (Project/Sequence/Shot/), so filenames start at the most specific level — no redundant project or sequence prefixes.
 
 Files are automatically renamed on import based on context:
 

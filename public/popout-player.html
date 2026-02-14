@@ -9,7 +9,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DMV Player</title>
+    <title>CAM Player</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -381,7 +381,7 @@
             assets = msg.assets || [];
             currentIndex = msg.index || 0;
             renderMedia();
-            document.title = `DMV Player — ${assets.length} clip${assets.length !== 1 ? 's' : ''}`;
+            document.title = `CAM Player — ${assets.length} clip${assets.length !== 1 ? 's' : ''}`;
         }
 
         if (msg.type === 'dmv-popout-navigate') {
@@ -732,7 +732,7 @@
     // ═══════════════════════════════════════
     if (!window.opener) {
         document.getElementById('barTitle').textContent = 'Waiting for content...';
-        document.getElementById('barIndex').textContent = 'Open from main DMV window';
+        document.getElementById('barIndex').textContent = 'Open from main CAM window';
     }
     </script>
 </body>
