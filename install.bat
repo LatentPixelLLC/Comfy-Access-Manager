@@ -16,8 +16,8 @@ echo.
 cd /d "%~dp0"
 if not exist "tools" mkdir tools
 
-:: ─── [1/4] Check / Install Node.js ───
-echo  [1/4] Checking Node.js...
+:: ─── [1/5] Check / Install Node.js ───
+echo  [1/5] Checking Node.js...
 where node >nul 2>&1
 if errorlevel 1 (
     echo         Node.js not found. Installing automatically...
@@ -73,8 +73,8 @@ if errorlevel 1 (
     for /f "tokens=*" %%v in ('node --version') do echo         Found Node.js %%v
 )
 
-:: ─── [2/4] Check / Install Git ───
-echo  [2/4] Checking Git...
+:: ─── [2/5] Check / Install Git ───
+echo  [2/5] Checking Git...
 where git >nul 2>&1
 if errorlevel 1 (
     echo         Git not found. Installing automatically...
@@ -117,13 +117,13 @@ if errorlevel 1 (
     for /f "tokens=*" %%v in ('git --version') do echo         Found %%v
 )
 
-:: ─── [3/4] Install npm packages ───
-echo  [3/4] Installing npm packages...
+:: ─── [3/5] Install npm packages ───
+echo  [3/5] Installing npm packages...
 call npm install --no-audit --no-fund
 echo         Done.
 
-:: ─── [4/4] Download FFmpeg ───
-echo  [4/4] Checking FFmpeg...
+:: ─── [4/5] Download FFmpeg ───
+echo  [4/5] Checking FFmpeg...
 
 :: Check if FFmpeg is already on PATH
 where ffmpeg >nul 2>&1
@@ -167,6 +167,25 @@ if exist "tools\ffmpeg\bin\ffmpeg.exe" (
 )
 
 :done_ffmpeg
+
+:: ─── [5/5] Check RV / OpenRV ───
+echo  [5/5] Checking RV / OpenRV...
+set "RV_FOUND=0"
+if exist "C:\OpenRV\_build\stage\app\bin\rv.exe" set "RV_FOUND=1"
+for /d %%d in ("C:\Program Files\RV-*") do if exist "%%d\bin\rv.exe" set "RV_FOUND=1"
+for /d %%d in ("C:\Program Files\Shotgun*") do if exist "%%d\bin\rv.exe" set "RV_FOUND=1"
+if !RV_FOUND!==1 (
+    echo         RV / OpenRV found.
+) else (
+    echo.
+    echo         RV / OpenRV not found ^(optional but recommended^).
+    echo         RV provides professional A/B wipe comparison and EXR/HDR playback.
+    echo.
+    echo         Options:
+    echo           1. Download OpenRV from: https://github.com/AcademySoftwareFoundation/OpenRV/releases
+    echo           2. Or set a custom RV path in DMV Settings after launch.
+    echo.
+)
 
 :done
 :: ─── Create app directories ───
