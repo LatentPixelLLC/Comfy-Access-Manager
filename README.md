@@ -131,20 +131,17 @@ start.bat
 
 ### macOS
 
+Open **Terminal** (press ⌘ Space, type "Terminal", hit Enter) and paste this one line:
+
 ```bash
-# 1. Clone the repository (Git comes pre-installed on most Macs)
-git clone https://github.com/gregtee2/Digital-Media-Vault.git
-cd Digital-Media-Vault
-
-# 2. Double-click install.command in Finder
-#    (or from Terminal: chmod +x install.sh && ./install.sh)
-#    Installs: Homebrew, Node.js, Git, FFmpeg, npm packages
-
-# 3. Double-click start.command in Finder to launch
-#    (or from Terminal: ./start.sh)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/gregtee2/Digital-Media-Vault/main/scripts/mac-install.sh)"
 ```
 
-> **macOS Gatekeeper**: The first time you double-click a `.command` file, macOS may say it can't be opened. Just **right-click → Open** instead — this only happens once per file.
+That's it. The installer handles everything — Homebrew, Node.js, FFmpeg, and the app itself.
+
+When it finishes, it will ask if you want to launch the app. Your browser will open automatically.
+
+> **Next time**, just open Terminal and type: `~/Comfy-Asset-Manager/start.sh`
 
 ### Linux
 
