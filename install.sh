@@ -82,11 +82,16 @@ echo "         Done."
 echo "  [6/6] Checking RV / OpenRV..."
 RV_FOUND=false
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    if ls /Applications/RV*.app &>/dev/null 2>&1 || [ -f /usr/local/bin/rv ]; then
+    # Check bundled macOS RV.app
+    if [ -f "tools/rv/RV.app/Contents/MacOS/RV" ]; then
+        RV_FOUND=true
+    elif ls /Applications/RV*.app &>/dev/null 2>&1; then
+        RV_FOUND=true
+    elif [ -f /usr/local/bin/rv ]; then
         RV_FOUND=true
     fi
 else
-    if command -v rv &>/dev/null; then
+    if [ -f "tools/rv/bin/rv" ] || command -v rv &>/dev/null; then
         RV_FOUND=true
     fi
 fi
@@ -98,12 +103,53 @@ else
     echo "         RV / OpenRV not found (optional but recommended)."
     echo "         RV provides professional A/B wipe comparison and EXR/HDR playback."
     echo ""
-    echo "         NOTE: The bundled OpenRV zip is Windows-only."
-    echo "         For macOS/Linux, build OpenRV from source:"
-    echo "           https://github.com/AcademySoftwareFoundation/OpenRV"
-    echo "         Or download a pre-built release from:"
-    echo "           https://github.com/AcademySoftwareFoundation/OpenRV/releases"
-    echo "         Then set the RV path in DMV Settings after launch."
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        MAC_ARCH=$(uname -m)
+        if [ "$MAC_ARCH" = "arm64" ]; then
+            read -p "         Download and install OpenRV for macOS? (~642 MB) (y/N): " INSTALL_RV
+            if [[ "$INSTALL_RV" =~ ^[Yy]$ ]]; then
+                mkdir -p tools
+                RV_URL="https://github.com/gregtee2/Digital-Media-Vault/releases/download/rv-3.1.0/OpenRV-3.1.0-macos-arm64-mediavault.zip"
+                echo "         Downloading OpenRV 3.1.0 for macOS (Apple Silicon)..."
+                curl -L -o tools/rv.zip "$RV_URL" --progress-bar --connect-timeout 15 || true
+
+                if [ -f tools/rv.zip ] && [ -s tools/rv.zip ]; then
+                    echo "         Extracting..."
+                    rm -rf tools/rv 2>/dev/null
+                    mkdir -p tools/rv
+                    ditto -x -k tools/rv.zip tools/rv/
+                    rm -f tools/rv.zip
+                    # Remove quarantine so macOS doesn't block it
+                    xattr -cr tools/rv/RV.app 2>/dev/null
+                    if [ -f "tools/rv/RV.app/Contents/MacOS/RV" ]; then
+                        echo "         ✅ OpenRV installed to tools/rv/"
+                    else
+                        echo "         ⚠️  Extraction may have failed."
+                        echo "         You can set a custom RV path in DMV Settings after launch."
+                    fi
+                else
+                    echo "         ⚠️  Download failed."
+                    echo "         You can set a custom RV path in DMV Settings after launch."
+                    rm -f tools/rv.zip 2>/dev/null
+                fi
+            else
+                echo "         Skipping. You can install RV later from DMV Settings."
+            fi
+        else
+            echo "         NOTE: Pre-built OpenRV is available for Apple Silicon (arm64) only."
+            echo "         For Intel Macs, build OpenRV from source:"
+            echo "           https://github.com/AcademySoftwareFoundation/OpenRV"
+            echo "         See also: docs/BUILD_OPENRV_MACOS.md"
+            echo "         Then set the RV path in DMV Settings after launch."
+        fi
+    else
+        echo "         For Linux, build OpenRV from source:"
+        echo "           https://github.com/AcademySoftwareFoundation/OpenRV"
+        echo "         Or download a pre-built release from:"
+        echo "           https://github.com/AcademySoftwareFoundation/OpenRV/releases"
+        echo "         Then set the RV path in DMV Settings after launch."
+    fi
     echo ""
 fi
 

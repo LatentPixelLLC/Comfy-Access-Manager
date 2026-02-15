@@ -341,9 +341,9 @@
                         <input type="text" id="settingCustomPlayerPath" placeholder="C:\\path\\to\\player.exe">
                         <button onclick="saveSettings()">Save</button>
                     </div>
-                    <label>RV / OpenRV Path <span class="help-icon" data-tip="If RV isn't auto-detected, set the full path to rv.exe here. Leave blank for auto-discovery.">?</span></label>
+                    <label>RV / OpenRV Path <span class="help-icon" data-tip="If RV isn't auto-detected, set the full path here. Windows: C:\OpenRV\_build\stage\app\bin\rv.exe — macOS: /Applications/RV.app/Contents/MacOS/RV. Leave blank for auto-discovery.">?</span></label>
                     <div class="input-row" style="margin-top:4px;">
-                        <input type="text" id="settingRvPath" placeholder="C:\\OpenRV\\_build\\stage\\app\\bin\\rv.exe" title="Full path to rv.exe (leave blank to auto-detect)">
+                        <input type="text" id="settingRvPath" placeholder="Leave blank to auto-detect" title="Full path to RV executable (leave blank to auto-detect)">
                         <button onclick="saveSettings()">Save</button>
                     </div>
                     <p class="hint">Files will open in this player when clicked. RV supports EXR, ProRes, and professional formats. RV also opens from right-click → "🎬 RV".</p>

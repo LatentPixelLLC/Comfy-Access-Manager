@@ -1207,13 +1207,28 @@ function findRV() {
         if (customPath && fs.existsSync(customPath)) return customPath;
     } catch (e) { /* settings not ready yet */ }
 
-    // 2. Check MediaVault bundled RV (tools/rv/ — installed by install.bat)
+    // 2. Check MediaVault bundled RV (tools/rv/ — installed by install.bat / install.sh)
+    if (isMac) {
+        const bundledRvMac = path.join(__dirname, '..', '..', 'tools', 'rv', 'RV.app', 'Contents', 'MacOS', 'RV');
+        if (fs.existsSync(bundledRvMac)) return bundledRvMac;
+    }
     const bundledRv = path.join(__dirname, '..', '..', 'tools', 'rv', 'bin', isWin ? 'rv.exe' : 'rv');
     if (fs.existsSync(bundledRv)) return bundledRv;
 
     // 3. Check OpenRV local build (common for self-compiled OpenRV)
-    const openrvBuild = 'C:\\OpenRV\\_build\\stage\\app\\bin\\rv.exe';
-    if (isWin && fs.existsSync(openrvBuild)) return openrvBuild;
+    if (isWin) {
+        const openrvBuild = 'C:\\OpenRV\\_build\\stage\\app\\bin\\rv.exe';
+        if (fs.existsSync(openrvBuild)) return openrvBuild;
+    } else if (isMac) {
+        const homedir = require('os').homedir();
+        const macBuilds = [
+            path.join(homedir, 'OpenRV', '_build', 'stage', 'app', 'RV.app', 'Contents', 'MacOS', 'RV'),
+            path.join(homedir, 'OpenRV', '_install', 'RV.app', 'Contents', 'MacOS', 'RV'),
+        ];
+        for (const p of macBuilds) {
+            if (fs.existsSync(p)) return p;
+        }
+    }
 
     if (isWin) {
         // Windows: check Program Files for RV installations
