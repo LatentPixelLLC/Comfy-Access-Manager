@@ -192,7 +192,7 @@ if [[ "$INSTALL_RV" == "y" ]]; then
 fi
 
 # Create working directories
-mkdir -p data thumbnails
+mkdir -p data thumbnails logs
 
 echo ""
 echo "  ============================================"
@@ -200,7 +200,24 @@ echo "    ✅ Installation Complete!"
 echo "  ============================================"
 echo ""
 
-# Offer to launch immediately
+# ─── [7/7] Create macOS .app in /Applications ───
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    if command -v cc &>/dev/null; then
+        read -p "  Install to /Applications for Dock + Spotlight access? [Y/n]: " INSTALL_APP
+        if [[ ! "$INSTALL_APP" =~ ^[Nn]$ ]]; then
+            bash scripts/create-macos-app.sh
+            echo ""
+            read -p "  Launch Comfy Asset Manager now? [Y/n]: " LAUNCH_NOW
+            if [[ ! "$LAUNCH_NOW" =~ ^[Nn]$ ]]; then
+                echo "  🚀 Launching..."
+                open "/Applications/Comfy Asset Manager.app"
+            fi
+            exit 0
+        fi
+    fi
+fi
+
+# Offer to launch immediately (non-.app fallback)
 if [[ "$OSTYPE" == "darwin"* ]]; then
     read -p "  Launch Comfy Asset Manager now? [Y/n]: " LAUNCH_NOW
     if [[ ! "$LAUNCH_NOW" =~ ^[Nn]$ ]]; then
