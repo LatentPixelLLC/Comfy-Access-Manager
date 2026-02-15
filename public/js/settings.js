@@ -249,16 +249,33 @@ async function fpNavigate(dir) {
             </div>`;
         }
 
-        for (const entry of data.entries) {
-            if (!entry.isDirectory) continue;
+        // Group entries: network drives first (with header), then the rest
+        const networkDrives = data.entries.filter(e => e.isDirectory && e.driveType === 'network');
+        const otherEntries = data.entries.filter(e => e.isDirectory && e.driveType !== 'network');
+
+        if (networkDrives.length > 0 && !dir) {
+            html += `<div class="fp-section-header" style="padding:6px 12px;font-size:0.75rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border-color, #333);">Network Drives</div>`;
+            for (const entry of networkDrives) {
+                const subtitle = entry.server ? `<span class="fp-subtitle" style="font-size:0.72rem;color:var(--text-muted);margin-left:8px;">${esc(entry.server)}</span>` : '';
+                html += `<div class="fp-entry fp-entry-network" onclick="fpSelectEntry('${escAttr(entry.path)}')" ondblclick="fpNavigate('${escAttr(entry.path)}')" style="background:rgba(59,130,246,0.06);">
+                    <span class="fp-icon">${entry.icon || '🌐'}</span>
+                    <span class="fp-name">${esc(entry.name)}${subtitle}</span>
+                </div>`;
+            }
+            if (otherEntries.length > 0) {
+                html += `<div class="fp-section-header" style="padding:6px 12px;font-size:0.75rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border-color, #333);">Local</div>`;
+            }
+        }
+
+        for (const entry of (networkDrives.length > 0 && !dir ? otherEntries : data.entries.filter(e => e.isDirectory))) {
             html += `<div class="fp-entry" onclick="fpSelectEntry('${escAttr(entry.path)}')" ondblclick="fpNavigate('${escAttr(entry.path)}')">
                 <span class="fp-icon">${entry.icon || '📁'}</span>
                 <span class="fp-name">${esc(entry.name)}</span>
             </div>`;
         }
 
-        if (!html) {
-            html = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No subfolders</div>';
+        if (!html || (!networkDrives.length && !otherEntries.length && !data.entries.some(e => e.isDirectory))) {
+            html += '<div style="padding:20px;text-align:center;color:var(--text-muted);">No subfolders</div>';
         }
 
         container.innerHTML = html;

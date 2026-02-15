@@ -107,6 +107,11 @@ router.get('/browse', (req, res) => {
         // Return drive roots (Windows: C:\, D:\, etc. / macOS: /, /Volumes/..., etc.)
         const drives = FileService.getDrives();
         res.json({ path: '', entries: drives.map(d => {
+            // getDrives() now returns objects with { path, name, type, icon }
+            if (typeof d === 'object') {
+                return { name: d.name, path: d.path, isDirectory: true, icon: d.icon, driveType: d.type, server: d.server };
+            }
+            // Fallback for plain string format
             const isVolume = d.startsWith('/Volumes/') || d.startsWith('/mnt/') || d.startsWith('/media/');
             const name = isVolume ? d.split('/').pop() : d;
             const icon = isVolume ? '🌐' : (d === '/' ? '💻' : '💾');

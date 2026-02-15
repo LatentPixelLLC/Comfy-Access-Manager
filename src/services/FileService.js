@@ -326,6 +326,9 @@ class FileService {
      * Windows: Drive letters (C:\, D:\, Z:\, etc.)
      * macOS: / plus mounted volumes (/Volumes/ShareName, etc.)
      * Linux: / plus common mount points
+     *
+     * Returns array of objects: { path, name, type, icon }
+     *   type: 'local' | 'network' | 'external' | 'root'
      */
     static getDrives() {
         if (process.platform === 'win32') {
@@ -334,27 +337,102 @@ class FileService {
                 const drive = `${String.fromCharCode(i)}:\\`;
                 try {
                     fs.accessSync(drive);
-                    drives.push(drive);
+                    drives.push({ path: drive, name: drive, type: 'local', icon: '💾' });
                 } catch {}
             }
+            // Windows: check for mapped network drives via net use
+            try {
+                const { execSync } = require('child_process');
+                const netUse = execSync('net use 2>nul', { encoding: 'utf8', timeout: 3000 });
+                const mapped = new Set();
+                for (const line of netUse.split('\n')) {
+                    const match = line.match(/^\s*(?:OK|Disconnected)\s+([A-Z]:)/i);
+                    if (match) mapped.add(match[1] + '\\');
+                }
+                for (const d of drives) {
+                    if (mapped.has(d.path)) {
+                        d.type = 'network';
+                        d.icon = '🌐';
+                    }
+                }
+            } catch {}
             return drives;
         }
 
-        // macOS / Linux: start with root
-        const roots = ['/'];
+        const roots = [{ path: '/', name: 'Macintosh HD', type: 'root', icon: '💻' }];
 
-        // macOS: Add mounted volumes (network drives, external disks)
+        // macOS: Add mounted volumes with type detection
         if (process.platform === 'darwin') {
+            // Parse mount output to identify network vs local filesystems
+            let mountInfo = {};
+            try {
+                const { execSync } = require('child_process');
+                const mountOutput = execSync('mount', { encoding: 'utf8', timeout: 3000 });
+                for (const line of mountOutput.split('\n')) {
+                    // Format: //user@host/share on /Volumes/share (smbfs, ...)
+                    // or: /dev/diskXsY on /Volumes/Name (apfs, ...)
+                    const match = line.match(/^(.+?)\s+on\s+(\/Volumes\/.+?)\s+\(([^)]+)\)/);
+                    if (match) {
+                        const device = match[1];
+                        const mountPoint = match[2];
+                        const fsType = match[3].split(',')[0].trim();
+                        mountInfo[mountPoint] = { device, fsType };
+                    }
+                }
+            } catch {}
+
             try {
                 const volumes = fs.readdirSync('/Volumes');
                 for (const vol of volumes) {
+                    // Skip hidden volumes (e.g. .timemachine)
+                    if (vol.startsWith('.')) continue;
+
                     const volPath = `/Volumes/${vol}`;
                     try {
+                        // Quick accessibility check with timeout protection
                         fs.accessSync(volPath);
-                        roots.push(volPath);
-                    } catch {}
+                    } catch { continue; }
+
+                    const info = mountInfo[volPath] || {};
+                    const fsType = (info.fsType || '').toLowerCase();
+                    const device = (info.device || '').toLowerCase();
+
+                    // Classify the volume
+                    let type = 'external';  // default: USB/Thunderbolt drive
+                    let icon = '💾';
+
+                    if (fsType === 'smbfs' || fsType === 'afpfs' || fsType === 'nfs' ||
+                        fsType === 'webdav' || fsType === 'cifs' ||
+                        device.startsWith('//') || device.includes('@')) {
+                        type = 'network';
+                        icon = '🌐';
+                    } else if (vol === 'Macintosh HD' || vol === 'Macintosh HD - Data' ||
+                               (device.startsWith('/dev/disk') && fsType === 'apfs')) {
+                        // Internal system volume — skip (already have /)
+                        continue;
+                    } else if (fsType === 'hfs' && device.startsWith('/dev/disk')) {
+                        // Likely a mounted .dmg installer image — skip
+                        continue;
+                    }
+
+                    roots.push({
+                        path: volPath,
+                        name: vol,
+                        type,
+                        icon,
+                        // Extra metadata for network drives
+                        ...(type === 'network' ? { server: (info.device || '').replace(/^\/\/[^@]*@/, '//') } : {}),
+                    });
                 }
             } catch {}
+
+            // Add user home as a quick shortcut
+            const homedir = require('os').homedir();
+            roots.push({ path: homedir, name: 'Home', type: 'local', icon: '🏠' });
+
+            // Sort: network drives first, then external, then local
+            const typeOrder = { network: 0, external: 1, local: 2, root: 3 };
+            roots.sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9));
         }
 
         // Linux: Check common network mount points
@@ -366,12 +444,27 @@ class FileService {
                         const mountPath = `${mountDir}/${entry}`;
                         try {
                             if (fs.statSync(mountPath).isDirectory()) {
-                                roots.push(mountPath);
+                                roots.push({ path: mountPath, name: entry, type: 'external', icon: '💾' });
                             }
                         } catch {}
                     }
                 } catch {}
             }
+
+            // Check /etc/fstab and mount for network shares
+            try {
+                const { execSync } = require('child_process');
+                const mountOutput = execSync('mount -t cifs,nfs,nfs4,smbfs 2>/dev/null || true', { encoding: 'utf8', timeout: 3000 });
+                for (const line of mountOutput.split('\n')) {
+                    const match = line.match(/\son\s+(\/\S+)\s+type\s+(cifs|nfs|nfs4|smbfs)/);
+                    if (match && !roots.some(r => r.path === match[1])) {
+                        roots.push({ path: match[1], name: match[1].split('/').pop(), type: 'network', icon: '🌐' });
+                    }
+                }
+            } catch {}
+
+            const homedir = require('os').homedir();
+            roots.push({ path: homedir, name: 'Home', type: 'local', icon: '🏠' });
         }
 
         return roots;
