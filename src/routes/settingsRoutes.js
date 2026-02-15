@@ -18,6 +18,7 @@ const WatcherService = require('../services/WatcherService');
 const FileService = require('../services/FileService');
 const MediaInfoService = require('../services/MediaInfoService');
 const ThumbnailService = require('../services/ThumbnailService');
+const RVPluginSync = require('../services/RVPluginSync');
 const { detectMediaType } = require('../utils/mediaTypes');
 
 // GET /api/settings — All settings
@@ -464,6 +465,21 @@ router.post('/rebuild-vault', async (req, res) => {
         });
     } catch (err) {
         console.error(`[Rebuild] Fatal error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/settings/sync-rv-plugin — Force re-deploy MediaVault plugin to all RV installations
+router.post('/sync-rv-plugin', (req, res) => {
+    try {
+        RVPluginSync.sync();
+        const targets = RVPluginSync.findRVPackageDirs();
+        res.json({
+            success: true,
+            message: `Plugin synced to ${targets.length} target(s)`,
+            targets,
+        });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });

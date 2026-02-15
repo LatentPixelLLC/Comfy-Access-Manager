@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const { initDb, closeDb } = require('./database');
 const WatcherService = require('./services/WatcherService');
+const RVPluginSync = require('./services/RVPluginSync');
 
 const app = express();
 const PORT = process.env.PORT || 7700;
@@ -109,6 +110,13 @@ async function start() {
             WatcherService.start();
         } catch (err) {
             console.log('[Watcher] Starting watchers deferred:', err.message);
+        }
+
+        // Sync MediaVault plugin to all detected RV installations
+        try {
+            RVPluginSync.sync();
+        } catch (err) {
+            console.log('[RVPlugin] Sync deferred:', err.message);
         }
 
         // Start network discovery so other instances can find us
