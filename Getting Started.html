@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comfy Asset Manager — Getting Started</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+  .container {
+    max-width: 680px;
+    width: 100%;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 15px;
+    margin-bottom: 40px;
+  }
+  .platform-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .platform-tab {
+    flex: 1;
+    padding: 12px 16px;
+    background: #16213e;
+    border: 2px solid #16213e;
+    border-radius: 10px;
+    color: #888;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.2s;
+  }
+  .platform-tab:hover { border-color: #444; }
+  .platform-tab.active {
+    border-color: #4a9eff;
+    color: #fff;
+    background: #1a2744;
+  }
+  .platform-tab .icon { font-size: 22px; display: block; margin-bottom: 4px; }
+  .platform-content { display: none; }
+  .platform-content.active { display: block; }
+  .step {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .step-number {
+    width: 32px;
+    height: 32px;
+    background: #4a9eff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 15px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .step-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .step p {
+    color: #aaa;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 12px;
+  }
+  .step p:last-child { margin-bottom: 0; }
+  .kbd {
+    display: inline-block;
+    background: #0f3460;
+    border: 1px solid #1a4a7a;
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-family: -apple-system, sans-serif;
+    font-size: 13px;
+    color: #ccc;
+  }
+  .code-box {
+    position: relative;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px 50px 16px 16px;
+    font-family: "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+    font-size: 13px;
+    color: #58a6ff;
+    word-break: break-all;
+    line-height: 1.5;
+    cursor: text;
+    user-select: all;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: #238636;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  .note {
+    background: #1a2744;
+    border-left: 3px solid #4a9eff;
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: #8b949e;
+    line-height: 1.5;
+  }
+  .note strong { color: #ccc; }
+  .success-box {
+    background: #0d2818;
+    border: 1px solid #238636;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-top: 24px;
+    text-align: center;
+  }
+  .success-box .icon { font-size: 28px; margin-bottom: 8px; }
+  .success-box p { color: #7ee787; font-size: 15px; }
+  .success-box .url {
+    display: inline-block;
+    margin-top: 8px;
+    color: #58a6ff;
+    font-family: monospace;
+    font-size: 14px;
+  }
+  .faq {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid #30363d;
+  }
+  .faq h2 { font-size: 18px; color: #fff; margin-bottom: 16px; }
+  .faq-item { margin-bottom: 16px; }
+  .faq-item summary {
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ccc;
+    padding: 8px 0;
+  }
+  .faq-item summary:hover { color: #fff; }
+  .faq-item p {
+    color: #888;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 8px 0 0 16px;
+  }
+  @media (max-width: 600px) {
+    h1 { font-size: 22px; }
+    .step { padding: 16px; }
+    .code-box { font-size: 11px; padding: 12px 44px 12px 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Comfy Asset Manager</h1>
+  <p class="subtitle">Media asset manager for creative production</p>
+
+  <div class="platform-tabs">
+    <div class="platform-tab active" onclick="showPlatform('mac')">
+      <span class="icon">🍎</span> Mac
+    </div>
+    <div class="platform-tab" onclick="showPlatform('win')">
+      <span class="icon">🪟</span> Windows
+    </div>
+    <div class="platform-tab" onclick="showPlatform('linux')">
+      <span class="icon">🐧</span> Linux
+    </div>
+  </div>
+
+  <!-- ═══════ MAC ═══════ -->
+  <div id="platform-mac" class="platform-content active">
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">1</div>
+        <div class="step-title">Open Terminal</div>
+      </div>
+      <p>Press <span class="kbd">⌘ Space</span> to open Spotlight, type <strong>Terminal</strong>, and press <span class="kbd">Enter</span>.</p>
+      <p>A window with a dark or white background and a blinking cursor will appear — that's Terminal.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div class="step-title">Paste this line and press Enter</div>
+      </div>
+      <p>Click the green <strong>Copy</strong> button, go back to Terminal, press <span class="kbd">⌘ V</span> to paste, then press <span class="kbd">Enter</span>.</p>
+      <div class="code-box" id="mac-command">
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/gregtee2/Digital-Media-Vault/main/scripts/mac-install.sh)"
+        <button class="copy-btn" onclick="copyCommand('mac-command', this)">Copy</button>
+      </div>
+      <div class="note">
+        <strong>What this does:</strong> Downloads the app, installs any missing tools
+        (Node.js, FFmpeg), and sets everything up. Takes about 2–5 minutes on a typical connection.
+        You may be asked for your Mac password during installation — that's normal.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">3</div>
+        <div class="step-title">Done — the app launches automatically</div>
+      </div>
+      <p>When installation finishes, it will ask if you want to launch the app. Press <span class="kbd">Enter</span> to say yes.</p>
+      <p>Your web browser will open to the app automatically.</p>
+      <div class="note">
+        <strong>Next time you want to start the app:</strong> Open Terminal and paste:<br>
+        <code style="color:#58a6ff">~/Comfy-Asset-Manager/start.sh</code>
+      </div>
+    </div>
+
+    <div class="success-box">
+      <div class="icon">✅</div>
+      <p>The app runs in your browser at:</p>
+      <span class="url">http://localhost:7700</span>
+    </div>
+  </div>
+
+  <!-- ═══════ WINDOWS ═══════ -->
+  <div id="platform-win" class="platform-content">
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">1</div>
+        <div class="step-title">Download the app</div>
+      </div>
+      <p>Go to the <a href="https://github.com/gregtee2/Digital-Media-Vault/archive/refs/heads/main.zip" style="color:#58a6ff">download page</a> and save the ZIP file.</p>
+      <p>Open your <strong>Downloads</strong> folder and double-click the ZIP to extract it.</p>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div class="step-title">Run the installer</div>
+      </div>
+      <p>Open the extracted <strong>Digital-Media-Vault-main</strong> folder.</p>
+      <p>Double-click <strong>install.bat</strong>.</p>
+      <p>If Windows asks "Do you want to allow this?", click <strong>Yes</strong> or <strong>Run anyway</strong>.</p>
+      <div class="note">
+        <strong>What this does:</strong> Downloads and installs Node.js, Git, FFmpeg, and the
+        app's dependencies. Takes about 2–5 minutes.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">3</div>
+        <div class="step-title">Start the app</div>
+      </div>
+      <p>Double-click <strong>start.bat</strong> in the same folder.</p>
+      <p>Your web browser will open to the app.</p>
+      <div class="note">
+        <strong>Next time:</strong> Just double-click <strong>start.bat</strong> again.
+      </div>
+    </div>
+
+    <div class="success-box">
+      <div class="icon">✅</div>
+      <p>The app runs in your browser at:</p>
+      <span class="url">http://localhost:7700</span>
+    </div>
+  </div>
+
+  <!-- ═══════ LINUX ═══════ -->
+  <div id="platform-linux" class="platform-content">
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">1</div>
+        <div class="step-title">Open a terminal and paste this</div>
+      </div>
+      <div class="code-box" id="linux-command">
+git clone https://github.com/gregtee2/Digital-Media-Vault.git ~/Comfy-Asset-Manager && cd ~/Comfy-Asset-Manager && chmod +x install.sh start.sh && ./install.sh
+        <button class="copy-btn" onclick="copyCommand('linux-command', this)">Copy</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div class="step-title">Done — launches automatically</div>
+      </div>
+      <p>The installer sets up Node.js, FFmpeg, and dependencies, then offers to launch the app.</p>
+      <div class="note">
+        <strong>Next time:</strong> <code style="color:#58a6ff">~/Comfy-Asset-Manager/start.sh</code>
+      </div>
+    </div>
+
+    <div class="success-box">
+      <div class="icon">✅</div>
+      <p>The app runs in your browser at:</p>
+      <span class="url">http://localhost:7700</span>
+    </div>
+  </div>
+
+  <!-- ═══════ FAQ ═══════ -->
+  <div class="faq">
+    <h2>Common Questions</h2>
+
+    <details class="faq-item">
+      <summary>What is Terminal?</summary>
+      <p>Terminal is a built-in Mac app that lets you run commands by typing them. Think of it as
+      a text-based way to tell your computer what to do. You don't need to know how to use it
+      beyond pasting the install command above.</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>It's asking for my password — is that safe?</summary>
+      <p>Yes. Some tools (like Homebrew) need your Mac admin password to install system-wide
+      software. Your password is never sent anywhere — it stays on your Mac. The cursor won't
+      move while you type it — that's normal. Just type it and press Enter.</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>The install seems stuck — what do I do?</summary>
+      <p>Some steps (like downloading OpenRV at 642 MB) can take several minutes. If nothing has
+      happened for more than 10 minutes, press <span class="kbd">Ctrl</span> + <span class="kbd">C</span>
+      to cancel, then try running the command again.</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>Can I uninstall it?</summary>
+      <p>Yes — just delete the <code>Comfy-Asset-Manager</code> folder from your home directory.
+      On Mac: open Finder, press <span class="kbd">⌘ Shift H</span> to go to your home folder,
+      and drag Comfy-Asset-Manager to the Trash.</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>What does the app actually install?</summary>
+      <p>The installer adds these free/open-source tools if they're not already on your system:
+      <strong>Homebrew</strong> (Mac package manager), <strong>Node.js</strong> (runs the app),
+      <strong>FFmpeg</strong> (video processing), and <strong>npm packages</strong> (app dependencies).
+      It optionally offers to install <strong>OpenRV</strong> (professional video player).</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>Do I need an internet connection?</summary>
+      <p>Only for the initial install. After that, the app runs entirely on your local computer — 
+      no cloud, no accounts, no subscriptions.</p>
+    </details>
+  </div>
+</div>
+
+<script>
+function showPlatform(platform) {
+  document.querySelectorAll('.platform-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.platform-content').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  document.getElementById('platform-' + platform).classList.add('active');
+}
+
+function copyCommand(id, btn) {
+  const el = document.getElementById(id);
+  // Get just the command text, not the button text
+  const text = el.childNodes[0].textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+// Auto-detect platform
+const ua = navigator.userAgent;
+if (ua.includes('Mac')) showPlatform('mac');
+else if (ua.includes('Win')) showPlatform('win');
+else if (ua.includes('Linux')) showPlatform('linux');
+</script>
+</body>
+</html>
