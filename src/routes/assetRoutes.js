@@ -1341,6 +1341,51 @@ function findRvPush() {
 }
 
 /**
+ * Resolve an asset DB row to the path RV should receive.
+ * - For regular files: returns the resolved file path.
+ * - For image sequences: returns RV sequence notation, e.g.
+ *   /path/to/render.1001-1100#.exr  (one # per padding digit)
+ * @param {Object} asset - Asset row with file_path, is_sequence, frame_pattern,
+ *                         frame_start, frame_end, frame_count
+ * @returns {string|null} RV-compatible path, or null if file doesn't exist
+ */
+function resolveAssetRvPath(asset) {
+    if (!asset || !asset.file_path) return null;
+
+    const resolved = resolveFilePath(asset.file_path);
+
+    if (asset.is_sequence && asset.frame_pattern && asset.frame_start != null && asset.frame_end != null) {
+        // Build RV sequence notation from the frame_pattern (printf-style)
+        // frame_pattern looks like: "render.%04d.exr" or "render_%04d.exr"
+        // RV wants: "/dir/render.1001-1100####.exr"
+        const dir = path.dirname(resolved);
+        const pattern = asset.frame_pattern; // e.g. "render.%04d.exr"
+
+        // Extract padding width from %0Nd pattern
+        const padMatch = pattern.match(/%0(\d+)d/);
+        const digits = padMatch ? parseInt(padMatch[1], 10) : 4;
+        const hashes = '#'.repeat(digits);
+
+        // Replace %0Nd with frameStart-frameEnd followed by # padding
+        const rvPattern = pattern.replace(/%0\d+d/, `${asset.frame_start}-${asset.frame_end}${hashes}`);
+        const rvPath = path.join(dir, rvPattern);
+
+        // Verify at least the first frame exists
+        const firstFrame = pattern.replace(/%0\d+d/, String(asset.frame_start).padStart(digits, '0'));
+        const firstFramePath = path.join(dir, firstFrame);
+        if (fs.existsSync(firstFramePath)) return rvPath;
+
+        // Fallback: try resolved file_path directly
+        if (fs.existsSync(resolved)) return resolved;
+        return null;
+    }
+
+    // Regular file
+    if (fs.existsSync(resolved)) return resolved;
+    return null;
+}
+
+/**
  * Check if an RV process is currently running.
  * Returns true/false.
  */
@@ -1455,13 +1500,15 @@ router.post('/rv-push', (req, res) => {
         return res.status(404).json({ error: 'Neither rvpush nor RV found.' });
     }
 
-    // Resolve file paths (apply cross-platform path mappings)
+    // Resolve file paths (apply cross-platform path mappings; handle sequences)
     const filePaths = [];
     for (const id of ids) {
-        const asset = db.prepare('SELECT file_path FROM assets WHERE id = ?').get(id);
+        const asset = db.prepare(
+            'SELECT file_path, is_sequence, frame_pattern, frame_start, frame_end, frame_count FROM assets WHERE id = ?'
+        ).get(id);
         if (asset) {
-            const resolved = resolveFilePath(asset.file_path);
-            if (fs.existsSync(resolved)) filePaths.push(resolved);
+            const rvPath = resolveAssetRvPath(asset);
+            if (rvPath) filePaths.push(rvPath);
         }
     }
     if (filePaths.length === 0) {
@@ -1623,6 +1670,7 @@ router.post('/:id/open-review', async (req, res) => {
         WHERE a.id = ?
     `).get(req.params.id);
     if (asset) asset.file_path = resolveFilePath(asset.file_path);
+    const rvPath = asset ? resolveAssetRvPath(asset) : null;
 
     if (!asset || !fs.existsSync(asset.file_path)) {
         return res.status(404).json({ error: 'File not found' });
@@ -1681,8 +1729,8 @@ router.post('/:id/open-review', async (req, res) => {
     });
 
     if (!filterStr) {
-        // No overlays selected — just open normally
-        launchInRV(exePath, [asset.file_path]);
+        // No overlays selected — just open normally (use RV sequence notation if applicable)
+        launchInRV(exePath, [rvPath || asset.file_path]);
         return res.json({ success: true, mode: 'direct' });
     }
 
@@ -1737,9 +1785,12 @@ router.post('/:id/open-review', async (req, res) => {
 // POST /api/assets/:id/open-external — Open file in external player
 router.post('/:id/open-external', (req, res) => {
     const db = getDb();
-    const asset = db.prepare('SELECT file_path, vault_name FROM assets WHERE id = ?').get(req.params.id);
-    if (asset) asset.file_path = resolveFilePath(asset.file_path);
-    if (!asset || !fs.existsSync(asset.file_path)) {
+    const asset = db.prepare(
+        'SELECT file_path, vault_name, is_sequence, frame_pattern, frame_start, frame_end, frame_count FROM assets WHERE id = ?'
+    ).get(req.params.id);
+    const rvPath = asset ? resolveAssetRvPath(asset) : null;
+    const resolvedPlain = asset ? resolveFilePath(asset.file_path) : null;
+    if (!asset || (!rvPath && !resolvedPlain)) {
         return res.status(404).json({ error: 'File not found' });
     }
 
@@ -1754,14 +1805,14 @@ router.post('/:id/open-external', (req, res) => {
             return res.status(404).json({ error: `Custom player not found at: ${customPath}` });
         }
         const { execFile } = require('child_process');
-        execFile(exePath, [asset.file_path], { cwd: path.dirname(exePath) });
+        execFile(exePath, [resolvedPlain || rvPath], { cwd: path.dirname(exePath) });
         playerName = path.basename(exePath);
     } else if (player === 'rv') {
         exePath = findRV();
         if (!exePath) {
             return res.status(404).json({ error: 'RV not found. Install Autodesk RV / ShotGrid RV.' });
         }
-        launchInRV(exePath, [asset.file_path]);
+        launchInRV(exePath, [rvPath || resolvedPlain]);
         playerName = 'RV';
     } else {
         // RV (default)
@@ -1769,7 +1820,7 @@ router.post('/:id/open-external', (req, res) => {
         if (!exePath) {
             return res.status(404).json({ error: 'RV not found. Install OpenRV or set path in Settings.' });
         }
-        launchInRV(exePath, [asset.file_path]);
+        launchInRV(exePath, [rvPath || resolvedPlain]);
         playerName = 'RV';
     }
 
