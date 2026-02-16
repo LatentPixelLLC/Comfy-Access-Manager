@@ -8,7 +8,11 @@
  * RV Plugin Sync Service
  *
  * Automatically deploys the MediaVault RV plugin from rv-package/ into every
- * detected RV installation's Packages directory on server startup.
+ * detected RV installation on server startup.
+ *
+ * IMPORTANT: RV requires packages to be registered via the `rvpkg` CLI tool.
+ * Simply dropping a .rvpkg file into the Packages/ directory is NOT enough —
+ * the package won't be loaded. We must run `rvpkg -install -add -force`.
  *
  * Cross-platform: handles macOS .app bundles, Windows program dirs, Linux paths,
  * plus bundled tools/rv/ and user-level ~/.rv/Packages.
@@ -93,48 +97,65 @@ function sourceHash() {
 }
 
 /**
- * Find all RV Packages directories on this system.
- * Returns array of absolute paths to Packages/ folders.
+ * Find all RV installations on this system.
+ * Returns array of objects: { packagesDir, rvpkgBin }
+ *   packagesDir: absolute path to the PlugIns/Packages/ folder
+ *   rvpkgBin:    absolute path to the rvpkg CLI tool (or null if not found)
  */
-function findRVPackageDirs() {
-    const dirs = new Set();
+function findRVInstalls() {
+    const installs = [];
+    const seen = new Set();
     const appRoot = path.join(__dirname, '..', '..');
+
+    function addMac(appBundle) {
+        const pkg = path.join(appBundle, 'Contents', 'PlugIns', 'Packages');
+        const bin = path.join(appBundle, 'Contents', 'MacOS', 'rvpkg');
+        if (fs.existsSync(pkg) && !seen.has(pkg)) {
+            seen.add(pkg);
+            installs.push({ packagesDir: pkg, rvpkgBin: fs.existsSync(bin) ? bin : null });
+        }
+    }
+
+    function addFlat(packagesDir, rvpkgBin) {
+        if (fs.existsSync(packagesDir) && !seen.has(packagesDir)) {
+            seen.add(packagesDir);
+            installs.push({ packagesDir, rvpkgBin: (rvpkgBin && fs.existsSync(rvpkgBin)) ? rvpkgBin : null });
+        }
+    }
 
     // 1. Bundled RV (our own tools/rv/)
     if (process.platform === 'darwin') {
-        // macOS: tools/rv/RV.app/Contents/PlugIns/Packages/
-        const bundled = path.join(appRoot, 'tools', 'rv', 'RV.app', 'Contents', 'PlugIns', 'Packages');
-        if (fs.existsSync(bundled)) dirs.add(bundled);
-
-        // Also check for any RV.app variants
+        // macOS: tools/rv/RV.app bundle(s)
         const toolsRv = path.join(appRoot, 'tools', 'rv');
         if (fs.existsSync(toolsRv)) {
             try {
                 for (const entry of fs.readdirSync(toolsRv)) {
                     if (entry.endsWith('.app')) {
-                        const pkg = path.join(toolsRv, entry, 'Contents', 'PlugIns', 'Packages');
-                        if (fs.existsSync(pkg)) dirs.add(pkg);
+                        addMac(path.join(toolsRv, entry));
                     }
                 }
             } catch {}
         }
     } else if (process.platform === 'win32') {
         // Windows: tools/rv/Packages/ or tools/rv/app/Packages/
-        for (const sub of ['Packages', 'app/Packages', 'bin/../Packages']) {
-            const bundled = path.join(appRoot, 'tools', 'rv', sub);
-            if (fs.existsSync(bundled)) dirs.add(bundled);
+        for (const sub of ['Packages', 'app/Packages']) {
+            const pkg = path.join(appRoot, 'tools', 'rv', sub);
+            const bin = path.join(appRoot, 'tools', 'rv', 'bin', 'rvpkg.exe');
+            addFlat(pkg, bin);
         }
     } else {
-        // Linux bundled
-        const bundled = path.join(appRoot, 'tools', 'rv', 'Packages');
-        if (fs.existsSync(bundled)) dirs.add(bundled);
+        const pkg = path.join(appRoot, 'tools', 'rv', 'Packages');
+        const bin = path.join(appRoot, 'tools', 'rv', 'bin', 'rvpkg');
+        addFlat(pkg, bin);
     }
 
     // 2. User-level RV packages (~/.rv/Packages/)
-    //    Works on all platforms — RV checks this automatically
-    const userRv = path.join(os.homedir(), '.rv', 'Packages');
-    // Always create this as a fallback target even if no bundled RV is found
-    dirs.add(userRv);
+    //    For this we need an rvpkg binary from ANY detected install
+    const userPkg = path.join(os.homedir(), '.rv', 'Packages');
+    if (!seen.has(userPkg)) {
+        seen.add(userPkg);
+        installs.push({ packagesDir: userPkg, rvpkgBin: null }); // rvpkgBin filled later
+    }
 
     // 3. System-wide RV installations
     if (process.platform === 'darwin') {
@@ -143,20 +164,18 @@ function findRVPackageDirs() {
             const apps = fs.readdirSync('/Applications');
             for (const app of apps) {
                 if (app.match(/^RV/i) && app.endsWith('.app')) {
-                    const pkg = path.join('/Applications', app, 'Contents', 'PlugIns', 'Packages');
-                    if (fs.existsSync(pkg)) dirs.add(pkg);
+                    addMac(path.join('/Applications', app));
                 }
             }
         } catch {}
 
         // Self-compiled OpenRV
-        const selfBuilt = path.join(os.homedir(), 'OpenRV', '_build', 'stage', 'app', 'RV.app', 'Contents', 'PlugIns', 'Packages');
-        if (fs.existsSync(selfBuilt)) dirs.add(selfBuilt);
-        const selfInstalled = path.join(os.homedir(), 'OpenRV', '_install', 'RV.app', 'Contents', 'PlugIns', 'Packages');
-        if (fs.existsSync(selfInstalled)) dirs.add(selfInstalled);
+        for (const sub of ['_build/stage/app', '_install']) {
+            const appBundle = path.join(os.homedir(), 'OpenRV', sub, 'RV.app');
+            if (fs.existsSync(appBundle)) addMac(appBundle);
+        }
 
     } else if (process.platform === 'win32') {
-        // Scan Program Files for Autodesk/ShotGrid/Shotgun RV
         const progDirs = [
             process.env['ProgramFiles'] || 'C:\\Program Files',
             process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
@@ -165,57 +184,61 @@ function findRVPackageDirs() {
             try {
                 for (const entry of fs.readdirSync(progDir)) {
                     if (entry.match(/^(RV|Autodesk.*RV|ShotGrid.*RV|Shotgun.*RV)/i)) {
-                        // Check common sub-paths
                         for (const sub of ['Packages', 'app/Packages']) {
                             const pkg = path.join(progDir, entry, sub);
-                            if (fs.existsSync(pkg)) dirs.add(pkg);
+                            const bin = path.join(progDir, entry, 'bin', 'rvpkg.exe');
+                            addFlat(pkg, bin);
                         }
                     }
                 }
             } catch {}
         }
-
-        // Self-compiled OpenRV on Windows
-        const selfBuilt = path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'Packages');
-        if (fs.existsSync(selfBuilt)) dirs.add(selfBuilt);
+        addFlat(path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'Packages'),
+                path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'bin', 'rvpkg.exe'));
 
     } else {
-        // Linux: /opt/rv, /usr/local/rv
         for (const base of ['/opt/rv', '/usr/local/rv']) {
-            const pkg = path.join(base, 'Packages');
-            if (fs.existsSync(pkg)) dirs.add(pkg);
+            addFlat(path.join(base, 'Packages'), path.join(base, 'bin', 'rvpkg'));
         }
     }
 
-    return [...dirs];
+    // Fill in rvpkgBin for user-level (~/.rv) by borrowing from any found install
+    const anyBin = installs.find(i => i.rvpkgBin)?.rvpkgBin;
+    for (const inst of installs) {
+        if (!inst.rvpkgBin && anyBin) inst.rvpkgBin = anyBin;
+    }
+
+    return installs;
 }
 
 /**
- * Deploy the plugin rvpkg to a target Packages directory AND
- * extract the loose .py to the sibling Python/ directory.
+ * Deploy the plugin to a target RV installation.
  *
- * RV requires BOTH:
- *   PlugIns/Packages/mediavault-1.0.rvpkg   (package archive)
- *   PlugIns/Python/mediavault_mode.py        (loose file RV actually imports)
+ * Uses the `rvpkg` CLI tool to properly register the package so RV loads it.
+ * Just dropping a .rvpkg file into Packages/ is NOT sufficient — RV maintains
+ * an internal registry and ignores unregistered packages.
  *
- * For ~/.rv/Packages the Python dir is ~/.rv/Python.
+ * Steps:
+ *   1. Write .rvpkg to Packages/ directory
+ *   2. Run `rvpkg -install -add -force` to register + extract the .py
+ *   3. If no rvpkg CLI is available, fall back to manual file placement
  *
  * Returns true if deployed, false if skipped/failed.
  */
-function deployTo(rvpkgBuffer, targetDir, hash) {
+function deployTo(rvpkgBuffer, install, hash) {
+    const { packagesDir, rvpkgBin } = install;
     try {
         // Ensure Packages directory exists
-        if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
+        if (!fs.existsSync(packagesDir)) {
+            fs.mkdirSync(packagesDir, { recursive: true });
         }
 
-        const targetFile = path.join(targetDir, RVPKG_FILENAME);
-        const hashFile = path.join(targetDir, `.${PLUGIN_NAME}.hash`);
-
-        // Check if already up to date (both rvpkg AND loose .py must exist)
-        const pythonDir = path.join(targetDir, '..', 'Python');
+        const targetFile = path.join(packagesDir, RVPKG_FILENAME);
+        const hashFile = path.join(packagesDir, `.${PLUGIN_NAME}.hash`);
+        const pythonDir = path.join(packagesDir, '..', 'Python');
         const loosePy = path.join(pythonDir, 'mediavault_mode.py');
 
+        // Check if already up to date
         if (fs.existsSync(targetFile) && fs.existsSync(hashFile) && fs.existsSync(loosePy)) {
             const existingHash = fs.readFileSync(hashFile, 'utf8').trim();
             if (existingHash === hash) {
@@ -225,26 +248,47 @@ function deployTo(rvpkgBuffer, targetDir, hash) {
 
         // Remove any old versions of our plugin rvpkg
         try {
-            for (const f of fs.readdirSync(targetDir)) {
+            for (const f of fs.readdirSync(packagesDir)) {
                 if (f.startsWith(PLUGIN_NAME) && f.endsWith('.rvpkg')) {
-                    fs.unlinkSync(path.join(targetDir, f));
+                    fs.unlinkSync(path.join(packagesDir, f));
                 }
             }
         } catch {}
 
-        // Write the new rvpkg and hash marker
+        // Write the new rvpkg file
         fs.writeFileSync(targetFile, rvpkgBuffer);
-        fs.writeFileSync(hashFile, hash);
 
-        // Also deploy the loose .py into sibling Python/ directory
-        // This is what RV actually imports at startup
-        const pySrc = path.join(PLUGIN_SRC, 'mediavault_mode.py');
-        if (fs.existsSync(pySrc)) {
-            if (!fs.existsSync(pythonDir)) {
-                fs.mkdirSync(pythonDir, { recursive: true });
+        // Try to use rvpkg CLI to properly register + install the package.
+        // The rvpkg file is already in the Packages/ dir, so we just need
+        // to run `rvpkg -install -force <filename>` to register it.
+        // rvpkg finds the file by name within its RV_SUPPORT_PATH.
+        let installedViaCLI = false;
+        if (rvpkgBin) {
+            try {
+                execSync(
+                    `"${rvpkgBin}" -install -force "${RVPKG_FILENAME}"`,
+                    { stdio: 'pipe', timeout: 15000 }
+                );
+                installedViaCLI = true;
+            } catch (cliErr) {
+                // rvpkg may fail on some installs (permissions, etc.) — fall back to manual
+                console.log(`[RVPlugin] rvpkg CLI failed for ${packagesDir}: ${cliErr.message.split('\n')[0]}`);
             }
-            fs.copyFileSync(pySrc, loosePy);
         }
+
+        // If CLI didn't work, manually place the .py in Python/ as fallback
+        if (!installedViaCLI) {
+            const pySrc = path.join(PLUGIN_SRC, 'mediavault_mode.py');
+            if (fs.existsSync(pySrc)) {
+                if (!fs.existsSync(pythonDir)) {
+                    fs.mkdirSync(pythonDir, { recursive: true });
+                }
+                fs.copyFileSync(pySrc, loosePy);
+            }
+        }
+
+        // Write hash marker
+        fs.writeFileSync(hashFile, hash);
 
         return true;
     } catch (err) {
@@ -252,7 +296,7 @@ function deployTo(rvpkgBuffer, targetDir, hash) {
         if (err.code === 'EACCES' || err.code === 'EPERM') {
             return false;
         }
-        console.log(`[RVPlugin] Deploy to ${targetDir} failed:`, err.message);
+        console.log(`[RVPlugin] Deploy to ${packagesDir} failed:`, err.message);
         return false;
     }
 }
@@ -271,16 +315,15 @@ function sync() {
     const rvpkgBuffer = buildRvpkg();
     if (!rvpkgBuffer) return;
 
-    const targets = findRVPackageDirs();
+    const installs = findRVInstalls();
     let deployed = 0;
     let skipped = 0;
 
-    for (const dir of targets) {
-        const result = deployTo(rvpkgBuffer, dir, hash);
+    for (const install of installs) {
+        const result = deployTo(rvpkgBuffer, install, hash);
         if (result) {
             deployed++;
-            const pyDir = path.join(dir, '..', 'Python');
-            console.log(`[RVPlugin] ✓ Deployed to ${dir} + ${pyDir}`);
+            console.log(`[RVPlugin] ✓ Deployed to ${install.packagesDir}${install.rvpkgBin ? ' (via rvpkg CLI)' : ' (manual)'}`);
         } else {
             skipped++;
         }
@@ -288,11 +331,11 @@ function sync() {
 
     if (deployed > 0) {
         console.log(`[RVPlugin] Synced MediaVault plugin to ${deployed} RV installation(s)`);
-    } else if (targets.length > 0) {
+    } else if (installs.length > 0) {
         console.log('[RVPlugin] MediaVault plugin already up to date');
     } else {
         console.log('[RVPlugin] No RV installations found — plugin will deploy when RV is installed');
     }
 }
 
-module.exports = { sync, findRVPackageDirs, buildRvpkg };
+module.exports = { sync, findRVInstalls, buildRvpkg };
