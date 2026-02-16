@@ -55,13 +55,12 @@ function buildRvpkg() {
         if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
 
         if (process.platform === 'win32') {
-            // PowerShell Compress-Archive only supports .zip extension,
-            // so create as .zip then rename to .rvpkg
+            // Use tar (built into Windows 10+) instead of PowerShell to avoid
+            // path escaping issues with spaces/parentheses and extension restrictions
             const tmpZip = path.join(tmpDir, 'mediavault-1.0.zip');
             if (fs.existsSync(tmpZip)) fs.unlinkSync(tmpZip);
-            const files = [packageFile, pyFile].map(f => `"${f}"`).join(',');
             execSync(
-                `powershell -NoProfile -Command "Compress-Archive -Path ${files} -DestinationPath '${tmpZip}' -Force"`,
+                `tar -a -cf "${tmpZip}" -C "${PLUGIN_SRC}" PACKAGE mediavault_mode.py`,
                 { stdio: 'pipe', timeout: 10000 }
             );
             if (fs.existsSync(tmpZip)) {
