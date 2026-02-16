@@ -193,6 +193,8 @@ These are the ONLY files with `process.platform` checks. When adding features th
 
 **Branches**: `main` = development, `stable` = tested releases pushed to users.
 
+**IMPORTANT**: The auto-update system compares the `version` field in `package.json` (semver). If you push code changes without bumping the version, remote installs will report "up to date" even though files changed. **Always bump the version in `package.json` when pushing changes that should reach users via auto-update.** Use patch (`1.2.1`) for fixes, minor (`1.3.0`) for features.
+
 ---
 
 ## Database Transfer (Cross-Machine DB Sharing)
