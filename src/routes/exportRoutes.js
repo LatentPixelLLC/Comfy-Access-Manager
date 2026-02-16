@@ -17,6 +17,7 @@ const { spawn, execFile } = require('child_process');
 const { getDb, getSetting, logActivity } = require('../database');
 const MediaInfoService = require('../services/MediaInfoService');
 const ThumbnailService = require('../services/ThumbnailService');
+const { resolveFilePath } = require('../utils/pathResolver');
 
 // Resolve FFmpeg/FFprobe paths once at startup (use discovery, not bare commands)
 const resolvedFFprobe = MediaInfoService.findFFprobe() || 'ffprobe';
@@ -82,6 +83,7 @@ router.get('/probe/:id', (req, res) => {
     const asset = db.prepare('SELECT file_path, vault_name, media_type FROM assets WHERE id = ?').get(req.params.id);
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
     if (asset.media_type !== 'video') return res.status(400).json({ error: 'Only video assets can be exported' });
+    asset.file_path = resolveFilePath(asset.file_path);
     if (!fs.existsSync(asset.file_path)) return res.status(404).json({ error: 'Source file not found on disk' });
 
     // Look up the asset's hierarchy (project/sequence/shot/role)
@@ -169,6 +171,7 @@ router.post('/start', (req, res) => {
         const asset = db.prepare('SELECT id, file_path, vault_name, media_type, width, height FROM assets WHERE id = ?').get(id);
         if (!asset) continue;
         if (asset.media_type !== 'video') continue;
+        asset.file_path = resolveFilePath(asset.file_path);
         if (!fs.existsSync(asset.file_path)) continue;
         asset.hierarchy = getAssetHierarchy(db, id);
         assets.push(asset);

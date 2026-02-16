@@ -20,6 +20,7 @@ const ThumbnailService = require('../services/ThumbnailService');
 const MediaInfoService = require('../services/MediaInfoService');
 const { detectMediaType, isMediaFile } = require('../utils/mediaTypes');
 const { generateVaultName, getVaultDirectory } = require('../utils/naming');
+const { resolveFilePath } = require('../utils/pathResolver');
 
 // Multer for file uploads (temp storage)
 const upload = multer({
@@ -249,11 +250,23 @@ router.get('/compare-targets-by-path', (req, res) => {
     if (!filePath) return res.status(400).json({ error: 'Provide ?path= parameter' });
 
     const normalized = filePath.replace(/\\/g, '/');
-    const asset = db.prepare(`
+    let asset = db.prepare(`
         SELECT id, shot_id, sequence_id, project_id, role_id, vault_name
         FROM assets
         WHERE replace(file_path, '\\', '/') = ?
     `).get(normalized);
+
+    // If not found, try reverse-resolving the path (Mac path → Windows path stored in DB, or vice versa)
+    if (!asset) {
+        const reversedPath = resolveFilePath(filePath).replace(/\\/g, '/');
+        if (reversedPath !== normalized) {
+            asset = db.prepare(`
+                SELECT id, shot_id, sequence_id, project_id, role_id, vault_name
+                FROM assets
+                WHERE replace(file_path, '\\', '/') = ?
+            `).get(reversedPath);
+        }
+    }
     if (!asset) return res.status(404).json({ error: 'Asset not found in vault' });
 
     // Helper to group results by role — includes current asset marked with is_current
@@ -272,7 +285,7 @@ router.get('/compare-targets-by-path', (req, res) => {
             }
             roleMap.get(key).assets.push({
                 id: s.id, vault_name: s.vault_name, version: s.version,
-                file_ext: s.file_ext, file_path: s.file_path,
+                file_ext: s.file_ext, file_path: resolveFilePath(s.file_path),
                 created_at: s.created_at || null,
                 shot_name: s.shot_name || null, seq_name: s.seq_name || null,
                 is_current: s.id === currentId
@@ -366,6 +379,7 @@ router.get('/:id', (req, res) => {
     `).get(req.params.id);
 
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
+    asset.file_path = resolveFilePath(asset.file_path);
     res.json(asset);
 });
 
@@ -1059,6 +1073,7 @@ const BROWSER_CODECS = new Set(['h264', 'h265', 'hevc', 'vp8', 'vp9', 'av1', 'av
 router.get('/:id/stream', (req, res) => {
     const db = getDb();
     const asset = db.prepare('SELECT file_path, vault_name, media_type, codec, width, height FROM assets WHERE id = ?').get(req.params.id);
+    if (asset) asset.file_path = resolveFilePath(asset.file_path);
     if (!asset || !fs.existsSync(asset.file_path)) {
         return res.status(404).json({ error: 'File not found' });
     }
@@ -1105,6 +1120,7 @@ router.get('/:id/stream', (req, res) => {
 router.get('/:id/file', (req, res) => {
     const db = getDb();
     const asset = db.prepare('SELECT file_path, vault_name, media_type FROM assets WHERE id = ?').get(req.params.id);
+    if (asset) asset.file_path = resolveFilePath(asset.file_path);
     if (!asset || !fs.existsSync(asset.file_path)) {
         return res.status(404).json({ error: 'File not found' });
     }
@@ -1140,6 +1156,8 @@ router.get('/:id/thumbnail', async (req, res) => {
     const db = getDb();
     const asset = db.prepare('SELECT id, file_path, thumbnail_path FROM assets WHERE id = ?').get(req.params.id);
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
+    asset.file_path = resolveFilePath(asset.file_path);
+    if (asset.thumbnail_path) asset.thumbnail_path = resolveFilePath(asset.thumbnail_path);
 
     let thumbPath = asset.thumbnail_path;
 
@@ -1415,12 +1433,13 @@ router.post('/rv-push', (req, res) => {
         return res.status(404).json({ error: 'Neither rvpush nor RV found.' });
     }
 
-    // Resolve file paths
+    // Resolve file paths (apply cross-platform path mappings)
     const filePaths = [];
     for (const id of ids) {
         const asset = db.prepare('SELECT file_path FROM assets WHERE id = ?').get(id);
-        if (asset && fs.existsSync(asset.file_path)) {
-            filePaths.push(asset.file_path);
+        if (asset) {
+            const resolved = resolveFilePath(asset.file_path);
+            if (fs.existsSync(resolved)) filePaths.push(resolved);
         }
     }
     if (filePaths.length === 0) {
@@ -1581,6 +1600,7 @@ router.post('/:id/open-review', async (req, res) => {
         LEFT JOIN roles r ON r.id = a.role_id
         WHERE a.id = ?
     `).get(req.params.id);
+    if (asset) asset.file_path = resolveFilePath(asset.file_path);
 
     if (!asset || !fs.existsSync(asset.file_path)) {
         return res.status(404).json({ error: 'File not found' });
@@ -1696,6 +1716,7 @@ router.post('/:id/open-review', async (req, res) => {
 router.post('/:id/open-external', (req, res) => {
     const db = getDb();
     const asset = db.prepare('SELECT file_path, vault_name FROM assets WHERE id = ?').get(req.params.id);
+    if (asset) asset.file_path = resolveFilePath(asset.file_path);
     if (!asset || !fs.existsSync(asset.file_path)) {
         return res.status(404).json({ error: 'File not found' });
     }
