@@ -235,7 +235,7 @@ echo.
 echo         RV / OpenRV not found.
 echo         RV provides professional A/B wipe comparison and EXR/HDR playback.
 echo.
-set /p INSTALL_RV="         Download and install OpenRV for Windows? (~272 MB) (Y/N): "
+set /p INSTALL_RV="         Download and install OpenRV for Windows? (~420 MB) (Y/N): "
 if /i not "!INSTALL_RV!"=="Y" (
     echo         Skipping. You can install RV later from Settings.
     goto :done
