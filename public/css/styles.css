@@ -745,31 +745,13 @@ label {
 
 /* ─── Asset Selection ─── */
 .asset-selected {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.35), inset 0 0 0 1px rgba(99, 179, 237, 0.15);
-    background: rgba(99, 179, 237, 0.06) !important;
+    border-color: #4a9eda !important;
+    box-shadow: 0 0 0 2px #4a9eda;
+    background: rgba(74, 158, 218, 0.08) !important;
 }
 .asset-card.asset-selected { transform: translateY(-1px); }
-.asset-check {
-    position: absolute;
-    top: 8px; right: 8px;
-    width: 22px; height: 22px;
-    background: var(--accent);
-    color: #000;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.75rem; font-weight: 700;
-    z-index: 2;
-    pointer-events: none;
-}
-.asset-check-row {
-    width: 20px; height: 20px;
-    background: var(--accent);
-    color: #000;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.7rem; font-weight: 700;
-    flex-shrink: 0;
+.asset-row.asset-selected {
+    border-left: 3px solid #4a9eda;
 }
 .selection-toolbar {
     display: flex;

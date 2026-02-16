@@ -517,7 +517,6 @@ function renderAssets() {
                     ${a.role_name ? `<span class="asset-role-badge" style="background:${a.role_color || '#666'}">${a.role_icon || '🎭'} ${esc(a.role_code)}</span>` : ''}
                     ${a.duration ? `<span class="asset-duration">${formatDuration(a.duration)}</span>` : ''}
                 </div>
-                ${state.selectedAssets.includes(a.id) ? '<div class="asset-check">✓</div>' : ''}
                 <button class="asset-star" onclick="event.stopPropagation();toggleStar(${a.id})">${a.starred ? '⭐' : '☆'}</button>
                 <div class="asset-info">
                     <div class="asset-name" title="${esc(a.vault_name)}">${esc(a.vault_name)}</div>
@@ -550,7 +549,6 @@ function renderAssets() {
             <div class="asset-row ${state.selectedAssets.includes(a.id) ? 'asset-selected' : ''}" 
                 data-aidx="${i}" onclick="handleAssetClick(event, ${i})" ondblclick="handleAssetDblClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
                 draggable="true" ondragstart="onAssetDragStart(event, ${i})">
-                ${state.selectedAssets.includes(a.id) ? '<div class="asset-check-row">✓</div>' : ''}
                 <div class="row-id">${a.id}</div>
                 <div class="row-thumb">
                     <img src="/api/assets/${a.id}/thumbnail" onerror="this.outerHTML='<span>${typeIcon(a.media_type)}</span>'">
@@ -573,6 +571,18 @@ function renderAssets() {
     updateSelectionToolbar();
 }
 
+// Click on empty space in the grid → deselect all
+document.addEventListener('click', (e) => {
+    const container = document.getElementById('assetContainer');
+    if (!container) return;
+    // Only deselect if the click target IS the container itself (empty space), not a child
+    if (e.target === container && state.selectedAssets.length > 0) {
+        state.selectedAssets = [];
+        state.lastClickedAsset = -1;
+        renderAssets();
+    }
+});
+
 // ═══════════════════════════════════════════
 //  ASSET SELECTION (click, shift-click, bulk)
 // ═══════════════════════════════════════════
@@ -581,6 +591,7 @@ function handleAssetClick(event, assetIdx) {
     const asset = state.assets[assetIdx];
     if (!asset) return;
 
+    // Ctrl/Cmd+click: toggle this asset in selection (add/remove)
     if (event.ctrlKey || event.metaKey) {
         toggleAssetSelection(asset.id);
         state.lastClickedAsset = assetIdx;
@@ -588,36 +599,48 @@ function handleAssetClick(event, assetIdx) {
         return;
     }
 
+    // Shift+click: range select from last clicked to this one
     if (event.shiftKey && state.lastClickedAsset >= 0) {
         const start = Math.min(state.lastClickedAsset, assetIdx);
         const end = Math.max(state.lastClickedAsset, assetIdx);
+        state.selectedAssets = [];
         for (let i = start; i <= end; i++) {
-            const id = state.assets[i].id;
-            if (!state.selectedAssets.includes(id)) {
-                state.selectedAssets.push(id);
-            }
+            state.selectedAssets.push(state.assets[i].id);
         }
         renderAssets();
         return;
     }
 
-    if (state.selectedAssets.length > 0) {
-        toggleAssetSelection(asset.id);
-        state.lastClickedAsset = assetIdx;
-        renderAssets();
-        return;
-    }
-
+    // Plain click: select only this asset, deselect everything else
+    state.selectedAssets = [asset.id];
     state.lastClickedAsset = assetIdx;
+    renderAssets();
 }
 
 function handleAssetDblClick(event, assetIdx) {
     event.preventDefault();
     const asset = state.assets[assetIdx];
     if (!asset) return;
-    openPlayer(assetIdx);
+    // Double-click always opens in RV
+    openInRV(asset.id);
 }
 window.handleAssetDblClick = handleAssetDblClick;
+
+/** Launch asset in RV via the rv-push endpoint */
+async function openInRV(assetId) {
+    try {
+        const res = await api('/api/assets/rv-push', {
+            method: 'POST',
+            body: { ids: [assetId], mode: 'set' }
+        });
+        if (!res.success) {
+            showToast(res.error || 'Failed to open in RV', 'error');
+        }
+    } catch (e) {
+        showToast('Failed to open in RV: ' + e.message, 'error');
+    }
+}
+window.openInRV = openInRV;
 
 /** Open built-in player directly, bypassing default_player setting */
 function openPlayerBuiltIn(assetIdx) {
