@@ -13,7 +13,10 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { getAllSettings, setSetting, getSetting, getRecentActivity, getDb } = require('../database');
+const { getAllSettings, setSetting, getSetting, getRecentActivity, getDb, DB_PATH, DATA_DIR, closeDb, initDb } = require('../database');
+const multer = require('multer');
+const http = require('http');
+const https = require('https');
 const WatcherService = require('../services/WatcherService');
 const FileService = require('../services/FileService');
 const MediaInfoService = require('../services/MediaInfoService');
@@ -473,13 +476,179 @@ router.post('/rebuild-vault', async (req, res) => {
 router.post('/sync-rv-plugin', (req, res) => {
     try {
         RVPluginSync.sync();
-        const targets = RVPluginSync.findRVPackageDirs();
+        const targets = RVPluginSync.findRVInstalls();
         res.json({
             success: true,
             message: `Plugin synced to ${targets.length} target(s)`,
             targets,
         });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════
+//  DATABASE EXPORT / IMPORT / PULL
+// ═══════════════════════════════════════════
+
+// GET /api/settings/export-db — Download the database file
+router.get('/export-db', (req, res) => {
+    try {
+        if (!fs.existsSync(DB_PATH)) {
+            return res.status(404).json({ error: 'No database file found' });
+        }
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        res.setHeader('Content-Disposition', `attachment; filename="mediavault-${timestamp}.db"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        const stream = fs.createReadStream(DB_PATH);
+        stream.pipe(res);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/settings/db-info — Quick stats about the current database
+router.get('/db-info', (req, res) => {
+    try {
+        const db = getDb();
+        const projects = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
+        const assets = db.prepare('SELECT COUNT(*) as c FROM assets').get().c;
+        const sequences = db.prepare('SELECT COUNT(*) as c FROM sequences').get().c;
+        const shots = db.prepare('SELECT COUNT(*) as c FROM shots').get().c;
+        const stat = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH) : null;
+        res.json({
+            projects, assets, sequences, shots,
+            fileSize: stat ? stat.size : 0,
+            modified: stat ? stat.mtime.toISOString() : null,
+            path: DB_PATH,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/settings/import-db — Upload and replace the database file
+const dbUpload = multer({ dest: path.join(DATA_DIR, 'uploads'), limits: { fileSize: 500 * 1024 * 1024 } });
+router.post('/import-db', dbUpload.single('database'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No database file uploaded' });
+    }
+    const uploadedPath = req.file.path;
+    try {
+        // Back up current database
+        if (fs.existsSync(DB_PATH)) {
+            const backupPath = DB_PATH + '.backup-' + Date.now();
+            fs.copyFileSync(DB_PATH, backupPath);
+            console.log(`[DB Import] Backed up current DB to ${backupPath}`);
+        }
+
+        // Close current database, replace file, re-init
+        closeDb();
+        fs.copyFileSync(uploadedPath, DB_PATH);
+        fs.unlinkSync(uploadedPath);
+        await initDb();
+
+        const db = getDb();
+        const projects = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
+        const assets = db.prepare('SELECT COUNT(*) as c FROM assets').get().c;
+
+        console.log(`[DB Import] Imported database with ${projects} projects, ${assets} assets`);
+        res.json({
+            success: true,
+            message: `Database imported: ${projects} projects, ${assets} assets`,
+            projects, assets,
+        });
+    } catch (err) {
+        // Try to recover from backup
+        try {
+            const backups = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('mediavault.db.backup-')).sort().reverse();
+            if (backups.length > 0) {
+                fs.copyFileSync(path.join(DATA_DIR, backups[0]), DB_PATH);
+                await initDb();
+                console.log('[DB Import] Recovered from backup after failed import');
+            }
+        } catch (recoverErr) {
+            console.error('[DB Import] Recovery failed:', recoverErr.message);
+        }
+        if (fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+        res.status(500).json({ error: `Import failed: ${err.message}` });
+    }
+});
+
+// POST /api/settings/pull-db — Pull database from a remote MediaVault instance
+router.post('/pull-db', async (req, res) => {
+    const { url } = req.body;
+    if (!url) {
+        return res.status(400).json({ error: 'Remote server URL is required' });
+    }
+
+    try {
+        // Normalize URL — ensure it ends with /api/settings/export-db
+        let remoteUrl = url.replace(/\/+$/, '');
+        if (!remoteUrl.includes('/api/settings/export-db')) {
+            remoteUrl += '/api/settings/export-db';
+        }
+
+        console.log(`[DB Pull] Pulling database from ${remoteUrl}`);
+
+        // Download the remote database
+        const tmpPath = path.join(DATA_DIR, 'pull-tmp-' + Date.now() + '.db');
+        await new Promise((resolve, reject) => {
+            const proto = remoteUrl.startsWith('https') ? https : http;
+            const request = proto.get(remoteUrl, { timeout: 30000 }, (response) => {
+                if (response.statusCode !== 200) {
+                    reject(new Error(`Remote server returned ${response.statusCode}`));
+                    return;
+                }
+                const file = fs.createWriteStream(tmpPath);
+                response.pipe(file);
+                file.on('finish', () => { file.close(); resolve(); });
+                file.on('error', reject);
+            });
+            request.on('error', (err) => reject(new Error(`Connection failed: ${err.message}`)));
+            request.on('timeout', () => { request.destroy(); reject(new Error('Connection timed out')); });
+        });
+
+        // Validate it's a real SQLite file
+        const header = Buffer.alloc(16);
+        const fd = fs.openSync(tmpPath, 'r');
+        fs.readSync(fd, header, 0, 16, 0);
+        fs.closeSync(fd);
+        if (header.toString('ascii', 0, 6) !== 'SQLite') {
+            fs.unlinkSync(tmpPath);
+            return res.status(400).json({ error: 'Downloaded file is not a valid SQLite database' });
+        }
+
+        // Backup current, replace, re-init
+        if (fs.existsSync(DB_PATH)) {
+            const backupPath = DB_PATH + '.backup-' + Date.now();
+            fs.copyFileSync(DB_PATH, backupPath);
+            console.log(`[DB Pull] Backed up current DB to ${backupPath}`);
+        }
+
+        closeDb();
+        fs.renameSync(tmpPath, DB_PATH);
+        await initDb();
+
+        const db = getDb();
+        const projects = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
+        const assets = db.prepare('SELECT COUNT(*) as c FROM assets').get().c;
+
+        console.log(`[DB Pull] Imported remote database with ${projects} projects, ${assets} assets`);
+        res.json({
+            success: true,
+            message: `Database pulled: ${projects} projects, ${assets} assets`,
+            projects, assets,
+        });
+    } catch (err) {
+        // Try to recover
+        try {
+            const backups = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('mediavault.db.backup-')).sort().reverse();
+            if (backups.length > 0 && !getDb()) {
+                fs.copyFileSync(path.join(DATA_DIR, backups[0]), DB_PATH);
+                await initDb();
+            }
+        } catch (_) {}
         res.status(500).json({ error: err.message });
     }
 });

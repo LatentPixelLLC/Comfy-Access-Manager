@@ -921,6 +921,130 @@ const _origLoadSettings = loadSettings;
 function loadNetworkSettings() {
     loadServerInfo();
     loadPathMappings();
+    loadDbInfo();
+    loadDiscoveredServersForPull();
+}
+
+// ═══════════════════════════════════════════
+//  DATABASE TRANSFER
+// ═══════════════════════════════════════════
+
+async function loadDbInfo() {
+    try {
+        const info = await api('/api/settings/db-info');
+        const sizeKB = (info.fileSize / 1024).toFixed(0);
+        const sizeMB = (info.fileSize / 1024 / 1024).toFixed(1);
+        const sizeStr = info.fileSize > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`;
+        const modified = info.modified ? new Date(info.modified).toLocaleString() : 'Unknown';
+        const el = document.getElementById('dbInfo');
+        if (el) {
+            el.innerHTML = `
+                <div>Projects: <strong>${info.projects}</strong> · Assets: <strong>${info.assets}</strong> · Sequences: <strong>${info.sequences}</strong> · Shots: <strong>${info.shots}</strong></div>
+                <div>File size: <strong>${sizeStr}</strong> · Last modified: <strong>${modified}</strong></div>
+            `;
+        }
+    } catch (err) {
+        console.error('Failed to load DB info:', err);
+    }
+}
+
+function exportDatabase() {
+    // Direct download via browser
+    window.location.href = '/api/settings/export-db';
+    showToast('Database export started — check your Downloads folder', 'success');
+}
+
+async function importDatabase(input) {
+    const file = input.files?.[0];
+    if (!file) return;
+    input.value = ''; // Reset so same file can be re-selected
+
+    const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+    if (!confirm(`Import "${file.name}" (${sizeMB} MB)?\n\nThis will REPLACE your current database. A backup will be saved automatically.`)) {
+        return;
+    }
+
+    try {
+        showToast('Importing database...', 'info');
+        const formData = new FormData();
+        formData.append('database', file);
+
+        const response = await fetch('/api/settings/import-db', {
+            method: 'POST',
+            body: formData,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            showToast(`Import failed: ${result.error}`, 'error');
+            return;
+        }
+
+        showToast(`✓ ${result.message}`, 'success');
+        // Reload the entire page to pick up new data
+        setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+        showToast(`Import error: ${err.message}`, 'error');
+    }
+}
+
+async function pullRemoteDatabase() {
+    const urlInput = document.getElementById('pullDbUrl');
+    const url = urlInput?.value?.trim();
+    if (!url) {
+        showToast('Enter the URL of a remote MediaVault server', 'error');
+        return;
+    }
+
+    if (!confirm(`Pull database from ${url}?\n\nThis will REPLACE your current database with the remote one. A backup will be saved automatically.`)) {
+        return;
+    }
+
+    try {
+        showToast('Pulling database from remote server...', 'info');
+        const result = await api('/api/settings/pull-db', {
+            method: 'POST',
+            body: { url },
+        });
+        showToast(`✓ ${result.message}`, 'success');
+        setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+        showToast(`Pull failed: ${err.message}`, 'error');
+    }
+}
+
+async function loadDiscoveredServersForPull() {
+    const container = document.getElementById('discoveredServersForPull');
+    if (!container) return;
+
+    try {
+        // Show saved/discovered servers as quick-pick buttons
+        const saved = await api('/api/servers/saved');
+        const discovered = await api('/api/servers/discover');
+
+        const allServers = [];
+        const seenUrls = new Set();
+
+        for (const s of [...(saved || []), ...(discovered || [])]) {
+            const sUrl = s.url || s.address;
+            if (sUrl && !seenUrls.has(sUrl)) {
+                seenUrls.add(sUrl);
+                allServers.push({ name: s.name || s.hostname || sUrl, url: sUrl });
+            }
+        }
+
+        if (allServers.length === 0) {
+            container.innerHTML = '<span style="font-size:0.78rem;color:var(--text-muted);">No other servers detected on network.</span>';
+            return;
+        }
+
+        container.innerHTML = '<span style="font-size:0.78rem;color:var(--text-muted);margin-right:6px;">Quick pick:</span>' +
+            allServers.map(s =>
+                `<button onclick="document.getElementById('pullDbUrl').value='${s.url}'" style="font-size:0.78rem;padding:3px 10px;margin:2px;border-radius:4px;background:var(--bg-dark);border:1px solid var(--border);color:var(--text);cursor:pointer;">${s.name}</button>`
+            ).join('');
+    } catch (err) {
+        container.innerHTML = '';
+    }
 }
 // Hook into settings load
 const _settingsTabObserver = new MutationObserver(() => {
@@ -968,3 +1092,6 @@ window.removeSavedServer = removeSavedServer;
 window.saveServerName = saveServerName;
 window.addPathMapping = addPathMapping;
 window.removePathMapping = removePathMapping;
+window.exportDatabase = exportDatabase;
+window.importDatabase = importDatabase;
+window.pullRemoteDatabase = pullRemoteDatabase;
