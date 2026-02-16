@@ -612,30 +612,78 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     # ── loading ──────────────────────────────────────────────────
 
     def _stripAutoAudio(self, source_group, intended_path):
-        """Remove any media files RV auto-discovered (e.g. audio from nearby
-        directories) that weren't explicitly loaded. RV's source_setup scans
-        parent directories for audio files, which on a NAS can pull audio
-        from unrelated projects."""
+        """Aggressively remove any auto-discovered audio from a source group.
+
+        RV's source_setup scans nearby directories for audio and can add it
+        as: (a) extra entries in .media.movie, (b) a .media.audio property,
+        or (c) an entirely separate RVFileSource node.  We handle all three.
+        """
         try:
             intended_norm = os.path.normpath(intended_path)
-            for node in rvc.nodesInGroup(source_group):
-                try:
-                    media = rvc.getStringProperty(node + ".media.movie")
-                    if media and len(media) > 1:
-                        clean = [m for m in media
-                                 if os.path.normpath(m) == intended_norm]
-                        if not clean:
-                            clean = [media[0]]  # keep at least the primary
-                        if len(clean) < len(media):
+            nodes = rvc.nodesInGroup(source_group)
+
+            for node in nodes:
+                node_type = rvc.nodeType(node)
+
+                # --- Handle RVFileSource nodes ---
+                if node_type == "RVFileSource":
+                    # (a) Clear .media.movie of anything that isn't our file
+                    try:
+                        media = rvc.getStringProperty(node + ".media.movie")
+                        if media:
+                            clean = [m for m in media
+                                     if os.path.normpath(m) == intended_norm]
+                            if not clean:
+                                # This whole node is an audio-only addition —
+                                # blank it out so RV can't play it
+                                rvc.setStringProperty(
+                                    node + ".media.movie", [""], True)
+                                print("[MediaVault] Blanked auto-audio node: "
+                                      "%s (%s)" % (node, media))
+                            elif len(clean) < len(media):
+                                rvc.setStringProperty(
+                                    node + ".media.movie", clean, True)
+                                print("[MediaVault] Stripped %d extra file(s) "
+                                      "from %s" % (len(media) - len(clean), node))
+                    except Exception:
+                        pass
+
+                    # (b) Clear .media.audio property
+                    try:
+                        audio = rvc.getStringProperty(node + ".media.audio")
+                        if audio and any(a for a in audio if a):
                             rvc.setStringProperty(
-                                node + ".media.movie", clean, True)
-                            removed = len(media) - len(clean)
-                            print("[MediaVault] Stripped %d auto-loaded "
-                                  "file(s) from %s" % (removed, node))
+                                node + ".media.audio", [""], True)
+                            print("[MediaVault] Cleared .media.audio on %s: "
+                                  "%s" % (node, audio))
+                    except Exception:
+                        pass
+
+                # --- Handle RVSoundTrack nodes ---
+                elif node_type == "RVSoundTrack":
+                    try:
+                        media = rvc.getStringProperty(node + ".media.movie")
+                        if media and any(m for m in media if m):
+                            rvc.setStringProperty(
+                                node + ".media.movie", [""], True)
+                            print("[MediaVault] Cleared soundtrack: "
+                                  "%s (%s)" % (node, media))
+                    except Exception:
+                        pass
+
+                # --- Clear any node's request.audioFile ---
+                try:
+                    af = rvc.getStringProperty(node + ".request.audioFile")
+                    if af and any(a for a in af if a):
+                        rvc.setStringProperty(
+                            node + ".request.audioFile", [""], True)
+                        print("[MediaVault] Cleared request.audioFile on "
+                              "%s" % node)
                 except Exception:
-                    pass  # not all nodes have media.movie
+                    pass
+
         except Exception as e:
-            print("[MediaVault] _stripAutoAudio: %s" % e)
+            print("[MediaVault] _stripAutoAudio error: %s" % e)
 
     def _loadAsCompare(self, filepath):
         """Add filepath as a new source for A/B sequence comparison."""
@@ -674,8 +722,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # Set only the intended file — no auto-audio
             rvc.setSourceMedia(srcs[0][0], [filepath])
 
-            # Also strip from the source group node level in case
-            # source_setup re-fires and adds audio
+            # Strip auto-audio from ALL source groups
             for sg in rvc.nodesOfType("RVSourceGroup"):
                 self._stripAutoAudio(sg, filepath)
 
