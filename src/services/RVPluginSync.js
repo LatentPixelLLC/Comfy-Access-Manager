@@ -55,12 +55,19 @@ function buildRvpkg() {
         if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
 
         if (process.platform === 'win32') {
-            // PowerShell Compress-Archive
+            // PowerShell Compress-Archive only supports .zip extension,
+            // so create as .zip then rename to .rvpkg
+            const tmpZip = path.join(tmpDir, 'mediavault-1.0.zip');
+            if (fs.existsSync(tmpZip)) fs.unlinkSync(tmpZip);
             const files = [packageFile, pyFile].map(f => `"${f}"`).join(',');
             execSync(
-                `powershell -NoProfile -Command "Compress-Archive -Path ${files} -DestinationPath '${outPath}' -Force"`,
+                `powershell -NoProfile -Command "Compress-Archive -Path ${files} -DestinationPath '${tmpZip}' -Force"`,
                 { stdio: 'pipe', timeout: 10000 }
             );
+            if (fs.existsSync(tmpZip)) {
+                if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+                fs.renameSync(tmpZip, outPath);
+            }
         } else {
             // Unix zip command — build from within the source dir so paths are relative
             execSync(
