@@ -344,6 +344,34 @@
             </div>
             <div class="settings-grid">
                 <div class="settings-section">
+                    <h3>⚙️ Preferences</h3>
+
+                    <label>Start Tab <span class="help-icon" data-tip="Which tab the app opens to when you first launch it.">?</span></label>
+                    <select id="prefStartTab" class="setting-select" onchange="savePref('start_tab', this.value)">
+                        <option value="projects">📁 Projects</option>
+                        <option value="browser">🔍 Browser</option>
+                        <option value="import">📥 Import</option>
+                        <option value="settings">⚙️ Settings</option>
+                    </select>
+
+                    <label>Default Browser View <span class="help-icon" data-tip="Whether the asset browser defaults to grid (thumbnails) or list (table) view.">?</span></label>
+                    <select id="prefDefaultView" class="setting-select" onchange="savePref('default_view', this.value)">
+                        <option value="grid">🖼️ Grid</option>
+                        <option value="list">📋 List</option>
+                    </select>
+
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer;">
+                        <input type="checkbox" id="prefConfirmDelete" checked onchange="savePref('confirm_delete', this.checked ? 'true' : 'false')">
+                        Confirm before delete <span class="help-icon" data-tip="Show a confirmation dialog before deleting assets, shots, sequences, or projects. Recommended to keep ON.">?</span>
+                    </label>
+
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:6px;cursor:pointer;">
+                        <input type="checkbox" id="prefAutoUpdate" checked onchange="savePref('auto_check_updates', this.checked ? 'true' : 'false')">
+                        Auto-check for updates <span class="help-icon" data-tip="Silently check GitHub for new versions on startup and show a banner if one is available.">?</span>
+                    </label>
+                </div>
+
+                <div class="settings-section">
                     <h3>🗄️ Vault</h3>
                     <label>Vault Root Path <span class="help-icon" data-tip="The root folder where all imported media is stored. Changing this will offer to migrate existing files to the new location.">?</span></label>
                     <div class="input-row">

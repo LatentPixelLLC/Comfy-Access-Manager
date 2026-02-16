@@ -41,7 +41,21 @@ async function checkSetup() {
             loadProjects();
             loadSettings();
             loadRoles();
-            autoCheckForUpdates();  // Silent check — shows notification only if update available
+
+            // Apply start tab preference (default: projects)
+            const startTab = state.settings?.start_tab || 'projects';
+            if (startTab !== 'projects') {
+                switchTab(startTab);
+            }
+
+            // Apply default browser view preference
+            const defaultView = state.settings?.default_view || 'grid';
+            state.viewMode = defaultView;
+
+            // Auto-check for updates (unless disabled in prefs)
+            if (state.settings?.auto_check_updates !== 'false') {
+                autoCheckForUpdates();
+            }
         }
     } catch (err) {
         console.error('Setup check failed:', err);

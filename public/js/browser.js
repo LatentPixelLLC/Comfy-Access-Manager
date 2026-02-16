@@ -14,6 +14,12 @@ import { api } from './api.js';
 import { esc, escAttr, formatSize, formatDuration, formatDate, formatDateTime, typeIcon, showToast, closeModal } from './utils.js';
 import { openPlayer } from './player.js';
 
+/** Check confirm_delete preference — returns true if user confirms (or pref is off) */
+function confirmDelete(msg) {
+    if (state.settings?.confirm_delete === 'false') return true;
+    return confirm(msg);
+}
+
 // ═══════════════════════════════════════════
 //  PROJECTS
 // ═══════════════════════════════════════════
@@ -1037,7 +1043,7 @@ async function bulkDeleteAssets(dbOnly = false) {
         ? `Remove ${count} asset(s) from the database?\n\nFiles will be KEPT on disk.`
         : `DELETE ${count} asset(s)?\n\n⚠️ This will permanently delete the files from disk!\n\nThis cannot be undone.`;
 
-    if (!confirm(msg)) return;
+    if (!confirmDelete(msg)) return;
 
     try {
         const result = await api('/api/assets/bulk-delete', {
@@ -1284,7 +1290,7 @@ function showProjectContextMenu(event) {
 
 async function deleteShot(seqId, shotId, shotName) {
     if (!state.currentProject) return;
-    if (!confirm(`Delete shot "${shotName}"? Assets in this shot will become unassigned (not deleted).`)) return;
+    if (!confirmDelete(`Delete shot "${shotName}"? Assets in this shot will become unassigned (not deleted).`)) return;
     const projectId = state.currentProject.id;
     try {
         await api(`/api/projects/${projectId}/sequences/${seqId}/shots/${shotId}`, { method: 'DELETE' });
@@ -1301,7 +1307,7 @@ async function deleteShot(seqId, shotId, shotName) {
 
 async function deleteSequence(seqId, seqName) {
     if (!state.currentProject) return;
-    if (!confirm(`Delete sequence "${seqName}" and all its shots? Assets will become unassigned (not deleted).`)) return;
+    if (!confirmDelete(`Delete sequence "${seqName}" and all its shots? Assets will become unassigned (not deleted).`)) return;
     const projectId = state.currentProject.id;
     try {
         await api(`/api/projects/${projectId}/sequences/${seqId}`, { method: 'DELETE' });
@@ -1319,7 +1325,7 @@ async function deleteSequence(seqId, seqName) {
 
 async function deleteCurrentProject() {
     if (!state.currentProject) return;
-    if (!confirm(`⚠️ DELETE ENTIRE PROJECT "${state.currentProject.name}"?\n\nThis will delete ALL sequences, shots, and assets!\n\nThis cannot be undone!`)) return;
+    if (!confirmDelete(`⚠️ DELETE ENTIRE PROJECT "${state.currentProject.name}"?\n\nThis will delete ALL sequences, shots, and assets!\n\nThis cannot be undone!`)) return;
 
     try {
         await api(`/api/projects/${state.currentProject.id}`, { method: 'DELETE' });

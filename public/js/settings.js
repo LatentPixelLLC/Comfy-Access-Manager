@@ -72,6 +72,9 @@ export async function loadSettings() {
         // Load shared database config
         loadDbConfig();
 
+        // Load preferences
+        loadPrefs();
+
         // Load GitHub token status
         loadGithubTokenStatus();
     } catch (err) {
@@ -462,6 +465,39 @@ async function deleteRole(id, name) {
         showToast(`Role "${name}" deleted`);
     } catch (err) {
         showToast('Error: ' + err.message, 4000);
+    }
+}
+
+// ═══════════════════════════════════════════
+//  PREFERENCES
+// ═══════════════════════════════════════════
+
+/** Load preferences into the Settings UI */
+function loadPrefs() {
+    const s = state.settings || {};
+    const startTab = document.getElementById('prefStartTab');
+    const defaultView = document.getElementById('prefDefaultView');
+    const confirmDelete = document.getElementById('prefConfirmDelete');
+    const autoUpdate = document.getElementById('prefAutoUpdate');
+
+    if (startTab) startTab.value = s.start_tab || 'projects';
+    if (defaultView) defaultView.value = s.default_view || 'grid';
+    if (confirmDelete) confirmDelete.checked = s.confirm_delete !== 'false';
+    if (autoUpdate) autoUpdate.checked = s.auto_check_updates !== 'false';
+}
+
+/** Save a single preference to the server */
+async function savePref(key, value) {
+    try {
+        await api('/api/settings', {
+            method: 'POST',
+            body: { [key]: value }
+        });
+        // Update local state so other code can read it immediately
+        state.settings[key] = value;
+        showToast('Preference saved', 2000);
+    } catch (err) {
+        showToast('Failed to save preference: ' + err.message, 4000);
     }
 }
 
@@ -1227,3 +1263,4 @@ window.loadDbConfig = loadDbConfig;
 window.saveGithubToken = saveGithubToken;
 window.clearGithubToken = clearGithubToken;
 window.loadGithubTokenStatus = loadGithubTokenStatus;
+window.savePref = savePref;
