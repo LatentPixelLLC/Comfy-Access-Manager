@@ -625,7 +625,6 @@ label {
 }
 .asset-card:hover {
     border-color: var(--accent);
-    transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 .asset-thumb {
@@ -749,7 +748,7 @@ label {
     box-shadow: 0 0 0 2px #4a9eda;
     background: rgba(74, 158, 218, 0.08) !important;
 }
-.asset-card.asset-selected { transform: translateY(-1px); }
+
 .asset-row.asset-selected {
     border-left: 3px solid #4a9eda;
 }
