@@ -1478,8 +1478,38 @@ function launchInRV(exePath, filePaths) {
 
     // Windows/Linux or fallback: launch binary directly
     const args = ['-network', ...filePaths];
-    execFile(exePath, args, { cwd });
-    console.log(`[RV] Launched new session (-network): ${filePaths.length} file(s)`);
+    const { spawn } = require('child_process');
+    console.log(`[RV] Spawning: ${exePath} ${args.join(' ')}`);
+    const child = spawn(exePath, args, {
+        cwd,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: false
+    });
+    let stderrBuf = '';
+    child.stdout.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) console.log(`[RV] stdout: ${msg.substring(0, 300)}`);
+    });
+    child.stderr.on('data', (d) => {
+        stderrBuf += d.toString();
+        if (stderrBuf.length < 2000) return; // batch small writes
+        console.error(`[RV] stderr: ${stderrBuf.substring(0, 500)}`);
+        stderrBuf = '';
+    });
+    child.on('error', (err) => {
+        console.error(`[RV] Spawn error: ${err.message}`);
+    });
+    child.on('exit', (code, signal) => {
+        if (stderrBuf.trim()) console.error(`[RV] stderr: ${stderrBuf.substring(0, 500)}`);
+        if (code !== 0 && code !== null) {
+            console.error(`[RV] Exited with code ${code} signal ${signal}`);
+        } else {
+            console.log(`[RV] Process exited (code=${code})`);
+        }
+    });
+    child.unref();
+    console.log(`[RV] Launched new session (-network): ${filePaths.length} file(s), PID=${child.pid}`);
 }
 
 // POST /api/assets/rv-push — Push files to a running RV session (or start one)
