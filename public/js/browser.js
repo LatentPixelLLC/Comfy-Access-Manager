@@ -711,6 +711,15 @@ async function showContextMenu(event, assetIdx) {
     const asset = state.assets[assetIdx];
     if (!asset) return;
 
+    // macOS: Ctrl+click fires contextmenu instead of click.
+    // Treat it as a multi-select toggle (same as Cmd+click).
+    if (event.ctrlKey && !event.metaKey) {
+        toggleAssetSelection(asset.id);
+        state.lastClickedAsset = assetIdx;
+        renderAssets();
+        return;
+    }
+
     // If right-clicked tile isn't already selected, select only it
     if (!state.selectedAssets.includes(asset.id)) {
         state.selectedAssets = [asset.id];
