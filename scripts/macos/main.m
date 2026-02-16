@@ -1,5 +1,5 @@
 /**
- * Digital Media Vault - Copyright (c) 2026 Greg Tee. All Rights Reserved.
+ * Comfy Asset Manager - Copyright (c) 2026 Greg Tee. All Rights Reserved.
  * Comfy Asset Manager — Native macOS App Launcher
  *
  * This is a lightweight Cocoa wrapper that:

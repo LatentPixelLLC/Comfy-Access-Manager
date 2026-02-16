@@ -1,11 +1,11 @@
 /**
- * Digital Media Vault - Copyright (c) 2026 Greg Tee. All Rights Reserved.
+ * Comfy Asset Manager - Copyright (c) 2026 Greg Tee. All Rights Reserved.
  * This source code is proprietary and confidential. Unauthorized copying,
  * modification, distribution, or use of this file is strictly prohibited.
  * See LICENSE file for details.
  */
 /**
- * Digital Media Vault (DMV) — Main Entry Point
+ * Comfy Asset Manager (CAM) — Main Entry Point
  * Tab switching, initialization, vault setup.
  * All other logic is in feature modules.
  */

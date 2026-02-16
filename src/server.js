@@ -1,12 +1,12 @@
 /**
- * Digital Media Vault - Copyright (c) 2026 Greg Tee. All Rights Reserved.
+ * Comfy Asset Manager - Copyright (c) 2026 Greg Tee. All Rights Reserved.
  * This source code is proprietary and confidential. Unauthorized copying,
  * modification, distribution, or use of this file is strictly prohibited.
  * See LICENSE file for details.
  */
 /**
- * Digital Media Vault (DMV) - Main Server
- * Local Digital Asset Manager for creative production
+ * Comfy Asset Manager (CAM) - Main Server
+ * Local media asset manager for creative production
  * Port: 7700
  */
 
@@ -100,8 +100,8 @@ async function start() {
         console.log('');
         const version = require('../package.json').version;
         console.log('  ╔══════════════════════════════════════════╗');
-        console.log(`  ║   Digital Media Vault (DMV) v${version.padEnd(10)}  ║`);
-        console.log('  ║   Local Digital Asset Manager            ║');
+        console.log(`  ║   Comfy Asset Manager (CAM) v${version.padEnd(10)}  ║`);
+        console.log('  ║   Local Media Asset Manager              ║');
         console.log(`  ║   http://localhost:${PORT}                  ║`);
         console.log('  ╚══════════════════════════════════════════╝');
         console.log('');

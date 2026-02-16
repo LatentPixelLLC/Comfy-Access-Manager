@@ -1,10 +1,10 @@
-# Digital Media Vault - Copyright (c) 2026 Greg Tee. All Rights Reserved.
+# Comfy Asset Manager - Copyright (c) 2026 Greg Tee. All Rights Reserved.
 # This source code is proprietary and confidential. Unauthorized copying,
 # modification, distribution, or use of this file is strictly prohibited.
 # See LICENSE file for details.
 #!/usr/bin/env python3
 """
-Flow Production Tracking (ShotGrid) Bridge for Digital Media Vault
+Flow Production Tracking (ShotGrid) Bridge for Comfy Asset Manager
 Communicates with Flow via shotgun_api3, outputs JSON to stdout for Node.js consumption.
 
 Usage:
@@ -285,7 +285,7 @@ COMMANDS = {
 }
 
 def main():
-    parser = argparse.ArgumentParser(description="Flow Production Tracking Bridge for Digital Media Vault")
+    parser = argparse.ArgumentParser(description="Flow Production Tracking Bridge for Comfy Asset Manager")
     parser.add_argument("command", choices=COMMANDS.keys(), help="Command to execute")
     parser.add_argument("--site", required=True, help="Flow site URL (e.g., https://mysite.shotgrid.autodesk.com)")
     parser.add_argument("--script-name", required=True, help="Flow Script name")

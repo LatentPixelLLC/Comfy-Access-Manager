@@ -1,5 +1,5 @@
 /**
- * Digital Media Vault - Copyright (c) 2026 Greg Tee. All Rights Reserved.
+ * Comfy Asset Manager - Copyright (c) 2026 Greg Tee. All Rights Reserved.
  * This source code is proprietary and confidential. Unauthorized copying,
  * modification, distribution, or use of this file is strictly prohibited.
  * See LICENSE file for details.
@@ -330,7 +330,7 @@ class FlowService {
         const publishParams = {
             project_id: params.flowProjectId,
             code: params.code || asset.vault_name,
-            description: params.description || `Published from Digital Media Vault`,
+            description: params.description || `Published from Comfy Asset Manager`,
             path_to_frames: asset.file_path,
             status: params.status || 'rev',
         };
