@@ -369,6 +369,18 @@
                 </div>
 
                 <div class="settings-section">
+                    <h3>🌐 Shared Database <span class="help-icon" data-tip="Point the database to a shared network folder so multiple machines (PC + Mac) share the same projects, assets, and roles. Each machine sees all entries — files that don't exist locally just show as unavailable.">?</span></h3>
+                    <label>Shared Database Folder <span class="help-icon" data-tip="A folder on a network/NAS drive accessible by all machines. The database file (mediavault.db) will be stored here. Leave empty to use local database only.">?</span></label>
+                    <div class="input-row">
+                        <input type="text" id="settingSharedDbPath" placeholder="Z:\Shared\MediaVault  or  /Volumes/NAS/MediaVault" title="Network folder for shared database">
+                        <button class="btn-browse" onclick="openFolderPicker('settingSharedDbPath')" title="Browse...">📁</button>
+                        <button onclick="saveSharedDbPath()">Save</button>
+                    </div>
+                    <div id="sharedDbStatus" style="margin-top:6px;font-size:0.82rem;"></div>
+                    <p class="hint">Both PC and Mac point here. Assets imported on one machine show on the other. Files that don't exist locally appear as unavailable — that's normal.</p>
+                </div>
+
+                <div class="settings-section">
                     <h3>🎬 External Player</h3>
                     <label>Default Player <span class="help-icon" data-tip="Choose how media files open when clicked. 'Browser' uses the built-in player. RV supports EXR, ProRes, HDR, and professional formats.">?</span></label>
                     <select id="settingDefaultPlayer" class="setting-select" title="Player used when clicking an asset">

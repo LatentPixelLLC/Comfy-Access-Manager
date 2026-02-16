@@ -13,7 +13,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { getAllSettings, setSetting, getSetting, getRecentActivity, getDb, DB_PATH, DATA_DIR, closeDb, initDb } = require('../database');
+const { getAllSettings, setSetting, getSetting, getRecentActivity, getDb, DB_PATH, DATA_DIR, closeDb, initDb, loadConfig, saveConfig, resolveDbPath, reloadFromDisk } = require('../database');
 const multer = require('multer');
 const http = require('http');
 const https = require('https');
@@ -239,6 +239,56 @@ router.post('/migrate-vault', async (req, res) => {
         console.error('Migration error:', err);
         res.status(500).json({ error: `Migration failed: ${err.message}` });
     }
+});
+
+// ═══════════════════════════════════════════
+//  SHARED DATABASE CONFIG
+// ═══════════════════════════════════════════
+
+// GET /api/settings/db-config — Current shared DB configuration
+router.get('/db-config', (req, res) => {
+    const config = loadConfig();
+    const os = require('os');
+    const resolved = resolveDbPath();
+    const isShared = config.shared_db_path && resolved !== path.join(DATA_DIR, 'mediavault.db');
+    let sharedAccessible = false;
+    if (config.shared_db_path) {
+        try { sharedAccessible = fs.existsSync(config.shared_db_path); } catch (_) {}
+    }
+    res.json({
+        shared_db_path: config.shared_db_path || '',
+        active_db_path: resolved,
+        is_shared: isShared,
+        shared_accessible: sharedAccessible,
+        hostname: os.hostname(),
+    });
+});
+
+// POST /api/settings/db-config — Set shared DB path (requires restart)
+router.post('/db-config', (req, res) => {
+    const { shared_db_path } = req.body;
+    const config = loadConfig();
+
+    if (!shared_db_path) {
+        // Clear shared path — revert to local DB
+        delete config.shared_db_path;
+        saveConfig(config);
+        return res.json({ success: true, message: 'Reverted to local database', restart_required: true });
+    }
+
+    // Validate the path exists or can be created
+    try {
+        if (!fs.existsSync(shared_db_path)) {
+            fs.mkdirSync(shared_db_path, { recursive: true });
+        }
+    } catch (e) {
+        return res.status(400).json({ error: `Cannot access or create folder: ${e.message}` });
+    }
+
+    config.shared_db_path = shared_db_path;
+    saveConfig(config);
+
+    res.json({ success: true, message: 'Shared database path saved', restart_required: true });
 });
 
 // ═══════════════════════════════════════════

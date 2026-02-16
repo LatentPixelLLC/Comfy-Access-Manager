@@ -6,6 +6,7 @@ tools/
 
 # Database (user-specific data)
 data/mediavault.db
+data/config.json
 data/uploads/
 data/tmp.txt
 

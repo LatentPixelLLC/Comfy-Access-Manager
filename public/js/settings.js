@@ -67,6 +67,9 @@ export async function loadSettings() {
         if (vaultRoot && status.assets > 0) {
             checkMigrationNeeded(vaultRoot);
         }
+
+        // Load shared database config
+        loadDbConfig();
     } catch (err) {
         console.error('Settings load failed:', err);
     }
@@ -164,6 +167,59 @@ async function migrateVault() {
         statusEl.textContent = `❌ Error: ${err.message}`;
         btn.disabled = false;
         btn.textContent = '📦 Retry Migration';
+    }
+}
+
+// ═══════════════════════════════════════════
+//  SHARED DATABASE
+// ═══════════════════════════════════════════
+
+async function loadDbConfig() {
+    const statusEl = document.getElementById('sharedDbStatus');
+    const input = document.getElementById('settingSharedDbPath');
+    if (!statusEl || !input) return;
+
+    try {
+        const cfg = await api('/api/settings/db-config');
+        input.value = cfg.shared_db_path || '';
+
+        if (cfg.is_shared) {
+            const accessible = cfg.shared_accessible;
+            statusEl.innerHTML = `
+                <span style="color:${accessible ? 'var(--success)' : 'var(--danger)'};">
+                    ${accessible ? '✓ Shared' : '✗ Unreachable'}
+                </span>
+                — <code style="font-size:0.78rem;">${esc(cfg.active_db_path)}</code>
+                <span style="color:var(--text-dim);margin-left:6px;">(${esc(cfg.hostname)})</span>
+            `;
+        } else {
+            statusEl.innerHTML = `<span style="color:var(--text-dim);">Using local database</span>`;
+        }
+    } catch (err) {
+        statusEl.innerHTML = `<span style="color:var(--danger);">Error loading config</span>`;
+    }
+}
+
+async function saveSharedDbPath() {
+    const input = document.getElementById('settingSharedDbPath');
+    const statusEl = document.getElementById('sharedDbStatus');
+    const newPath = input.value.trim();
+
+    statusEl.innerHTML = '<span style="color:var(--text-muted);">Saving...</span>';
+
+    try {
+        const result = await api('/api/settings/db-config', {
+            method: 'POST',
+            body: { shared_db_path: newPath },
+        });
+
+        if (!newPath) {
+            statusEl.innerHTML = '<span style="color:var(--success);">✓ Cleared — using local database. Restart the app to apply.</span>';
+        } else {
+            statusEl.innerHTML = `<span style="color:var(--success);">✓ Saved! Restart the app to switch to shared database.</span>`;
+        }
+    } catch (err) {
+        statusEl.innerHTML = `<span style="color:var(--danger);">Error: ${esc(err.message)}</span>`;
     }
 }
 
@@ -1095,3 +1151,5 @@ window.removePathMapping = removePathMapping;
 window.exportDatabase = exportDatabase;
 window.importDatabase = importDatabase;
 window.pullRemoteDatabase = pullRemoteDatabase;
+window.saveSharedDbPath = saveSharedDbPath;
+window.loadDbConfig = loadDbConfig;

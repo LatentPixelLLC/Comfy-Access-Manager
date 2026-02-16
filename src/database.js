@@ -14,9 +14,55 @@ const path = require('path');
 const fs = require('fs');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DATA_DIR, 'mediavault.db');
+const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+const LOCAL_DB_PATH = path.join(DATA_DIR, 'mediavault.db');
 
-let db = null; // DatabaseWrapper instance
+let dbPath = LOCAL_DB_PATH;   // Active DB path (may point to shared location)
+let db = null;                // DatabaseWrapper instance
+let SQL = null;               // sql.js module ref (for reloads)
+let lastExternalMtime = 0;    // Track external modifications for polling
+let pollTimer = null;         // Polling interval handle
+const POLL_INTERVAL = 5000;   // Check for external changes every 5s
+
+// ─── Local Config (machine-specific, NOT in DB) ───
+
+function loadConfig() {
+    try {
+        if (fs.existsSync(CONFIG_PATH)) {
+            return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        }
+    } catch (e) {
+        console.error('[DB] Failed to read config.json:', e.message);
+    }
+    return {};
+}
+
+function saveConfig(config) {
+    try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    } catch (e) {
+        console.error('[DB] Failed to write config.json:', e.message);
+    }
+}
+
+function resolveDbPath() {
+    const config = loadConfig();
+    if (config.shared_db_path) {
+        const shared = path.join(config.shared_db_path, 'mediavault.db');
+        try {
+            if (!fs.existsSync(config.shared_db_path)) {
+                console.warn(`[DB] Shared path not accessible: ${config.shared_db_path} — falling back to local`);
+                return LOCAL_DB_PATH;
+            }
+            return shared;
+        } catch (e) {
+            console.warn(`[DB] Shared path error: ${e.message} — falling back to local`);
+            return LOCAL_DB_PATH;
+        }
+    }
+    return LOCAL_DB_PATH;
+}
 
 // ─── Compatibility Wrapper ───
 // Provides the same .prepare().run/get/all() API as better-sqlite3
@@ -122,9 +168,11 @@ class DatabaseWrapper {
         try {
             const data = this._rawDb.export();
             const buffer = Buffer.from(data);
-            const tmp = DB_PATH + '.tmp';
+            const tmp = dbPath + '.tmp';
             fs.writeFileSync(tmp, buffer);
-            fs.renameSync(tmp, DB_PATH);
+            fs.renameSync(tmp, dbPath);
+            // Update our own mtime so polling doesn't treat our write as external
+            try { lastExternalMtime = fs.statSync(dbPath).mtimeMs; } catch (_) {}
         } catch (e) {
             console.error('[DB] Save failed:', e.message);
         }
@@ -140,11 +188,22 @@ async function initDb() {
         fs.mkdirSync(DATA_DIR, { recursive: true });
     }
 
-    const SQL = await initSqlJs();
-    let rawDb;
+    SQL = await initSqlJs();
 
-    if (fs.existsSync(DB_PATH)) {
-        const buffer = fs.readFileSync(DB_PATH);
+    // Resolve DB path (local or shared)
+    dbPath = resolveDbPath();
+    const isShared = dbPath !== LOCAL_DB_PATH;
+    console.log(`[DB] Using ${isShared ? 'SHARED' : 'local'} database: ${dbPath}`);
+
+    // If shared path has no DB yet, copy local DB there (first-time share setup)
+    if (isShared && !fs.existsSync(dbPath) && fs.existsSync(LOCAL_DB_PATH)) {
+        console.log('[DB] Copying local database to shared location...');
+        fs.copyFileSync(LOCAL_DB_PATH, dbPath);
+    }
+
+    let rawDb;
+    if (fs.existsSync(dbPath)) {
+        const buffer = fs.readFileSync(dbPath);
         rawDb = new SQL.Database(buffer);
     } else {
         rawDb = new SQL.Database();
@@ -153,7 +212,52 @@ async function initDb() {
     db = new DatabaseWrapper(rawDb);
     db.pragma('foreign_keys = ON');
     runMigrations(db);
+
+    // Track mtime for external change detection
+    try { lastExternalMtime = fs.statSync(dbPath).mtimeMs; } catch (_) {}
+
+    // Start polling for external changes (other machines writing to shared DB)
+    if (isShared) startPolling();
+
     return db;
+}
+
+// ─── External Change Detection (Shared DB Sync) ───
+
+function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => {
+        try {
+            if (!fs.existsSync(dbPath)) return;
+            const stat = fs.statSync(dbPath);
+            if (stat.mtimeMs > lastExternalMtime + 500) {
+                console.log('[DB] External change detected — reloading shared database');
+                reloadFromDisk();
+            }
+        } catch (e) {
+            // Network drive temporarily unavailable — ignore
+        }
+    }, POLL_INTERVAL);
+    pollTimer.unref();  // Don't prevent process exit
+}
+
+function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+function reloadFromDisk() {
+    try {
+        const buffer = fs.readFileSync(dbPath);
+        const rawDb = new SQL.Database(buffer);
+        const oldRaw = db._rawDb;
+        db._rawDb = rawDb;
+        try { oldRaw.close(); } catch (_) {}
+        db.pragma('foreign_keys = ON');
+        lastExternalMtime = fs.statSync(dbPath).mtimeMs;
+        console.log('[DB] Shared database reloaded successfully');
+    } catch (e) {
+        console.error('[DB] Reload failed:', e.message);
+    }
 }
 
 function getDb() {
@@ -428,6 +532,7 @@ function getRecentActivity(limit = 50) {
 // ─── Close gracefully ───
 
 function closeDb() {
+    stopPolling();
     if (db) {
         db.close();
         db = null;
@@ -443,6 +548,12 @@ module.exports = {
     logActivity,
     getRecentActivity,
     closeDb,
-    DB_PATH,
+    loadConfig,
+    saveConfig,
+    resolveDbPath,
+    reloadFromDisk,
+    get dbPath() { return dbPath; },
+    get DB_PATH() { return dbPath; },  // Backward compat
+    CONFIG_PATH,
     DATA_DIR,
 };
