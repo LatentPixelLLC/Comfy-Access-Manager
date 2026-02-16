@@ -1399,6 +1399,10 @@ function rvPush(pushExe, filePaths, mode = 'set') {
  * 2. If RV is not running → launch rv.exe with -network flag (enables rvpush)
  *
  * When RV receives 2+ sources it lets the user pick wipe/tile/sequence from its own UI.
+ *
+ * macOS note: Must use `open -a <bundle>` to properly activate the app window.
+ * Launching the binary directly via execFile works but the window stays hidden
+ * behind other apps because macOS doesn't give it foreground activation.
  */
 function launchInRV(exePath, filePaths) {
     const { execFile } = require('child_process');
@@ -1412,6 +1416,24 @@ function launchInRV(exePath, filePaths) {
     }
 
     // No running RV (or no rvpush) — launch fresh with -network enabled
+    if (process.platform === 'darwin') {
+        // macOS: use `open -a` to properly activate the app window.
+        // Walk up from the binary (Contents/MacOS/RV) to find the .app bundle.
+        let appBundle = null;
+        let dir = exePath;
+        for (let i = 0; i < 5; i++) {
+            dir = path.dirname(dir);
+            if (dir.endsWith('.app')) { appBundle = dir; break; }
+        }
+        if (appBundle) {
+            const args = ['-a', appBundle, '--args', '-network', ...filePaths];
+            execFile('/usr/bin/open', args, { cwd });
+            console.log(`[RV] Launched via 'open -a' (macOS): ${filePaths.length} file(s)`);
+            return;
+        }
+    }
+
+    // Windows/Linux or fallback: launch binary directly
     const args = ['-network', ...filePaths];
     execFile(exePath, args, { cwd });
     console.log(`[RV] Launched new session (-network): ${filePaths.length} file(s)`);
