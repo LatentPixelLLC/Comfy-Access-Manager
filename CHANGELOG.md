@@ -2,6 +2,49 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.2.4] - 2026-02-16
+
+### Added
+- **RV image sequence support** — RV now receives full frame-range notation (`render.1001-1100####.exr`) instead of just the first frame, enabling proper sequence playback in RV/OpenRV
+- `resolveAssetRvPath()` helper builds RV-compatible paths for sequences across rv-push, open-external, and open-review endpoints
+
+## [1.2.3] - 2026-02-16
+
+### Fixed
+- **Eliminated grid flicker on selection** — clicking assets no longer rebuilds the entire DOM; selection now toggles CSS classes on existing elements via `updateSelectionClasses()`
+- Applies to all selection modes: click, Ctrl/Cmd+click, Shift+click, Select All, Clear Selection, right-click, and drag-start
+
+## [1.2.2] - 2026-02-16
+
+### Fixed
+- **Removed card jiggle on click/hover** — removed `translateY(-1px)` transform from `.asset-card:hover` and `.asset-card.asset-selected` that caused a visual pushdown artifact
+
+## [1.2.1] - 2026-02-16
+
+### Fixed
+- **Safari filter dropdown fix** — media type and sequence filter dropdowns now work in Safari; replaced inline `onchange` handlers with `addEventListener` (Safari doesn't reliably fire inline handlers inside `position: sticky` containers)
+
+## [1.2.0] - 2026-02-15
+
+### Added
+- **Database Transfer system** — export, import, and pull database between machines via Settings tab for cross-platform sync (PC ↔ Mac)
+- **Cross-platform path resolver** — NAS path mappings applied to all file-serving endpoints (Windows `Z:\MediaVault` ↔ Mac `/Volumes/home/...`)
+- **Standard asset selection UX** — blue border highlight, click/Ctrl+click/Shift+click multi-select, double-click opens in RV
+- **Native macOS .app bundle** — Cocoa launcher with proper app icon, build script, and installer integration
+- **Network discovery** — UDP broadcast for multi-machine server switching
+- **Smart network drive detection** — Synology NAS, SMB, AFP, NFS mounted volumes
+- **Auto-deploy RV plugin** — server syncs MediaVault RV plugin to RV's Packages directory on startup
+- **One-line Mac installer** — paste a single command into Terminal to install everything
+- **Getting Started visual guide** — HTML install guide for non-technical users
+
+### Fixed
+- **macOS RV window activation** — uses `open -a` to properly bring RV to front on Mac
+- **Ctrl+click multi-select on macOS** — intercepts `contextmenu` event for Ctrl+click so it behaves as toggle-select
+- **Path resolver format** — now handles `{windows,mac,linux}` mapping format from UI
+- **RV plugin registration** — uses `rvpkg` CLI to properly register the plugin
+- **RV plugin deployment** — copies `.py` files to the correct `Python/` directory
+- **Intel RV detection** — detects old Intel RV build and offers native arm64 download
+
 ## [1.1.0] - 2026-02-14
 
 ### Changed
