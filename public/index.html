@@ -143,17 +143,17 @@
 
                 <!-- Filter bar -->
                 <div class="filter-bar">
-                    <select id="filterMediaType" onchange="filterAssets()" title="Filter assets by media type">
+                    <select id="filterMediaType" title="Filter assets by media type">
                         <option value="">All Types</option>
                         <option value="video">🎬 Video</option>
                         <option value="image">🖼️ Image</option>
                         <option value="audio">🔊 Audio</option>
                         <option value="exr">✨ EXR/HDR</option>
                     </select>
-                    <select id="filterSequence" onchange="filterAssets()" style="display:none" title="Filter assets by sequence">
+                    <select id="filterSequence" style="display:none" title="Filter assets by sequence">
                         <option value="">All Sequences</option>
                     </select>
-                    <input type="text" id="searchInput" placeholder="Search assets..." oninput="filterAssets()" title="Search by filename, vault name, or tags">
+                    <input type="text" id="searchInput" placeholder="Search assets..." title="Search by filename, vault name, or tags">
                     <button class="btn-tiny" onclick="refreshAssets()" title="Reload assets from the database">🔄</button>
                     <div class="view-toggle">
                         <button class="active" onclick="setView('grid')" title="Grid view — thumbnails with metadata">▦</button>

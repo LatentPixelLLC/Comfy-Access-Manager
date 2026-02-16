@@ -1633,6 +1633,11 @@ if (_origSwitchTab) {
 //  EXPOSE ON WINDOW (for HTML onclick handlers)
 // ═══════════════════════════════════════════
 
+// ─── Filter bar event listeners (JS-based for Safari compatibility) ───
+document.getElementById('filterMediaType')?.addEventListener('change', filterAssets);
+document.getElementById('filterSequence')?.addEventListener('change', filterAssets);
+document.getElementById('searchInput')?.addEventListener('input', filterAssets);
+
 window.openProject = openProject;
 window.loadProjects = loadProjects;
 window.loadTree = loadTree;
