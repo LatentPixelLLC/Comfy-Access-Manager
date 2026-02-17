@@ -75,6 +75,37 @@ body {
 }
 .vault-path-picker input { flex: 1; }
 
+/* ─── Setup Discovery (connect to remote server) ─── */
+.setup-divider {
+    display: flex; align-items: center; gap: 16px;
+    margin: 28px 0 20px; color: var(--text-dim); font-size: 0.85rem;
+}
+.setup-divider::before, .setup-divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+}
+.setup-discovery { text-align: center; }
+.setup-discovery-status { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 8px; }
+.setup-discovered-servers { display: flex; flex-direction: column; gap: 8px; }
+.setup-server-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; border-radius: 10px;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+    cursor: pointer; transition: all 0.15s; text-align: left;
+}
+.setup-server-card:hover {
+    background: rgba(255,255,255,0.08); border-color: #4a4a4a;
+    transform: translateY(-1px);
+}
+.setup-server-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #4caf50; box-shadow: 0 0 6px rgba(76,175,80,0.5);
+    flex-shrink: 0;
+}
+.setup-server-name { font-weight: 600; font-size: 1rem; color: var(--text); }
+.setup-server-meta { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+.setup-server-arrow { font-size: 1.3rem; color: var(--text-dim); margin-left: auto; }
+.setup-server-card:hover .setup-server-arrow { color: var(--text); }
+
 /* ─── User Picker Overlay ─── */
 .user-picker-card { max-width: 420px; padding: 36px 40px; }
 .user-picker-list {

@@ -1,6 +1,6 @@
 # Comfy Asset Manager (CAM)
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 
@@ -81,6 +81,20 @@ A local media asset manager for creative production — organize, browse, import
 - **3-tier asset resolution**: ComfyUI mapping → exact vault name match → fuzzy search
 - Point CAM at your **ComfyUI output folder** for auto-import of generated files
 - Setup: junction link `custom_nodes\mediavault` → `C:\MediaVault\comfyui`
+
+### User Access Control (v1.3.0)
+- **Multi-user profiles** — each team member picks their name on launch
+- **PIN protection** — optional 4-8 character PIN (SHA-256 hashed) prevents profile impersonation
+- **Blacklist project hiding** — admin can hide specific projects from specific users (users see everything by default)
+- **Admin role** — first user is Admin by default; admins see all projects regardless of hidden settings
+- **Network-friendly** — other machines on the LAN can connect to your server via browser; each person picks their profile
+
+### Network Discovery & Multi-Machine
+- **Automatic server discovery** — fresh installs auto-scan the LAN for existing CAM servers
+- **One-click connect** — found servers appear on the setup screen with a green dot; click to connect
+- **UDP broadcast** on port 7701 — zero-config, zero-dependency discovery protocol
+- **Pull database** from a remote server to sync projects and assets across machines
+- **Path mappings** — map Mac paths (`/Volumes/NAS`) to Windows paths (`Z:\`) for cross-platform asset access
 
 ### Watch Folders
 - Set up **watched directories** that are monitored for new files

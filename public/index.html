@@ -25,6 +25,14 @@
             </div>
             <p class="hint">This folder will contain all your organized projects. Files are moved here when imported.</p>
             <button class="btn-primary" onclick="setupVault()">Create Vault & Get Started</button>
+
+            <div class="setup-divider"><span>or connect to a server</span></div>
+
+            <div id="setupDiscovery" class="setup-discovery">
+                <div id="setupDiscoveryStatus" class="setup-discovery-status">🔍 Scanning your network...</div>
+                <div id="setupDiscoveredServers" class="setup-discovered-servers"></div>
+                <button class="btn-sm" onclick="scanForRemoteServers()" style="margin-top:8px;opacity:0.6;">↻ Rescan</button>
+            </div>
         </div>
     </div>
 

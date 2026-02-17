@@ -180,6 +180,7 @@ async function checkSetup() {
 
         if (!status.vaultConfigured) {
             document.getElementById('setupOverlay').style.display = 'flex';
+            scanForRemoteServers(); // Auto-discover servers on the LAN
         } else {
             document.getElementById('setupOverlay').style.display = 'none';
             loadProjects();
@@ -222,6 +223,44 @@ function switchTab(tab) {
 }
 
 // ═══════════════════════════════════════════
+//  NETWORK DISCOVERY (setup overlay)
+// ═══════════════════════════════════════════
+async function scanForRemoteServers() {
+    const statusEl = document.getElementById('setupDiscoveryStatus');
+    const listEl = document.getElementById('setupDiscoveredServers');
+    if (!statusEl || !listEl) return;
+
+    statusEl.textContent = '🔍 Scanning your network...';
+    statusEl.style.display = 'block';
+    listEl.innerHTML = '';
+
+    try {
+        const data = await api('/api/servers/discover?timeout=3000');
+        const servers = data.servers || [];
+
+        if (servers.length === 0) {
+            statusEl.textContent = 'No servers found on this network';
+            statusEl.style.opacity = '0.5';
+        } else {
+            statusEl.style.display = 'none';
+            listEl.innerHTML = servers.map(s => `
+                <div class="setup-server-card" onclick="window.location.href='${s.url}'">
+                    <div class="setup-server-dot"></div>
+                    <div class="setup-server-info">
+                        <div class="setup-server-name">${s.name || s.hostname}</div>
+                        <div class="setup-server-meta">${s.ip}:${s.port} · ${s.assets} assets</div>
+                    </div>
+                    <div class="setup-server-arrow">→</div>
+                </div>
+            `).join('');
+        }
+    } catch (err) {
+        statusEl.textContent = 'Could not scan network';
+        statusEl.style.opacity = '0.5';
+    }
+}
+
+// ═══════════════════════════════════════════
 //  VAULT SETUP
 // ═══════════════════════════════════════════
 async function setupVault() {
@@ -248,6 +287,7 @@ function browseForVault() {
 window.switchTab = switchTab;
 window.checkSetup = checkSetup;
 window.setupVault = setupVault;
+window.scanForRemoteServers = scanForRemoteServers;
 window.browseForVault = browseForVault;
 window.showUserPicker = showUserPicker;
 window.selectUser = selectUser;
