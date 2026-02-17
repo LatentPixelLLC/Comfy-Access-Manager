@@ -65,6 +65,7 @@ const flowRoutes = require('./routes/flowRoutes');
 const transcodeRoutes = require('./routes/transcodeRoutes');
 const updateRoutes = require('./routes/updateRoutes');
 const serverRoutes = require('./routes/serverRoutes');
+const userRoutes = require('./routes/userRoutes');
 const DiscoveryService = require('./services/DiscoveryService');
 
 app.use('/api/projects', projectRoutes);
@@ -77,6 +78,7 @@ app.use('/api/flow', flowRoutes);
 app.use('/api/transcode', transcodeRoutes);
 app.use('/api/update', updateRoutes);
 app.use('/api/servers', serverRoutes);
+app.use('/api/users', userRoutes);
 
 // ─── SPA fallback ───
 app.get('*', (req, res) => {

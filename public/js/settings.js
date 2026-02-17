@@ -75,6 +75,9 @@ export async function loadSettings() {
         // Load preferences
         loadPrefs();
 
+        // Load team users
+        loadTeamSettings();
+
         // Load GitHub token status
         loadGithubTokenStatus();
     } catch (err) {
@@ -1222,6 +1225,143 @@ setTimeout(() => {
 }, 1000);
 
 // ═══════════════════════════════════════════
+//  TEAM MANAGEMENT
+// ═══════════════════════════════════════════
+
+export async function loadTeamSettings() {
+    const container = document.getElementById('teamUserList');
+    if (!container) return;
+    try {
+        const users = await api('/api/users');
+        if (users.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem;">No users yet.</div>';
+            return;
+        }
+        container.innerHTML = users.map(u => `
+            <div class="team-user-row" style="border-left: 3px solid ${u.color || '#888'}">
+                <span class="team-user-avatar">${u.avatar || '👤'}</span>
+                <span class="team-user-name">${esc(u.name)}</span>
+                ${u.has_pin ? '<span class="team-pin-badge" title="PIN protected">🔒</span>' : ''}
+                ${u.is_admin ? '<span class="team-badge-admin">Admin</span>' : '<span class="team-badge-user">User</span>'}
+                <div class="team-user-actions">
+                    <button class="btn-xs" onclick="showSetPinModal(${u.id}, '${escAttr(u.name)}', ${!!u.has_pin})" title="${u.has_pin ? 'Change PIN' : 'Set PIN'}">${u.has_pin ? '🔒' : '🔓'}</button>
+                    ${u.is_admin ? '' : `<button class="btn-xs" onclick="toggleUserAdmin(${u.id}, true)" title="Promote to admin">⬆ Admin</button>`}
+                    ${u.is_admin ? `<button class="btn-xs" onclick="toggleUserAdmin(${u.id}, false)" title="Demote to regular user">⬇ User</button>` : ''}
+                    <button class="btn-xs btn-danger-xs" onclick="deleteTeamUser(${u.id}, '${escAttr(u.name)}')" title="Delete user">✕</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        container.innerHTML = `<div style="color:var(--danger);font-size:0.82rem;">Error loading users: ${err.message}</div>`;
+    }
+}
+
+async function addTeamUser() {
+    const nameInput = document.getElementById('teamNewUserName');
+    const avatarSelect = document.getElementById('teamNewUserAvatar');
+    const colorInput = document.getElementById('teamNewUserColor');
+    const name = nameInput?.value.trim();
+    if (!name) return showToast('Enter a name', 'error');
+
+    try {
+        await api('/api/users', {
+            method: 'POST',
+            body: { name, avatar: avatarSelect?.value || '👤', color: colorInput?.value || '#888888', is_admin: 0 }
+        });
+        nameInput.value = '';
+        showToast(`User "${name}" created`, 'success');
+        await loadTeamSettings();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function toggleUserAdmin(userId, makeAdmin) {
+    try {
+        await api(`/api/users/${userId}`, { method: 'PUT', body: { is_admin: makeAdmin ? 1 : 0 } });
+        showToast(makeAdmin ? 'Promoted to admin' : 'Changed to regular user', 'success');
+        await loadTeamSettings();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function deleteTeamUser(userId, userName) {
+    if (!confirm(`Delete user "${userName}"? Their hidden-project entries will be removed.`)) return;
+    try {
+        await api(`/api/users/${userId}`, { method: 'DELETE' });
+        showToast(`User "${userName}" deleted`, 'success');
+        // If we just deleted the current user, show picker
+        if (localStorage.getItem('cam_user_id') === String(userId)) {
+            localStorage.removeItem('cam_user_id');
+            window.showUserPicker();
+        }
+        await loadTeamSettings();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+/** Show modal to set or change a user's PIN */
+function showSetPinModal(userId, userName, hasPin) {
+    const modal = document.getElementById('modal');
+    const content = document.getElementById('modalContent');
+    if (!modal || !content) return;
+
+    content.innerHTML = `
+        <h2 style="margin:0 0 8px;">${hasPin ? '🔒 Change PIN' : '🔓 Set PIN'}</h2>
+        <p style="opacity:0.6;font-size:0.85rem;margin:0 0 16px;">
+            ${hasPin ? `Change or remove the PIN for <strong>${userName}</strong>.` : `Set a PIN on <strong>${userName}</strong>'s profile to prevent impersonation.`}
+        </p>
+        <label style="font-size:0.82rem;opacity:0.8;">New PIN (4–8 characters)</label>
+        <input type="password" id="setPinInput" maxlength="8" placeholder="••••"
+               style="width:100%;margin:6px 0 12px;"
+               onkeydown="if(event.key==='Enter')saveUserPin(${userId});"
+               onpointerdown="event.stopPropagation();">
+        <div id="setPinError" style="color:#ff5252;font-size:0.82rem;margin-bottom:8px;display:none;"></div>
+        <div class="form-actions">
+            ${hasPin ? `<button class="btn-cancel" onclick="removeUserPin(${userId})" style="margin-right:auto;">Remove PIN</button>` : '<span></span>'}
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" onclick="saveUserPin(${userId})">💾 Save PIN</button>
+        </div>
+    `;
+    modal.style.display = 'flex';
+    setTimeout(() => document.getElementById('setPinInput')?.focus(), 100);
+}
+
+async function saveUserPin(userId) {
+    const input = document.getElementById('setPinInput');
+    const err = document.getElementById('setPinError');
+    const pin = input?.value;
+
+    if (!pin || pin.length < 4) {
+        if (err) { err.textContent = 'PIN must be at least 4 characters'; err.style.display = 'block'; }
+        return;
+    }
+
+    try {
+        await api(`/api/users/${userId}/pin`, { method: 'PUT', body: { pin } });
+        closeModal();
+        showToast('PIN saved', 'success');
+        await loadTeamSettings();
+    } catch (e) {
+        if (err) { err.textContent = e.message || 'Failed to save PIN'; err.style.display = 'block'; }
+    }
+}
+
+async function removeUserPin(userId) {
+    if (!confirm('Remove PIN? This profile will no longer require a PIN to sign in.')) return;
+    try {
+        await api(`/api/users/${userId}/pin`, { method: 'PUT', body: { pin: null } });
+        closeModal();
+        showToast('PIN removed', 'success');
+        await loadTeamSettings();
+    } catch (e) {
+        showToast(e.message || 'Failed to remove PIN', 'error');
+    }
+}
+
+// ═══════════════════════════════════════════
 //  EXPOSE ON WINDOW (for HTML onclick handlers)
 // ═══════════════════════════════════════════
 
@@ -1264,3 +1404,10 @@ window.saveGithubToken = saveGithubToken;
 window.clearGithubToken = clearGithubToken;
 window.loadGithubTokenStatus = loadGithubTokenStatus;
 window.savePref = savePref;
+window.addTeamUser = addTeamUser;
+window.toggleUserAdmin = toggleUserAdmin;
+window.deleteTeamUser = deleteTeamUser;
+window.loadTeamSettings = loadTeamSettings;
+window.showSetPinModal = showSetPinModal;
+window.saveUserPin = saveUserPin;
+window.removeUserPin = removeUserPin;

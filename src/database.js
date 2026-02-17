@@ -463,6 +463,9 @@ function runMigrations(wrapper) {
         if (!projCols.includes('episode')) {
             wrapper.exec("ALTER TABLE projects ADD COLUMN episode TEXT DEFAULT ''");
         }
+        if (!projCols.includes('archived')) {
+            wrapper.exec("ALTER TABLE projects ADD COLUMN archived INTEGER DEFAULT 0");
+        }
     } catch (_) { /* column already exists */ }
 
     // ─── Seed default roles if roles table is empty ───
@@ -483,6 +486,46 @@ function runMigrations(wrapper) {
             for (const r of roles) insertRole.run(...r);
         });
         seedRoles(defaultRoles);
+    }
+
+    // ─── Users + Project Hidden tables (access control — blacklist model) ───
+    wrapper.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            is_admin INTEGER DEFAULT 0,
+            pin_hash TEXT DEFAULT NULL,
+            color TEXT DEFAULT '#888888',
+            avatar TEXT DEFAULT '👤',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS project_hidden (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            UNIQUE(user_id, project_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_project_hidden_user ON project_hidden(user_id);
+        CREATE INDEX IF NOT EXISTS idx_project_hidden_project ON project_hidden(project_id);
+    `);
+
+    // Migration: add pin_hash column if missing (for existing DBs)
+    try {
+        wrapper.prepare('SELECT pin_hash FROM users LIMIT 1').get();
+    } catch (_) {
+        try { wrapper.exec('ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT NULL'); } catch (_2) {}
+    }
+
+    // Migration: drop old whitelist table if it exists (pre-v1.3.0)
+    try { wrapper.exec('DROP TABLE IF EXISTS project_access'); } catch (_) {}
+
+    // Seed default Admin user if users table is empty
+    const userCount = wrapper.prepare('SELECT COUNT(*) as count FROM users').get();
+    if (userCount.count === 0) {
+        wrapper.prepare('INSERT INTO users (name, is_admin, color, avatar) VALUES (?, ?, ?, ?)')
+            .run('Admin', 1, '#4fc3f7', '👑');
     }
 
     // Seed defaults if settings table is empty

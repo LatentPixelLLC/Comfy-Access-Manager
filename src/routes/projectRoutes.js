@@ -14,20 +14,68 @@ const router = express.Router();
 const { getDb, logActivity } = require('../database');
 const FileService = require('../services/FileService');
 
+/**
+ * Resolve user access from X-CAM-User header.
+ * Blacklist model: users see everything EXCEPT hidden projects.
+ * Returns { userId, isAdmin, hiddenIds } where hiddenIds is:
+ *   - null → no user header → block everything
+ *   - 'all' → admin → no filtering (sees everything)
+ *   - Set<number> → project IDs to EXCLUDE
+ */
+function resolveUserAccess(req) {
+    const userId = parseInt(req.headers['x-cam-user'], 10);
+    if (!userId || isNaN(userId)) return { userId: null, isAdmin: false, hiddenIds: null };
+
+    const db = getDb();
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!user) return { userId: null, isAdmin: false, hiddenIds: null };
+
+    if (user.is_admin) return { userId: user.id, isAdmin: true, hiddenIds: 'all' };
+
+    const rows = db.prepare('SELECT project_id FROM project_hidden WHERE user_id = ?').all(user.id);
+    const ids = new Set(rows.map(r => r.project_id));
+    return { userId: user.id, isAdmin: false, hiddenIds: ids };
+}
+
 // ═══════════════════════════════════════════
 //  PROJECTS
 // ═══════════════════════════════════════════
 
-// GET /api/projects — List all projects
+// GET /api/projects — List all projects (blacklist: hide specific projects per user)
 router.get('/', (req, res) => {
+    const { hiddenIds } = resolveUserAccess(req);
+
+    // No user → empty list (enforced)
+    if (hiddenIds === null) return res.json([]);
+
     const db = getDb();
-    const projects = db.prepare(`
-        SELECT p.*,
-            (SELECT COUNT(*) FROM assets a WHERE a.project_id = p.id) as asset_count,
-            (SELECT COUNT(*) FROM sequences s WHERE s.project_id = p.id) as sequence_count
-        FROM projects p
-        ORDER BY p.updated_at DESC
-    `).all();
+    const includeArchived = req.query.include_archived === '1';
+
+    let projects;
+    if (hiddenIds === 'all' || hiddenIds.size === 0) {
+        // Admin or user with nothing hidden — show all
+        projects = db.prepare(`
+            SELECT p.*,
+                (SELECT COUNT(*) FROM assets a WHERE a.project_id = p.id) as asset_count,
+                (SELECT COUNT(*) FROM sequences s WHERE s.project_id = p.id) as sequence_count
+            FROM projects p
+            ${includeArchived ? '' : 'WHERE COALESCE(p.archived, 0) = 0'}
+            ORDER BY p.updated_at DESC
+        `).all();
+    } else {
+        // Regular user — show all EXCEPT hidden
+        const hiddenList = [...hiddenIds];
+        const placeholders = hiddenList.map(() => '?').join(',');
+        const archiveClause = includeArchived ? '' : 'AND COALESCE(p.archived, 0) = 0';
+        projects = db.prepare(`
+            SELECT p.*,
+                (SELECT COUNT(*) FROM assets a WHERE a.project_id = p.id) as asset_count,
+                (SELECT COUNT(*) FROM sequences s WHERE s.project_id = p.id) as sequence_count
+            FROM projects p
+            WHERE p.id NOT IN (${placeholders}) ${archiveClause}
+            ORDER BY p.updated_at DESC
+        `).all(...hiddenList);
+    }
 
     // Parse naming_convention JSON for each project
     for (const p of projects) {
@@ -39,14 +87,35 @@ router.get('/', (req, res) => {
     res.json(projects);
 });
 
-// GET /api/projects/tree — Full tree: projects → sequences → shots → roles (with asset counts)
+// GET /api/projects/tree — Full tree (blacklist model)
 router.get('/tree', (req, res) => {
+    const { hiddenIds } = resolveUserAccess(req);
+    if (hiddenIds === null) return res.json([]);
+
     const db = getDb();
-    const projects = db.prepare(`
-        SELECT p.id, p.name, p.code, p.type,
-            (SELECT COUNT(*) FROM assets a WHERE a.project_id = p.id) as asset_count
-        FROM projects p ORDER BY p.name
-    `).all();
+    const includeArchived = req.query.include_archived === '1';
+
+    let projects;
+    if (hiddenIds === 'all' || hiddenIds.size === 0) {
+        projects = db.prepare(`
+            SELECT p.id, p.name, p.code, p.type, COALESCE(p.archived, 0) as archived,
+                (SELECT COUNT(*) FROM assets a WHERE a.project_id = p.id) as asset_count
+            FROM projects p
+            ${includeArchived ? '' : 'WHERE COALESCE(p.archived, 0) = 0'}
+            ORDER BY p.name
+        `).all();
+    } else {
+        const hiddenList = [...hiddenIds];
+        const placeholders = hiddenList.map(() => '?').join(',');
+        const archiveClause = includeArchived ? '' : 'AND COALESCE(p.archived, 0) = 0';
+        projects = db.prepare(`
+            SELECT p.id, p.name, p.code, p.type, COALESCE(p.archived, 0) as archived,
+                (SELECT COUNT(*) FROM assets a WHERE a.project_id = p.id) as asset_count
+            FROM projects p
+            WHERE p.id NOT IN (${placeholders}) ${archiveClause}
+            ORDER BY p.name
+        `).all(...hiddenList);
+    }
 
     const sequences = db.prepare(`
         SELECT s.id, s.project_id, s.name, s.code,
@@ -86,11 +155,19 @@ router.get('/tree', (req, res) => {
     res.json(tree);
 });
 
-// GET /api/projects/:id — Get single project with sequences/shots
+// GET /api/projects/:id — Get single project (access-checked, blacklist)
 router.get('/:id', (req, res) => {
+    const { hiddenIds } = resolveUserAccess(req);
+    if (hiddenIds === null) return res.status(403).json({ error: 'No user selected' });
+
     const db = getDb();
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Non-admin: check if project is hidden from this user
+    if (hiddenIds !== 'all' && hiddenIds.has(project.id)) {
+        return res.status(403).json({ error: 'Access denied' });
+    }
 
     const sequences = db.prepare(`
         SELECT s.*,
@@ -224,6 +301,19 @@ router.put('/:id/naming-convention', (req, res) => {
 
     logActivity('naming_convention_updated', 'project', project.id, { tokens: convention?.length || 0 });
     res.json({ success: true, convention });
+});
+
+// PUT /api/projects/:id/archive — Toggle archive status
+router.put('/:id/archive', (req, res) => {
+    const db = getDb();
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const newArchived = project.archived ? 0 : 1;
+    db.prepare('UPDATE projects SET archived = ?, updated_at = datetime(\'now\') WHERE id = ?').run(newArchived, project.id);
+
+    logActivity(newArchived ? 'project_archived' : 'project_unarchived', 'project', project.id, { name: project.name });
+    res.json({ success: true, archived: newArchived });
 });
 
 // DELETE /api/projects/:id — Delete project and all assets

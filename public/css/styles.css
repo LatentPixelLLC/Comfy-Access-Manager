@@ -75,6 +75,101 @@ body {
 }
 .vault-path-picker input { flex: 1; }
 
+/* ─── User Picker Overlay ─── */
+.user-picker-card { max-width: 420px; padding: 36px 40px; }
+.user-picker-list {
+    display: flex; flex-direction: column; gap: 8px;
+    margin-top: 16px; max-height: 320px; overflow-y: auto;
+}
+.user-picker-btn {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg-dark); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px;
+    cursor: pointer; font-size: 0.95rem; color: var(--text);
+    transition: background 0.15s, border-color 0.15s;
+    text-align: left; width: 100%;
+}
+.user-picker-btn:hover { background: #2a2a2a; border-color: #555; }
+.user-picker-avatar { font-size: 1.5rem; }
+.user-picker-name { flex: 1; font-weight: 500; }
+.user-picker-badge {
+    font-size: 0.7rem; background: #4fc3f7; color: #000;
+    padding: 2px 8px; border-radius: 4px; font-weight: 600;
+}
+.user-picker-lock {
+    font-size: 0.85rem; opacity: 0.6;
+}
+
+/* ─── PIN Prompt (in User Picker) ─── */
+.pin-prompt-row {
+    display: flex; flex-direction: column; gap: 6px;
+    margin-top: 12px; padding: 12px 16px;
+    background: var(--bg-dark); border: 1px solid var(--border);
+    border-radius: 8px;
+}
+.pin-label { font-size: 0.85rem; font-weight: 500; }
+.pin-input-group { display: flex; gap: 6px; align-items: center; }
+.pin-input {
+    flex: 1; font-size: 1.2rem; letter-spacing: 4px; text-align: center;
+    padding: 6px 10px; background: #1a1a1a; border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text);
+}
+.pin-input:focus { border-color: #666; outline: none; }
+.pin-submit-btn { font-size: 1rem; padding: 4px 12px; }
+.pin-cancel-btn { font-size: 0.9rem; padding: 4px 8px; opacity: 0.6; }
+.pin-error { color: #ff5252; font-size: 0.82rem; margin-top: 2px; }
+
+/* ─── Team PIN Badge ─── */
+.team-pin-badge { font-size: 0.75rem; opacity: 0.6; }
+
+/* ─── Top Bar User Indicator ─── */
+.topbar-user-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg-dark); border: 1px solid var(--border);
+    border-left: 3px solid #888; border-radius: 6px;
+    padding: 4px 12px 4px 10px; cursor: pointer;
+    color: var(--text); font-size: 0.82rem;
+    transition: background 0.15s, border-color 0.15s;
+}
+.topbar-user-btn:hover { background: #2a2a2a; border-color: #555; }
+#userAvatar { font-size: 1rem; }
+#userName { font-weight: 500; }
+
+/* ─── Team Settings ─── */
+.team-user-list { display: flex; flex-direction: column; gap: 4px; }
+.team-user-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px; background: var(--bg-dark);
+    border-radius: 6px; font-size: 0.85rem;
+}
+.team-user-avatar { font-size: 1.1rem; }
+.team-user-name { flex: 1; font-weight: 500; }
+.team-badge-admin {
+    font-size: 0.68rem; background: #4fc3f7; color: #000;
+    padding: 1px 6px; border-radius: 3px; font-weight: 600;
+}
+.team-badge-user {
+    font-size: 0.68rem; background: #555; color: #ccc;
+    padding: 1px 6px; border-radius: 3px; font-weight: 600;
+}
+.team-user-actions { display: flex; gap: 4px; }
+.team-add-row { display: flex; gap: 6px; align-items: center; }
+.btn-danger-xs { color: #ff5252 !important; }
+.btn-danger-xs:hover { background: rgba(255,82,82,0.15) !important; }
+
+/* ─── Edit Project — Team Access ─── */
+.ep-team-checkboxes {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 200px; overflow-y: auto;
+}
+.ep-team-check {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; background: var(--bg-dark);
+    border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+}
+.ep-team-check:hover { background: #2a2a2a; }
+.ep-team-check input[type="checkbox"] { margin: 0; cursor: pointer; }
+
 /* ─── Top Bar ─── */
 #topBar {
     display: flex; align-items: center; justify-content: space-between;
@@ -301,6 +396,30 @@ label {
 }
 .project-card .card-type {
     position: absolute; top: 12px; right: 12px;
+}
+
+/* ── Archived project cards ── */
+.project-card.project-archived {
+    opacity: 0.5;
+    filter: grayscale(40%);
+    border-style: dashed;
+}
+.project-card.project-archived:hover {
+    opacity: 0.75;
+}
+.archived-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(255,255,255,0.12);
+    color: var(--text-muted);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    z-index: 1;
 }
 
 /* ── Project Card Edit Button ── */

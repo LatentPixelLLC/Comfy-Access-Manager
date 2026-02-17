@@ -28,6 +28,31 @@
         </div>
     </div>
 
+    <!-- ═══ USER PICKER OVERLAY (who's using this machine?) ═══ -->
+    <div id="userPickerOverlay" class="overlay" style="display:none;">
+        <div class="setup-card user-picker-card">
+            <h1>👤 Who's Using CAM?</h1>
+            <p class="subtitle">Select your profile to continue</p>
+            <div id="userPickerList" class="user-picker-list">
+                <!-- Populated by JS -->
+            </div>
+            <div id="pinPromptRow" class="pin-prompt-row" style="display:none;">
+                <label class="pin-label">🔐 Enter PIN</label>
+                <div class="pin-input-group">
+                    <input type="password" id="pinInput" class="pin-input" maxlength="8" placeholder="••••"
+                           onkeydown="if(event.key==='Enter')submitPin(); if(event.key==='Escape')hidePinPrompt();"
+                           onpointerdown="event.stopPropagation();">
+                    <button class="btn-sm pin-submit-btn" onclick="submitPin()">→</button>
+                    <button class="btn-sm pin-cancel-btn" onclick="hidePinPrompt()">✕</button>
+                </div>
+                <div id="pinError" class="pin-error" style="display:none;"></div>
+            </div>
+            <p class="hint" style="margin-top:12px;font-size:0.78rem;opacity:0.5;">
+                Your selection is remembered on this machine. Admins can manage users in Settings → Team.
+            </p>
+        </div>
+    </div>
+
     <!-- ═══ TOP BAR ═══ -->
     <header id="topBar">
         <div class="topbar-left">
@@ -40,6 +65,10 @@
             </nav>
         </div>
         <div class="topbar-right">
+            <button id="userIndicator" class="topbar-user-btn" onclick="showUserPicker()" title="Switch user">
+                <span id="userAvatar">👤</span>
+                <span id="userName">No User</span>
+            </button>
             <button id="networkBtn" class="topbar-icon-btn" onclick="toggleServerPanel()" title="Network — find other MediaVault instances">
                 🖧
             </button>
@@ -132,6 +161,7 @@
                     <div class="project-actions">
                         <button class="btn-sm" onclick="showAddSequenceModal()">+ Sequence</button>
                         <button class="btn-sm" onclick="importToProject()">📥 Import Files</button>
+                        <button class="btn-sm btn-subtle" onclick="archiveCurrentProject()" title="Archive this project (hides from view, doesn't delete)">📦 Archive</button>
                         <button class="btn-sm btn-subtle" onclick="deleteCurrentProject()" title="Right-click project in tree for more options">🗑️ Delete Project</button>
                     </div>
                 </div>
@@ -390,7 +420,30 @@
                 </div>
 
                 <div class="settings-section">
-                    <h3>🗄️ Vault</h3>
+                    <h3>� Team <span class="help-icon" data-tip="Manage who can access this CAM instance. Admins see all projects. Regular users see everything by default — admins can hide specific projects via Edit Project. Set a PIN to prevent profile impersonation.">?</span></h3>
+                    <div id="teamUserList" class="team-user-list">
+                        <!-- Populated by loadTeamSettings() -->
+                    </div>
+                    <div class="team-add-row" style="margin-top:8px;">
+                        <input type="text" id="teamNewUserName" placeholder="New user name..." style="flex:1;">
+                        <select id="teamNewUserAvatar" style="width:50px;text-align:center;">
+                            <option value="👤">👤</option>
+                            <option value="👩">👩</option>
+                            <option value="👨">👨</option>
+                            <option value="🧑‍🎨">🧑‍🎨</option>
+                            <option value="🧑‍💻">🧑‍💻</option>
+                            <option value="🎬">🎬</option>
+                            <option value="🎨">🎨</option>
+                            <option value="📷">📷</option>
+                        </select>
+                        <input type="color" id="teamNewUserColor" value="#888888" style="width:36px;height:30px;padding:0;border:none;cursor:pointer;" title="User color">
+                        <button class="btn-sm" onclick="addTeamUser()">+ Add User</button>
+                    </div>
+                    <p class="hint">Users see all projects by default. Use Edit Project → Hide from Users to restrict visibility. Set a PIN on accounts to prevent impersonation.</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>�🗄️ Vault</h3>
                     <label>Vault Root Path <span class="help-icon" data-tip="The root folder where all imported media is stored. Changing this will offer to migrate existing files to the new location.">?</span></label>
                     <div class="input-row">
                         <input type="text" id="settingVaultRoot" placeholder="C:\MediaVault">

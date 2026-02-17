@@ -24,9 +24,13 @@ import { esc, escAttr, formatSize, showToast } from './utils.js';
 async function importWithProgress(body, progressFill, progressText) {
     return new Promise(async (resolve, reject) => {
         try {
+            const userId = localStorage.getItem('cam_user_id');
             const response = await fetch('/api/assets/import?stream=1', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(userId ? { 'X-CAM-User': userId } : {}),
+                },
                 body: JSON.stringify(body),
             });
 

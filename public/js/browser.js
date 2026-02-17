@@ -25,9 +25,11 @@ function confirmDelete(msg) {
 //  PROJECTS
 // ═══════════════════════════════════════════
 
+let showArchived = false;
+
 export async function loadProjects() {
     try {
-        state.projects = await api('/api/projects');
+        state.projects = await api(`/api/projects${showArchived ? '?include_archived=1' : ''}`);
         renderProjectGrid();
     } catch (err) {
         console.error('Failed to load projects:', err);
@@ -37,19 +39,50 @@ export async function loadProjects() {
 function renderProjectGrid() {
     const grid = document.getElementById('projectGrid');
 
-    if (state.projects.length === 0) {
+    if (state.projects.length === 0 || (!showArchived && state.projects.every(p => p.archived))) {
+        const allArchived = state.projects.length > 0;
         grid.innerHTML = `
             <div class="empty-state" style="grid-column: 1/-1;">
-                <div class="empty-icon">📁</div>
-                <p>No projects yet. Create your first project to start organizing media.</p>
+                <div class="empty-icon">${allArchived ? '📦' : '📁'}</div>
+                <p>${allArchived ? 'All projects are archived.' : 'No projects yet. Create your first project to start organizing media.'}</p>
+                ${allArchived ? '<button class="btn-sm" onclick="toggleShowArchived(true)" style="margin-top:8px;">Show Archived</button>' : ''}
             </div>
         `;
         return;
     }
 
-    grid.innerHTML = state.projects.map(p => `
-        <div class="project-card fade-in" onclick="openProject(${p.id})">
+    // Separate active and archived
+    const active = state.projects.filter(p => !p.archived);
+    const archived = state.projects.filter(p => p.archived);
+
+    let html = '';
+
+    // Archive toggle
+    const archivedCount = showArchived ? archived.length : 0;
+    html += `<div class="archive-toggle-bar" style="grid-column:1/-1;display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.8rem;color:var(--text-muted);">
+            <input type="checkbox" ${showArchived ? 'checked' : ''} onchange="toggleShowArchived(this.checked)" style="cursor:pointer;">
+            📦 Show Archived${showArchived ? ` (${archived.length})` : ''}
+        </label>
+    </div>`;
+
+    html += active.map(p => renderProjectCard(p, false)).join('');
+
+    if (showArchived && archived.length > 0) {
+        html += `<div style="grid-column:1/-1;border-top:1px solid var(--border);margin:12px 0 4px;padding-top:8px;">
+            <span style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">📦 Archived</span>
+        </div>`;
+        html += archived.map(p => renderProjectCard(p, true)).join('');
+    }
+
+    grid.innerHTML = html;
+}
+
+function renderProjectCard(p, isArchived) {
+    return `
+        <div class="project-card fade-in${isArchived ? ' project-archived' : ''}" onclick="openProject(${p.id})">
             <div class="card-icon">${p.type === 'shot_based' ? '🎬' : '📁'}</div>
+            ${isArchived ? '<span class="archived-badge">ARCHIVED</span>' : ''}
             <h3>${esc(p.name)}</h3>
             <span class="card-type badge badge-dim">${p.code}</span>
             <div class="card-meta">
@@ -58,7 +91,7 @@ function renderProjectGrid() {
                 <button class="card-edit-btn" onclick="event.stopPropagation(); showEditProjectModal(${p.id})" title="Edit project settings, sequences, and naming convention">✏️ Edit</button>
             </div>
         </div>
-    `).join('');
+    `;
 }
 
 function showCreateProjectModal() {
@@ -256,6 +289,16 @@ async function showEditProjectModal(projectId) {
 
         <div id="editShotBuilderContainer"></div>
 
+        <div class="ep-section" id="epTeamAccessSection" style="display:none;">
+            <div class="ep-section-hdr">
+                <span>� Hide from Users</span>
+                <span style="font-size:0.75rem;color:var(--text-muted);">Checked users will NOT see this project</span>
+            </div>
+            <div id="epTeamCheckboxes" class="ep-team-checkboxes">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
         <div class="form-actions">
             <button class="btn-cancel" onclick="closeModal()">Cancel</button>
             <button class="btn-primary" id="saveEditProjectBtn">💾 Save</button>
@@ -283,6 +326,45 @@ async function showEditProjectModal(projectId) {
     document.getElementById('editProjectEpisode').addEventListener('input', () => {
         window._sbSetEpisode(document.getElementById('editProjectEpisode').value.trim());
     });
+
+    // Populate "Hide from Users" checkboxes (admin only)
+    const currentUser = JSON.parse(localStorage.getItem('cam_current_user') || 'null') || state.currentUser;
+    const isCurrentAdmin = currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+    if (isCurrentAdmin || state.currentUser?.is_admin) {
+        const teamSection = document.getElementById('epTeamAccessSection');
+        const teamContainer = document.getElementById('epTeamCheckboxes');
+        if (teamSection && teamContainer) {
+            teamSection.style.display = 'block';
+            try {
+                const allUsers = await fetch('/api/users').then(r => r.json());
+                const hiddenResp = await fetch(`/api/users/project/${proj.id}/hidden`).then(r => r.json());
+                const hiddenIds = new Set(hiddenResp.map(u => u.id));
+                const nonAdmins = allUsers.filter(u => !u.is_admin);
+
+                if (nonAdmins.length === 0) {
+                    teamContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem;">No non-admin users. Create users in Settings → Team first.</div>';
+                } else {
+                    teamContainer.innerHTML = nonAdmins.map(u => `
+                        <label class="ep-team-check" style="border-left: 3px solid ${u.color || '#888'}">
+                            <input type="checkbox" data-user-id="${u.id}" ${hiddenIds.has(u.id) ? 'checked' : ''}>
+                            <span>${u.avatar || '👤'}</span>
+                            <span>${esc(u.name)}</span>
+                            <span style="font-size:0.72rem;color:var(--text-muted);margin-left:auto;">${hiddenIds.has(u.id) ? '🚫 hidden' : '✓ visible'}</span>
+                        </label>
+                    `).join('');
+                    // Live-update hint text when checkboxes change
+                    teamContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                        cb.addEventListener('change', () => {
+                            const hint = cb.closest('.ep-team-check').querySelector('span:last-child');
+                            if (hint) hint.textContent = cb.checked ? '🚫 hidden' : '✓ visible';
+                        });
+                    });
+                }
+            } catch (err) {
+                teamContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.82rem;">Could not load team data.</div>';
+            }
+        }
+    }
 
     // Wire up all "+ Shot" buttons
     document.querySelectorAll('.ep-add-shot-btn').forEach(btn => {
@@ -346,6 +428,20 @@ async function showEditProjectModal(projectId) {
                 method: 'PUT',
                 body: { name, description, episode, naming_convention: convention }
             });
+
+            // Save hidden-from users (checked = user CANNOT see this project)
+            const teamCheckboxes = document.querySelectorAll('#epTeamCheckboxes input[data-user-id]');
+            if (teamCheckboxes.length > 0) {
+                const hiddenUserIds = [...teamCheckboxes]
+                    .filter(cb => cb.checked)
+                    .map(cb => parseInt(cb.dataset.userId, 10));
+                await fetch(`/api/users/project/${proj.id}/hidden`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userIds: hiddenUserIds })
+                });
+            }
+
             closeModal();
             showToast('Project updated');
             loadProjects();
@@ -364,7 +460,7 @@ let treeExpanded = {};  // { 'p_1': true, 'seq_3': true } — tracks open/closed
 
 export async function loadTree() {
     try {
-        treeData = await api('/api/projects/tree');
+        treeData = await api(`/api/projects/tree${showArchived ? '?include_archived=1' : ''}`);
         renderTree();
     } catch (err) {
         console.error('Failed to load tree:', err);
@@ -1520,6 +1616,7 @@ function showProjectContextMenu(event) {
         <div class="ctx-item" data-action="addSeq">➕ Add Sequence</div>
         <div class="ctx-item" data-action="editNaming">🏗️ Naming Convention</div>
         <div class="ctx-separator"></div>
+        <div class="ctx-item" data-action="archive">${project.archived ? '📂 Unarchive Project' : '📦 Archive Project'}</div>
         <div class="ctx-item ctx-danger" data-action="delete">🗑 Delete Project${seqCount > 0 ? ` (${seqCount} sequences)` : ''}</div>
     `;
 
@@ -1531,6 +1628,7 @@ function showProjectContextMenu(event) {
         switch (item.dataset.action) {
             case 'addSeq': showAddSequenceModal(); break;
             case 'editNaming': showEditNamingModal(project); break;
+            case 'archive': toggleArchiveProject(project); break;
             case 'delete': deleteCurrentProject(); break;
         }
     });
@@ -2016,6 +2114,34 @@ async function loadInComfyUI(assetId, assetName) {
     }
 }
 
+async function toggleArchiveProject(project) {
+    const action = project.archived ? 'unarchive' : 'archive';
+    if (!confirm(`${project.archived ? 'Unarchive' : 'Archive'} project "${project.name}"?${!project.archived ? '\n\nArchived projects are hidden from the main view but can be shown anytime.' : ''}`)) return;
+    try {
+        await api(`/api/projects/${project.id}/archive`, { method: 'PUT' });
+        showToast(`Project ${action}d: ${project.name}`);
+        await loadProjects();
+        await loadTree();
+        if (state.currentProject?.id === project.id && !project.archived) {
+            state.currentProject = null;
+            window.switchTab('projects');
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+function toggleShowArchived(checked) {
+    showArchived = checked;
+    loadProjects();
+    loadTree();
+}
+
+async function archiveCurrentProject() {
+    if (!state.currentProject) return;
+    toggleArchiveProject(state.currentProject);
+}
+
 window.deleteCurrentProject = deleteCurrentProject;
 window.deleteShot = deleteShot;
 window.deleteSequence = deleteSequence;
@@ -2031,4 +2157,7 @@ window.showShotContextMenu = showShotContextMenu;
 window.showSeqContextMenu = showSeqContextMenu;
 window.showProjectContextMenu = showProjectContextMenu;
 window.showEditNamingModal = showEditNamingModal;
+window.toggleArchiveProject = toggleArchiveProject;
+window.toggleShowArchived = toggleShowArchived;
+window.archiveCurrentProject = archiveCurrentProject;
 window.refreshAssets = refreshAssets;
