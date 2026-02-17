@@ -4,7 +4,7 @@
 
 **Comfy Asset Manager (CAM)** — formerly Digital Media Vault (DMV) — is a local media asset manager for creative production. Organize, browse, import, export, and play media files with a project-based hierarchy following ShotGrid/Flow Production Tracking naming conventions.
 
-**Version**: 1.2.7
+**Version**: 1.2.8
 **Port**: 7700
 **Repo**: `github.com/gregtee2/Comfy-Access-Manager` (branches: `main`, `stable`)
 **Status**: Active development (February 2026)
@@ -44,7 +44,7 @@ Comfy-Asset-Manager/
 │   ├── server.js                 # Express server entry (154 lines)
 │   ├── database.js               # sql.js wrapper, better-sqlite3 compat API, config.json (560 lines)
 │   ├── routes/
-│   │   ├── assetRoutes.js        # Import, browse, stream, delete, RV launch, compare (1904 lines)
+│   │   ├── assetRoutes.js        # Import, browse, stream, delete, RV launch, compare (1702 lines)
 │   │   ├── projectRoutes.js      # Project + Sequence + Shot CRUD (349 lines)
 │   │   ├── settingsRoutes.js     # Settings, vault setup, RV plugin sync, DB transfer (742 lines)
 │   │   ├── exportRoutes.js       # FFmpeg transcode/export (488 lines)
@@ -66,7 +66,7 @@ Comfy-Asset-Manager/
 │   └── utils/
 │       ├── naming.js             # ShotGrid naming engine (294 lines)
 │       ├── pathResolver.js       # Cross-platform path mapping (149 lines)
-│       ├── sequenceDetector.js   # EXR/DPX frame sequence grouping (150 lines)
+│       ├── sequenceDetector.js   # EXR/DPX frame sequence grouping (140 lines)
 │       └── mediaTypes.js         # File ext → media type mapping (114 lines)
 ├── public/
 │   ├── index.html                # SPA shell (728 lines)
@@ -76,7 +76,7 @@ Comfy-Asset-Manager/
 │       ├── player.js             # Built-in media player modal (2082 lines)
 │       ├── browser.js            # Asset browser, grid/list, tree nav, selection, context menu (1783 lines)
 │       ├── settings.js           # Settings tab + network discovery + Preferences + DB transfer (1266 lines)
-│       ├── import.js             # File browser, import flow, Quick Access sidebar (943 lines)
+│       ├── import.js             # File browser, import flow, Quick Access sidebar, SSE progress (1032 lines)
 │       ├── export.js             # Export modal (357 lines)
 │       ├── main.js               # Entry point, tab switching (107 lines)
 │       ├── utils.js              # Shared utilities (82 lines)
@@ -434,6 +434,30 @@ const ext = nameResult.ext;              // ".exr"
 
 Register-in-place assets: `file_path` stores original absolute path, cannot be safely deleted from disk.
 
+### Import Progress Bar (SSE Streaming)
+
+For imports of 2+ files, the frontend uses **Server-Sent Events** for live progress:
+
+**Backend** (`assetRoutes.js`): When POST `/api/assets/import?stream=1` is used, the endpoint sends SSE events as each file/sequence is processed:
+```
+data: {"current": 3, "total": 47, "file": "render_0003.exr"}
+...
+event: done
+data: {"imported": 47, "errors": 0, ...}
+```
+
+**Frontend** (`import.js`): `importWithProgress(body, progressFill, progressText)` uses `fetch()` + `ReadableStream` reader to parse SSE events and update the progress bar in real-time. Falls back to normal JSON `api()` call for single-file imports.
+
+**UI**: Progress bar is 22px tall with a text overlay showing `"3 / 47 — render_0003.exr"`. On completion shows `"✅ 47 imported"`.
+
+### Sequence Detection (sequenceDetector.js)
+
+`detectSequences(files)` groups files that look like frame sequences (e.g., `render.0001.exr`, `render.0002.exr` → one sequence).
+
+**⚠️ CRITICAL: Video containers are excluded.** The `VIDEO_CONTAINER_EXTS` set (`.mov`, `.mp4`, `.avi`, `.mkv`, `.webm`, `.flv`, `.wmv`, `.m4v`, `.ts`, `.mts`, `.m2ts`, `.3gp`, `.mxf`) prevents files like `comfy_00001.mp4` from being detected as frame sequences. This was a **data-loss bug** — videos with numeric filenames were grouped as "sequences", causing one file to overwrite others during import.
+
+**Sequence vault naming** uses an incrementing `seqCounter` (not hardcoded `1`) with collision detection to prevent multiple sequences getting identical base names.
+
 ---
 
 ## OpenRV Integration
@@ -743,6 +767,9 @@ Users pick up updates automatically via the in-app update banner.
 21. **"Show File Path" is a modal, not clipboard** — `showFilePathModal()` in `browser.js`. Changed from clipboard copy in v1.2.7.
 22. **`public/js-dist/` is generated** — Obfuscated production build from `npm run build` (`scripts/build.js`). Never edit `js-dist/` files directly.
 23. **`install.bat` has safety guards** — ZIP-path detection, Program Files elevation warning, `tar` extraction (avoids 260-char path limit). Don't remove these.
+24. **Video containers are excluded from sequence detection** — `sequenceDetector.js` has a `VIDEO_CONTAINER_EXTS` set. Never remove this — it prevents `.mp4`/`.mov` files from being grouped as frame sequences (caused data loss).
+25. **Import progress uses SSE streaming** — `POST /api/assets/import?stream=1` sends SSE events. `importWithProgress()` in `import.js` reads the stream. Don't break the `?stream=1` query param check in assetRoutes.js.
+26. **Sequence counter must increment** — `seqCounter` in the import endpoint's Step 2 loop increments per sequence. Never hardcode it to `1` — that was a bug that caused vault name collisions and file overwrites.
 
 ---
 
@@ -802,6 +829,10 @@ UI in Settings tab ready. `flowRoutes.js` + `FlowService.js` + `flow_bridge.py` 
 | `157c7f9` | install.bat Program Files guard — detect protected path, warn/elevate |
 | `2a4e450` | RV launch: spawn with detached + windowsHide:false + verbose error logging |
 | `2fc5820` | Rebuild RV release ZIP with Python stdlib (lib/ + DLLs/) — fixes 'No module named encodings' |
+| `05f24a2` | Show resolution under thumbnail in ComfyUI loader node |
+| `e125074` | Show asset count in filter bar + return filteredTotal from API |
+| `bf1fc1e` | Fix: Prevent video/image files from being detected as frame sequences (data-loss bug) |
+| `af5ed98` | Live import progress bar with SSE streaming |
 
 ---
 

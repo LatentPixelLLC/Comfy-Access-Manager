@@ -2,6 +2,17 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.2.8] - 2026-02-16
+
+### Added
+- **Live import progress bar** — imports of 2+ files now show a real-time progress bar with file count and current filename via SSE streaming (`3 / 47 — render_0003.exr`)
+- **Asset count in filter bar** — shows total matching assets when filtering by sequence/shot/role
+- **ComfyUI loader resolution** — shows image resolution under thumbnails in the ComfyUI Load node
+
+### Fixed
+- **Sequence detector data-loss bug** — video containers (`.mp4`, `.mov`, `.avi`, etc.) with numeric filenames (e.g., `comfy_00001.mp4`) were incorrectly grouped as frame sequences, causing files to overwrite each other during import. Added `VIDEO_CONTAINER_EXTS` exclusion set.
+- **Sequence vault name collisions** — multiple detected sequences all got `_0001` suffix (hardcoded counter), causing later sequences to overwrite earlier ones on disk. Now uses incrementing `seqCounter` with collision detection.
+
 ## [1.2.5] - 2026-02-16
 
 ### Added
