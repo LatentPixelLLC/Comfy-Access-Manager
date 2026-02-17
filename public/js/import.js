@@ -102,13 +102,9 @@ function renderFileBrowser(result) {
         }
     }
 
-    // Select All / Deselect All buttons
-    if (state.browsedFiles.length > 0) {
-        html += `<div style="padding:6px 8px;display:flex;gap:8px;border-top:1px solid var(--border-color);margin-top:4px;">
-            <button class="btn-small" onclick="selectAllFiles()" style="font-size:0.75rem;padding:3px 8px;cursor:pointer;">☑ Select All Media</button>
-            <button class="btn-small" onclick="deselectAllFiles()" style="font-size:0.75rem;padding:3px 8px;cursor:pointer;">☐ Deselect All</button>
-        </div>`;
-    }
+    // Show/hide the fixed Select All / Deselect All bar below the scroll area
+    const selBar = document.getElementById('fileBrowserSelectBar');
+    if (selBar) selBar.style.display = state.browsedFiles.length > 0 ? 'flex' : 'none';
 
     if (result.entries.length === 0) {
         html += '<div class="fb-entry" style="color:var(--text-muted)"><span class="fb-icon">📭</span><span>Empty folder</span></div>';

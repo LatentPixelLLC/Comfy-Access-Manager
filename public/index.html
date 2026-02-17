@@ -218,6 +218,10 @@
                         <button onclick="addCurrentFolderToQuickAccess()" title="Save this folder to Quick Access" style="font-size:0.9rem">⭐</button>
                     </div>
                     <div id="fileBrowser" class="file-browser"></div>
+                    <div id="fileBrowserSelectBar" style="display:none;padding:6px 8px;gap:8px;border-top:1px solid var(--border-color);background:var(--bg-card);">
+                        <button class="btn-small" onclick="selectAllFiles()" style="font-size:0.75rem;padding:3px 8px;cursor:pointer;">☑ Select All Media</button>
+                        <button class="btn-small" onclick="deselectAllFiles()" style="font-size:0.75rem;padding:3px 8px;cursor:pointer;">☐ Deselect All</button>
+                    </div>
                     <div class="selected-files">
                         <h4>Selected Files (<span id="selectedCount">0</span>)</h4>
                         <div id="selectedFilesList" class="selected-list"></div>
