@@ -24,6 +24,14 @@ const FRAME_PATTERNS = [
     { regex: /^(.+?)_(\d{4,})\.(\w+)$/, separator: '_' },
 ];
 
+// Video container formats are NEVER frame sequences — each file is already a
+// complete video with frames inside.  Only image/EXR/DPX-like formats can
+// legitimately form numbered frame sequences.
+const VIDEO_CONTAINER_EXTS = new Set([
+    'mov', 'mp4', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v',
+    'mpg', 'mpeg', '3gp', 'ts', 'mts', 'm2ts', 'prores',
+]);
+
 /**
  * Detect frame sequences from an array of file paths.
  * @param {string[]} filePaths - Array of absolute file paths
@@ -58,6 +66,11 @@ function detectSequences(filePaths) {
 
             // Skip version numbers: if base ends with 'v' or '_v', it's a version not a frame
             if (separator === '_' && /v$/i.test(base)) continue;
+
+            // Skip video container formats — each file is a complete video,
+            // not a numbered frame in a sequence (e.g. comfy_00001.mp4 is NOT
+            // the same as render.0001.exr)
+            if (VIDEO_CONTAINER_EXTS.has(ext.toLowerCase())) continue;
 
             const key = `${path.dirname(fp)}|${base}|${separator}|${ext}`;
 

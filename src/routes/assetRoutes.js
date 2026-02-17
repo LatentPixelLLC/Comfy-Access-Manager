@@ -429,7 +429,9 @@ router.post('/import', async (req, res) => {
     const { sequences: detectedSeqs, singles } = detectSequences(files);
 
     // ── Step 2: Import detected frame sequences as single assets ──
+    let seqCounter = 0;  // Unique counter for each sequence vault name
     for (const seq of detectedSeqs) {
+        seqCounter++;
         try {
             // Validate all frames exist
             const missingFrames = seq.files.filter(f => !fs.existsSync(f));
@@ -458,7 +460,7 @@ router.post('/import', async (req, res) => {
                     takeNumber: take_number || 1,
                     mediaType,
                     customName: custom_name || null,
-                    counter: 1,
+                    counter: seqCounter,
                 });
                 // Base name without extension: "EDA1500_comp_v001"
                 vaultBaseName = path.basename(nameResult.vaultName, nameResult.ext);
@@ -482,6 +484,17 @@ router.post('/import', async (req, res) => {
                 const { getVaultDirectory: getVaultDir } = require('../utils/naming');
                 const vaultDir = getVaultDir(vaultRoot, project.code, mediaType, sequence?.code, shot?.code);
                 FileService.ensureDir(vaultDir);
+
+                // Collision resolution: ensure this base name doesn't already
+                // have frame files in the vault (e.g. from a previous import)
+                const naming = require('../utils/naming');
+                const testFrame = buildFrameFilename(vaultBaseName, seq.frameStart, seq.digits, vaultExt);
+                if (fs.existsSync(path.join(vaultDir, testFrame))) {
+                    const resolved = naming.resolveCollision(
+                        path.join(vaultDir, `${vaultBaseName}${vaultExt}`)
+                    );
+                    vaultBaseName = path.basename(resolved, vaultExt);
+                }
 
                 for (let fi = 0; fi < seq.files.length; fi++) {
                     const srcFrame = seq.files[fi];
