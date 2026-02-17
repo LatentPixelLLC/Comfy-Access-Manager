@@ -141,10 +141,10 @@ async function refreshAssets(node, projId, seqId, shotId, roleId) {
 
     const assets = await mvFetch(url);
 
-    // Store asset ID map for preview lookups
+    // Store asset ID map for preview lookups (includes dimensions for resolution label)
     node._mvAssetMap = {};
     for (const a of assets) {
-        node._mvAssetMap[a.vault_name] = a.id;
+        node._mvAssetMap[a.vault_name] = { id: a.id, width: a.width, height: a.height };
     }
 
     const names = assets.map(a => a.vault_name);
@@ -211,6 +211,17 @@ function addPreviewWidget(node) {
             ctx.strokeStyle = "#555";
             ctx.lineWidth = 1;
             ctx.strokeRect(pad, y + 4, maxW, dh + 2);
+
+            // Resolution label below thumbnail
+            const assetInfo = _node._mvPreviewAssetInfo;
+            if (assetInfo && assetInfo.width && assetInfo.height) {
+                const resText = `${assetInfo.width} × ${assetInfo.height}`;
+                ctx.fillStyle = "#999";
+                ctx.font = "11px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText(resText, widgetWidth / 2, y + dh + 18);
+                ctx.textAlign = "left";
+            }
         },
         computeSize(width) {
             if (!node._mvPreviewReady || !node._mvPreviewImg) return [width, 4];
@@ -220,7 +231,7 @@ function addPreviewWidget(node) {
             const aspect = img.naturalHeight / img.naturalWidth;
             const maxH = 250;
             let dh = Math.min(maxW * aspect, maxH);
-            return [width, dh + 12];
+            return [width, dh + 26];
         },
     };
     node.widgets = node.widgets || [];
@@ -240,7 +251,11 @@ function updateNodePreview(node) {
     if (!assetW) return;
 
     const assetName = assetW.value;
-    const assetId = node._mvAssetMap?.[assetName];
+    const assetEntry = node._mvAssetMap?.[assetName];
+    const assetId = assetEntry?.id ?? assetEntry;  // backwards compat if plain id
+
+    // Store dimensions for the resolution label
+    node._mvPreviewAssetInfo = assetEntry && typeof assetEntry === 'object' ? assetEntry : null;
 
     if (!assetId || assetName === "No assets found") {
         node._mvPreviewReady = false;
@@ -280,7 +295,7 @@ async function resolveAssetIdAndPreview(node) {
     const assets = await mvFetch("/mediavault/assets");
     node._mvAssetMap = {};
     for (const a of assets) {
-        node._mvAssetMap[a.vault_name] = a.id;
+        node._mvAssetMap[a.vault_name] = { id: a.id, width: a.width, height: a.height };
     }
     updateNodePreview(node);
 }
