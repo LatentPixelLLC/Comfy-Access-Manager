@@ -29,6 +29,13 @@ router.get('/', (req, res) => {
         ORDER BY p.updated_at DESC
     `).all();
 
+    // Parse naming_convention JSON for each project
+    for (const p of projects) {
+        if (p.naming_convention) {
+            try { p.naming_convention = JSON.parse(p.naming_convention); } catch (_) {}
+        }
+    }
+
     res.json(projects);
 });
 
@@ -102,6 +109,11 @@ router.get('/:id', (req, res) => {
 
     const totalAssets = db.prepare('SELECT COUNT(*) as count FROM assets WHERE project_id = ?').get(project.id);
 
+    // Parse naming_convention JSON
+    if (project.naming_convention) {
+        try { project.naming_convention = JSON.parse(project.naming_convention); } catch (_) {}
+    }
+
     res.json({
         ...project,
         sequences,
@@ -112,7 +124,7 @@ router.get('/:id', (req, res) => {
 
 // POST /api/projects — Create project
 router.post('/', (req, res) => {
-    const { name, code, type = 'flexible', description = '' } = req.body;
+    const { name, code, type = 'flexible', description = '', naming_convention, episode = '' } = req.body;
 
     if (!name || !code) {
         return res.status(400).json({ error: 'Name and code are required' });
@@ -128,9 +140,10 @@ router.post('/', (req, res) => {
 
     try {
         // Create project in database
+        const conventionJson = naming_convention ? JSON.stringify(naming_convention) : null;
         const result = db.prepare(
-            'INSERT INTO projects (name, code, type, description) VALUES (?, ?, ?, ?)'
-        ).run(name, cleanCode, type, description);
+            'INSERT INTO projects (name, code, type, description, naming_convention, episode) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(name, cleanCode, type, description, conventionJson, episode);
 
         // Create vault folder structure
         try {
@@ -154,20 +167,63 @@ router.post('/', (req, res) => {
 
 // PUT /api/projects/:id — Update project
 router.put('/:id', (req, res) => {
-    const { name, description, type } = req.body;
+    const { name, description, type, naming_convention, episode } = req.body;
     const db = getDb();
 
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    db.prepare(`
-        UPDATE projects SET name = ?, description = ?, type = ?, updated_at = datetime('now') WHERE id = ?
-    `).run(name || project.name, description ?? project.description, type || project.type, project.id);
+    const newEpisode = episode !== undefined ? episode : (project.episode || '');
+
+    // If naming_convention is provided, update it too
+    if (naming_convention !== undefined) {
+        const conventionJson = naming_convention ? JSON.stringify(naming_convention) : null;
+        db.prepare(`
+            UPDATE projects SET name = ?, description = ?, type = ?, naming_convention = ?, episode = ?, updated_at = datetime('now') WHERE id = ?
+        `).run(name || project.name, description ?? project.description, type || project.type, conventionJson, newEpisode, project.id);
+    } else {
+        db.prepare(`
+            UPDATE projects SET name = ?, description = ?, type = ?, episode = ?, updated_at = datetime('now') WHERE id = ?
+        `).run(name || project.name, description ?? project.description, type || project.type, newEpisode, project.id);
+    }
 
     logActivity('project_updated', 'project', project.id, { name, type });
 
     const updated = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
+    // Parse naming_convention JSON for the response
+    if (updated.naming_convention) {
+        try { updated.naming_convention = JSON.parse(updated.naming_convention); } catch (_) {}
+    }
     res.json(updated);
+});
+
+// GET /api/projects/:id/naming-convention — Get project's naming convention
+router.get('/:id/naming-convention', (req, res) => {
+    const db = getDb();
+    const project = db.prepare('SELECT naming_convention FROM projects WHERE id = ?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    let convention = null;
+    if (project.naming_convention) {
+        try { convention = JSON.parse(project.naming_convention); } catch (_) {}
+    }
+    res.json({ convention });
+});
+
+// PUT /api/projects/:id/naming-convention — Update project's naming convention
+router.put('/:id/naming-convention', (req, res) => {
+    const { convention } = req.body;
+    const db = getDb();
+
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const conventionJson = convention ? JSON.stringify(convention) : null;
+    db.prepare(`UPDATE projects SET naming_convention = ?, updated_at = datetime('now') WHERE id = ?`)
+        .run(conventionJson, project.id);
+
+    logActivity('naming_convention_updated', 'project', project.id, { tokens: convention?.length || 0 });
+    res.json({ success: true, convention });
 });
 
 // DELETE /api/projects/:id — Delete project and all assets

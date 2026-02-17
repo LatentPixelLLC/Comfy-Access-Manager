@@ -451,6 +451,20 @@ function runMigrations(wrapper) {
         } catch (_) { /* column already exists */ }
     }
 
+    // ─── Add naming_convention column to projects (Shot Builder) ───
+    try {
+        const projCols = [];
+        let stProj = wrapper._rawDb.prepare('PRAGMA table_info(projects)');
+        while (stProj.step()) projCols.push(stProj.getAsObject().name);
+        stProj.free();
+        if (!projCols.includes('naming_convention')) {
+            wrapper.exec("ALTER TABLE projects ADD COLUMN naming_convention TEXT DEFAULT NULL");
+        }
+        if (!projCols.includes('episode')) {
+            wrapper.exec("ALTER TABLE projects ADD COLUMN episode TEXT DEFAULT ''");
+        }
+    } catch (_) { /* column already exists */ }
+
     // ─── Seed default roles if roles table is empty ───
     const roleCount = wrapper.prepare('SELECT COUNT(*) as count FROM roles').get();
     if (roleCount.count === 0) {

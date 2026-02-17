@@ -303,6 +303,98 @@ label {
     position: absolute; top: 12px; right: 12px;
 }
 
+/* ── Project Card Edit Button ── */
+.card-edit-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    padding: 1px 8px;
+    cursor: pointer;
+    margin-left: auto;
+    transition: color 0.15s, border-color 0.15s;
+}
+.card-edit-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+}
+
+/* ── Edit Project Modal — Sequences Section ── */
+.ep-section {
+    margin-top: 12px;
+    padding: 8px 10px;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.ep-section-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.ep-seq-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.ep-seq-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    background: var(--bg-card);
+    border-radius: 3px;
+    font-size: 0.78rem;
+}
+.ep-seq-count {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+.ep-seq-expandable .ep-seq-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+.ep-shot-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0 2px 22px;
+}
+.ep-shot-chip {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 0.68rem;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+}
+.btn-xs {
+    padding: 1px 6px;
+    font-size: 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.btn-xs:hover { background: rgba(255,255,255,0.08); }
+.ep-add-shot-btn { margin-left: 4px; }
+.ep-seq-hint {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    margin-top: 6px;
+    font-style: italic;
+}
+
 /* ─── Browser Layout (Tree + Main) ─── */
 .browser-layout {
     display: grid;
@@ -2708,3 +2800,203 @@ label:has(input[type="checkbox"]) {
     padding: 0 4px;
 }
 .path-mapping-row .pm-remove:hover { color: #e57373; }
+
+/* ═══════════════════════════════════════════
+   SHOT BUILDER — Drag-and-drop naming convention
+   ═══════════════════════════════════════════ */
+
+.sb-wrapper {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    background: var(--bg-dark);
+}
+.sb-header {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 8px;
+}
+.sb-title { font-weight: 600; font-size: 0.95rem; }
+.sb-subtitle { color: var(--text-muted); font-size: 0.75rem; }
+
+/* ── Tile inventory ── */
+.sb-inventory {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 8px;
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 10px;
+}
+.sb-tile {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    cursor: grab; user-select: none;
+    color: #fff;
+    background: var(--tile-color, #555);
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: transform 0.1s, box-shadow 0.1s;
+    position: relative;
+}
+.sb-tile:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.sb-tile.sb-dragging {
+    opacity: 0.4;
+}
+.sb-tile-icon { font-size: 0.85rem; }
+.sb-tile-label { white-space: nowrap; }
+
+/* ── Assembly zone ── */
+.sb-assembly-label {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 0.72rem; color: var(--text-muted);
+    margin-bottom: 4px; padding: 0 2px;
+}
+.sb-clear-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    font-size: 0.7rem; padding: 2px 8px; border-radius: 3px; cursor: pointer;
+}
+.sb-clear-btn:hover { border-color: #e57373; color: #e57373; }
+
+.sb-assembly {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+    min-height: 52px;
+    padding: 8px;
+    background: var(--bg-card);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.2s, background 0.2s;
+}
+.sb-assembly.sb-drop-here {
+    border-color: #5bb89a;
+    background: rgba(91, 184, 154, 0.06);
+}
+.sb-assembly-empty {
+    width: 100%; text-align: center;
+    color: var(--text-muted); font-size: 0.78rem;
+    padding: 8px 0;
+}
+
+/* ── Assembly tiles — stay inline ── */
+.sb-tile-asm {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px;
+    min-width: 0;
+    flex-shrink: 0;
+}
+.sb-tile-asm .sb-tile-remove {
+    position: absolute; top: -5px; right: -5px;
+    width: 16px; height: 16px;
+    font-size: 0.6rem; line-height: 16px; text-align: center;
+    background: #3a3a3a; color: #aaa; border: 1px solid #555;
+    border-radius: 50%; cursor: pointer;
+    opacity: 0; transition: opacity 0.2s;
+    padding: 0;
+}
+.sb-tile-asm:hover .sb-tile-remove { opacity: 1; }
+.sb-tile-asm .sb-tile-remove:hover { background: #c62828; color: #fff; border-color: #c62828; }
+
+/* Drop position indicators */
+.sb-tile-asm.sb-drop-before {
+    border-left: 3px solid #5bb89a;
+    margin-left: 4px;
+}
+.sb-tile-asm.sb-drop-after {
+    border-right: 3px solid #5bb89a;
+    margin-right: 4px;
+}
+
+/* ── Separator inputs ── */
+.sb-sep-input {
+    width: 30px; text-align: center;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    font-size: 0.75rem; font-family: monospace;
+    padding: 4px 2px; margin: 0 1px;
+    outline: none;
+}
+.sb-sep-input:focus { border-color: #5bb89a; }
+.sb-sep-input::placeholder { color: var(--text-muted); font-size: 0.65rem; }
+
+/* ── Wildcard controls (below the token row) ── */
+.sb-wc-section {
+    width: 100%;
+    margin-top: 6px;
+    display: flex; flex-direction: column; gap: 4px;
+}
+.sb-wc-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px;
+    background: rgba(184, 144, 80, 0.08);
+    border: 1px solid rgba(184, 144, 80, 0.2);
+    border-radius: 4px;
+}
+.sb-wc-tag {
+    font-size: 0.65rem; color: #fff; padding: 1px 6px; border-radius: 3px;
+    white-space: nowrap;
+}
+.sb-wc-controls {
+    display: flex; align-items: center; gap: 4px;
+    margin-top: 4px;
+}
+.sb-wc-label, .sb-wc-value {
+    width: 60px;
+    background: rgba(0,0,0,0.25); color: #ddd;
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 3px;
+    font-size: 0.68rem; padding: 2px 4px;
+    outline: none;
+}
+.sb-wc-label:focus, .sb-wc-value:focus { border-color: #b89050; }
+.sb-wc-label { width: 80px; }
+.sb-wc-value { width: 90px; }
+.sb-wc-ask {
+    display: flex; align-items: center; gap: 2px;
+    font-size: 0.65rem; color: #bbb; cursor: pointer; white-space: nowrap;
+}
+.sb-wc-ask input[type="checkbox"] {
+    width: 12px; height: 12px; margin: 0; cursor: pointer;
+}
+
+/* ── Preview ── */
+.sb-preview-label {
+    font-size: 0.72rem; color: var(--text-muted);
+    margin-top: 8px; margin-bottom: 2px;
+}
+.sb-preview {
+    font-family: 'Consolas', 'Fira Code', monospace;
+    font-size: 0.9rem;
+    padding: 6px 10px;
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: #ddd;
+    letter-spacing: 0.3px;
+    overflow-x: auto;
+}
+.sb-preview-token { font-weight: 500; }
+.sb-preview-ext { color: var(--text-muted); }
+.sb-preview-empty { color: var(--text-muted); font-style: italic; font-size: 0.8rem; }
+
+/* ── Preview legend & note ── */
+.sb-prev-legend {
+    font-size: 0.7rem;
+    margin-top: 3px;
+    color: var(--text-muted);
+}
+.sb-prev-note {
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    opacity: 0.6;
+    margin-top: 4px;
+    font-style: italic;
+}
+
+/* Widen modal card when Shot Builder is inside */
+.modal-card:has(.sb-wrapper) {
+    max-width: 640px;
+}
+

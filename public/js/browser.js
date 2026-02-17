@@ -13,6 +13,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { esc, escAttr, formatSize, formatDuration, formatDate, formatDateTime, typeIcon, showToast, closeModal } from './utils.js';
 import { openPlayer } from './player.js';
+import { renderShotBuilder, getConvention } from './shotBuilder.js';
 
 /** Check confirm_delete preference — returns true if user confirms (or pref is off) */
 function confirmDelete(msg) {
@@ -54,6 +55,7 @@ function renderProjectGrid() {
             <div class="card-meta">
                 <span>📎 ${p.asset_count || 0} assets</span>
                 <span>📋 ${p.sequence_count || 0} sequences</span>
+                <button class="card-edit-btn" onclick="event.stopPropagation(); showEditProjectModal(${p.id})" title="Edit project settings, sequences, and naming convention">✏️ Edit</button>
             </div>
         </div>
     `).join('');
@@ -79,6 +81,8 @@ function showCreateProjectModal() {
         
         <label>Description (optional)</label>
         <textarea id="newProjectDesc" rows="2" placeholder="What is this project about?"></textarea>
+
+        <div id="shotBuilderContainer"></div>
         
         <div class="form-actions">
             <button class="btn-cancel" onclick="closeModal()">Cancel</button>
@@ -87,11 +91,30 @@ function showCreateProjectModal() {
     `;
     modal.style.display = 'flex';
 
-    // Auto-generate code from name
+    // Render the Shot Builder
+    renderShotBuilder(document.getElementById('shotBuilderContainer'));
+
+    // Auto-generate code from name AND update Shot Builder preview with live project code
+    const codeInput = document.getElementById('newProjectCode');
     document.getElementById('newProjectName').addEventListener('input', (e) => {
         const code = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
-        document.getElementById('newProjectCode').value = code;
+        codeInput.value = code;
+        updateShotBuilderProjectCode(code);
     });
+    codeInput.addEventListener('input', (e) => {
+        updateShotBuilderProjectCode(e.target.value.trim());
+    });
+
+    function updateShotBuilderProjectCode(code) {
+        // Dynamically update the Shot Builder preview with whatever the user is typing
+        const container = document.getElementById('shotBuilderContainer');
+        if (!container) return;
+        // Update the module's projectContext via a minimal re-render of just the preview
+        const previewEl = container.querySelector('#sbPreview');
+        if (previewEl && window._sbSetProjectCode) {
+            window._sbSetProjectCode(code);
+        }
+    }
 }
 
 async function createProject() {
@@ -99,17 +122,239 @@ async function createProject() {
     const code = document.getElementById('newProjectCode').value.trim();
     const type = document.getElementById('newProjectType').value;
     const description = document.getElementById('newProjectDesc').value.trim();
+    const naming_convention = getConvention();
 
     if (!name || !code) return alert('Name and code are required.');
 
     try {
-        await api('/api/projects', { method: 'POST', body: { name, code, type, description } });
+        await api('/api/projects', { method: 'POST', body: { name, code, type, description, naming_convention } });
         closeModal();
         loadProjects();
     } catch (err) {
         alert('Error: ' + err.message);
     }
 }
+
+async function showEditNamingModal(project) {
+    // Fetch the latest project data (with naming_convention)
+    let proj;
+    try {
+        proj = await api(`/api/projects/${project.id}`);
+    } catch (_) {
+        proj = project;
+    }
+
+    const modal = document.getElementById('modal');
+    document.getElementById('modalContent').innerHTML = `
+        <h3>🏗️ Naming Convention — ${esc(proj.name)}</h3>
+        <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:8px;">
+            Define how imported files are named for this project.
+            Leave empty to use the default ShotGrid-style naming.
+        </p>
+        <div id="editShotBuilderContainer"></div>
+        <div class="form-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" id="saveNamingBtn">💾 Save Convention</button>
+        </div>
+    `;
+    modal.style.display = 'flex';
+
+    // Render Shot Builder with existing convention + project context
+    renderShotBuilder(
+        document.getElementById('editShotBuilderContainer'),
+        proj.naming_convention || null,
+        { code: proj.code, name: proj.name }
+    );
+
+    document.getElementById('saveNamingBtn').addEventListener('click', async () => {
+        const convention = getConvention();
+        try {
+            await api(`/api/projects/${proj.id}/naming-convention`, {
+                method: 'PUT',
+                body: { convention }
+            });
+            closeModal();
+            showToast('Naming convention saved');
+        } catch (err) {
+            alert('Error saving: ' + err.message);
+        }
+    });
+}
+
+// ═══════════════════════════════════════════
+//  EDIT PROJECT MODAL (from Projects tab)
+// ═══════════════════════════════════════════
+
+async function showEditProjectModal(projectId) {
+    let proj;
+    try {
+        proj = await api(`/api/projects/${projectId}`);
+    } catch (err) {
+        return alert('Error loading project: ' + err.message);
+    }
+
+    // Fetch shots for every sequence in parallel
+    const seqShotsMap = {};  // seqId → shots[]
+    if (proj.sequences?.length) {
+        const fetches = proj.sequences.map(async s => {
+            try {
+                seqShotsMap[s.id] = await api(`/api/projects/${proj.id}/sequences/${s.id}/shots`);
+            } catch (_) { seqShotsMap[s.id] = []; }
+        });
+        await Promise.all(fetches);
+    }
+
+    // Build sequence + shot HTML
+    const seqItems = proj.sequences?.length > 0
+        ? proj.sequences.map(s => {
+            const shots = seqShotsMap[s.id] || [];
+            const shotChips = shots.map(sh =>
+                `<span class="ep-shot-chip" title="${esc(sh.name)}">${esc(sh.code)}</span>`
+            ).join('');
+            const shotRow = shots.length
+                ? `<div class="ep-shot-row">${shotChips}</div>`
+                : '';
+            const nextShotNum = (shots.length + 1) * 10;
+            const defaultShotCode = `SH${String(nextShotNum).padStart(3, '0')}`;
+            return `<div class="ep-seq-item ep-seq-expandable">
+                <div class="ep-seq-main">
+                    <span class="badge badge-dim" style="font-size:0.7rem">${esc(s.code)}</span>
+                    <span>${esc(s.name)}</span>
+                    <span class="ep-seq-count">${s.asset_count || 0} assets · ${shots.length} shot${shots.length !== 1 ? 's' : ''}</span>
+                    <button class="btn-xs ep-add-shot-btn" data-seq-id="${s.id}" data-proj-id="${proj.id}" data-default-code="${defaultShotCode}" title="Add shot to ${esc(s.code)}">+ Shot</button>
+                </div>
+                ${shotRow}
+            </div>`;
+        }).join('')
+        : '<div style="color:var(--text-muted);font-size:0.8rem;padding:4px 0;">No sequences yet — add one below.</div>';
+
+    const modal = document.getElementById('modal');
+    document.getElementById('modalContent').innerHTML = `
+        <h3>✏️ Edit Project — ${esc(proj.name)}</h3>
+
+        <label>Project Name</label>
+        <input type="text" id="editProjectName" value="${esc(proj.name)}" autofocus>
+
+        <label>Project Code</label>
+        <input type="text" id="editProjectCode" value="${esc(proj.code)}"
+            readonly style="opacity:0.6; cursor:not-allowed"
+            title="Code cannot be changed (used in folder structure)">
+
+        <label>Episode <span style="color:var(--text-muted);font-size:0.75rem">(used in naming convention — e.g. 301)</span></label>
+        <input type="text" id="editProjectEpisode" value="${esc(proj.episode || '')}" placeholder="e.g. 301">
+
+        <label>Description</label>
+        <textarea id="editProjectDesc" rows="2">${esc(proj.description || '')}</textarea>
+
+        <div class="ep-section">
+            <div class="ep-section-hdr">
+                <span>📋 Sequences & Shots</span>
+                <button class="btn-sm" id="epAddSeqBtn">+ Sequence</button>
+            </div>
+            <div class="ep-seq-list">${seqItems}</div>
+        </div>
+
+        <div id="editShotBuilderContainer"></div>
+
+        <div class="form-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" id="saveEditProjectBtn">💾 Save</button>
+        </div>
+    `;
+    modal.style.display = 'flex';
+
+    // Render Shot Builder with existing convention + project context (incl. real seq/shot names)
+    renderShotBuilder(
+        document.getElementById('editShotBuilderContainer'),
+        proj.naming_convention || null,
+        {
+            code: proj.code,
+            name: proj.name,
+            episode: proj.episode || '',
+            sequences: (proj.sequences || []).map(s => ({
+                name: s.name,
+                code: s.code,
+                shots: (seqShotsMap[s.id] || []).map(sh => ({ name: sh.name, code: sh.code }))
+            }))
+        }
+    );
+
+    // Live-update preview when episode field changes
+    document.getElementById('editProjectEpisode').addEventListener('input', () => {
+        window._sbSetEpisode(document.getElementById('editProjectEpisode').value.trim());
+    });
+
+    // Wire up all "+ Shot" buttons
+    document.querySelectorAll('.ep-add-shot-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const seqId = btn.dataset.seqId;
+            const projId = btn.dataset.projId;
+            const defaultCode = btn.dataset.defaultCode;
+
+            const shotName = prompt('Shot name:');
+            if (!shotName?.trim()) return;
+            const shotCode = prompt('Shot code (uppercase):', defaultCode);
+            if (!shotCode?.trim()) return;
+
+            try {
+                await api(`/api/projects/${projId}/sequences/${seqId}/shots`, {
+                    method: 'POST',
+                    body: { name: shotName.trim(), code: shotCode.trim().toUpperCase() }
+                });
+                showToast('Shot added');
+                showEditProjectModal(projectId); // Refresh modal
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+    });
+
+    // Add sequence button
+    document.getElementById('epAddSeqBtn').addEventListener('click', async () => {
+        const nextNum = (proj.sequences?.length || 0) + 1;
+        const defaultCode = `SQ${String(nextNum * 10).padStart(3, '0')}`;
+
+        const seqName = prompt('Sequence name:');
+        if (!seqName?.trim()) return;
+        const seqCode = prompt('Sequence code (uppercase):', defaultCode);
+        if (!seqCode?.trim()) return;
+
+        try {
+            await api(`/api/projects/${proj.id}/sequences`, {
+                method: 'POST',
+                body: { name: seqName.trim(), code: seqCode.trim().toUpperCase() }
+            });
+            showToast('Sequence added');
+            showEditProjectModal(proj.id); // Refresh modal
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    });
+
+    // Save button
+    document.getElementById('saveEditProjectBtn').addEventListener('click', async () => {
+        const name = document.getElementById('editProjectName').value.trim();
+        const description = document.getElementById('editProjectDesc').value.trim();
+        const episode = document.getElementById('editProjectEpisode').value.trim();
+        const convention = getConvention();
+
+        if (!name) return alert('Project name is required');
+
+        try {
+            await api(`/api/projects/${proj.id}`, {
+                method: 'PUT',
+                body: { name, description, episode, naming_convention: convention }
+            });
+            closeModal();
+            showToast('Project updated');
+            loadProjects();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    });
+}
+window.showEditProjectModal = showEditProjectModal;
 
 // ═══════════════════════════════════════════
 //  TREE NAVIGATION
@@ -582,7 +827,7 @@ function renderAssets() {
                 </div>
                 <div class="row-audio">${hasAudio ? '🔊' : '<span style="opacity:.25">🔇</span>'}</div>
                 <div class="row-show">${esc(a.project_code || '')}</div>
-                <div class="row-shot">${esc(a.shot_code || a.shot_name || '—')}</div>
+                <div class="row-shot">${esc(a.shot_name || a.shot_code || '—')}</div>
                 <div class="row-name">${a.is_linked ? '🔗 ' : ''}${esc(a.vault_name)}</div>
                 <div class="row-role">${a.role_name ? `<span class="role-tag" style="background:${a.role_color || '#666'}">${a.role_icon || ''} ${esc(a.role_code)}</span>` : ''}</div>
                 <div class="row-res">${a.width ? `${a.width}×${a.height}` : '—'}</div>
@@ -1273,6 +1518,7 @@ function showProjectContextMenu(event) {
         <div class="ctx-header">${project.type === 'shot_based' ? '🎬' : '📁'} ${esc(project.name)}</div>
         <div class="ctx-separator"></div>
         <div class="ctx-item" data-action="addSeq">➕ Add Sequence</div>
+        <div class="ctx-item" data-action="editNaming">🏗️ Naming Convention</div>
         <div class="ctx-separator"></div>
         <div class="ctx-item ctx-danger" data-action="delete">🗑 Delete Project${seqCount > 0 ? ` (${seqCount} sequences)` : ''}</div>
     `;
@@ -1284,6 +1530,7 @@ function showProjectContextMenu(event) {
 
         switch (item.dataset.action) {
             case 'addSeq': showAddSequenceModal(); break;
+            case 'editNaming': showEditNamingModal(project); break;
             case 'delete': deleteCurrentProject(); break;
         }
     });
@@ -1783,4 +2030,5 @@ window.showContextMenu = showContextMenu;
 window.showShotContextMenu = showShotContextMenu;
 window.showSeqContextMenu = showSeqContextMenu;
 window.showProjectContextMenu = showProjectContextMenu;
+window.showEditNamingModal = showEditNamingModal;
 window.refreshAssets = refreshAssets;

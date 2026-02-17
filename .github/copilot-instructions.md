@@ -4,7 +4,7 @@
 
 **Comfy Asset Manager (CAM)** — formerly Digital Media Vault (DMV) — is a local media asset manager for creative production. Organize, browse, import, export, and play media files with a project-based hierarchy following ShotGrid/Flow Production Tracking naming conventions.
 
-**Version**: 1.2.8
+**Version**: 1.2.9
 **Port**: 7700
 **Repo**: `github.com/gregtee2/Comfy-Access-Manager` (branches: `main`, `stable`)
 **Status**: Active development (February 2026)
@@ -403,7 +403,47 @@ Comp, Light, Anim, FX, Enviro, Layout, Matchmove, Roto
 
 ## ShotGrid Naming Convention
 
-### Templates (naming.js)
+### Shot Builder (Drag-and-Drop Convention Editor)
+
+**Location**: `public/js/shotBuilder.js` (frontend module) + `src/utils/naming.js` (backend engine)
+
+Projects can define a custom **naming convention** via a drag-and-drop tile interface in the Edit Project modal. Users drag token tiles (Project, Episode, Sequence, Shot, Role, Version, etc.) into an assembly row and configure separators between them.
+
+**Convention Storage**: JSON array on `projects.naming_convention` column:
+```json
+[
+  { "type": "project", "separator": "" },
+  { "type": "episode", "separator": "" },
+  { "type": "sequence", "separator": "_" },
+  { "type": "shot", "separator": "_" }
+]
+```
+
+**Episode Field**: Projects have a dedicated `episode` column (TEXT). Set in Edit Project modal. This is the value used for the `episode` token in naming conventions. It is NOT derived from sequences — it's its own field.
+
+**How Convention is Applied**:
+1. `generateFromConvention(convention, values, ext)` in `naming.js` resolves tokens to actual values
+2. Values passed in: `{ project: code, episode: project.episode, sequence: seq.name, shot: shot.name, role: role.code, version: auto-detected }`
+3. **Names (not codes)** are used for sequence/shot tokens — user sees `011` not `SQ010`
+4. **Codes** are used for folder paths on disk — `RGU/SQ010/SH010/`
+5. Role and Version tokens are only included if the user dragged them into the convention
+
+**Preview**: Live preview in the Shot Builder shows the actual resolved filename with a legend showing `label:value` pairs so the user knows where each part comes from.
+
+**ComfyUI Integration**: When the Save to MediaVault node saves, `comfyuiRoutes.js` reads the project's convention and calls `generateFromConvention()` with real names. The `overrideVaultName` is passed to `FileService.importFile()`.
+
+**Key Files**:
+| File | Purpose |
+|------|---------|
+| `public/js/shotBuilder.js` | Drag-and-drop UI module (ES6) |
+| `src/utils/naming.js` | `generateFromConvention()` + `getNextVersion()` |
+| `src/routes/projectRoutes.js` | CRUD for projects with `naming_convention` + `episode` columns |
+| `src/routes/comfyuiRoutes.js` | Applies convention when saving from ComfyUI |
+| `src/routes/assetRoutes.js` | Applies convention during normal import |
+| `src/services/FileService.js` | `overrideVaultName` option in `importFile()` |
+
+### Templates (naming.js) — Legacy Defaults
+Used when no Shot Builder convention is defined on the project:
 | Context | Template | Example |
 |---------|----------|--------|
 | Shot + Role | `{shot}_{step}_v{version}` | `EDA1500_comp_v001.exr` |
@@ -770,6 +810,10 @@ Users pick up updates automatically via the in-app update banner.
 24. **Video containers are excluded from sequence detection** — `sequenceDetector.js` has a `VIDEO_CONTAINER_EXTS` set. Never remove this — it prevents `.mp4`/`.mov` files from being grouped as frame sequences (caused data loss).
 25. **Import progress uses SSE streaming** — `POST /api/assets/import?stream=1` sends SSE events. `importWithProgress()` in `import.js` reads the stream. Don't break the `?stream=1` query param check in assetRoutes.js.
 26. **Sequence counter must increment** — `seqCounter` in the import endpoint's Step 2 loop increments per sequence. Never hardcode it to `1` — that was a bug that caused vault name collisions and file overwrites.
+27. **Episode is a project-level field** — `projects.episode` column (TEXT). Set in Edit Project modal. Do NOT derive episode from sequence name — that was a bug.
+28. **Naming convention uses names, not codes** — `sequence.name` and `shot.name` go into filenames. Codes (`SQ010`, `SH010`) are for folder paths only.
+29. **List view shows names, not codes** — `shot_name || shot_code` priority in browser.js list rows. Users see `320` not `SH010`.
+30. **Shot Builder convention is optional** — If `projects.naming_convention` is NULL, the legacy `generateVaultName()` function is used instead.
 
 ---
 
@@ -833,6 +877,14 @@ UI in Settings tab ready. `flowRoutes.js` + `FlowService.js` + `flow_bridge.py` 
 | `e125074` | Show asset count in filter bar + return filteredTotal from API |
 | `bf1fc1e` | Fix: Prevent video/image files from being detected as frame sequences (data-loss bug) |
 | `af5ed98` | Live import progress bar with SSE streaming |
+| — | **v1.2.9 — Shot Builder & Naming Convention (February 2026)** |
+| — | feat: Shot Builder drag-and-drop naming convention editor (`shotBuilder.js`) |
+| — | feat: `generateFromConvention()` in naming.js — resolves convention tokens to filenames |
+| — | feat: Episode field on projects (`projects.episode` column) — separate from sequences |
+| — | feat: Edit Project modal with Sequences & Shots CRUD (inline chips + "+ Shot" button) |
+| — | feat: ComfyUI Save node applies naming convention with real names (not codes) |
+| — | feat: `overrideVaultName` in FileService.importFile() for convention-based naming |
+| — | fix: List view shows shot name (320) not code (SH010) |
 
 ---
 

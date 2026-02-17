@@ -19,7 +19,7 @@ const FileService = require('../services/FileService');
 const ThumbnailService = require('../services/ThumbnailService');
 const MediaInfoService = require('../services/MediaInfoService');
 const { detectMediaType, isMediaFile } = require('../utils/mediaTypes');
-const { generateVaultName, getVaultDirectory } = require('../utils/naming');
+const { generateVaultName, getVaultDirectory, generateFromConvention } = require('../utils/naming');
 const { resolveFilePath, getAllPathVariants } = require('../utils/pathResolver');
 
 // Multer for file uploads (temp storage)
@@ -433,6 +433,14 @@ router.post('/import', async (req, res) => {
     if (shot_id) shot = db.prepare('SELECT * FROM shots WHERE id = ?').get(shot_id);
     if (role_id) role = db.prepare('SELECT * FROM roles WHERE id = ?').get(role_id);
 
+    // Load project's naming convention (if set via Shot Builder)
+    let namingConvention = null;
+    if (project.naming_convention) {
+        try { namingConvention = JSON.parse(project.naming_convention); } catch (_) {}
+    }
+    // Accept wildcard values from the import request (for "ask at import" wildcards)
+    const wildcardValues = req.body.wildcard_values || {};
+
     const results = [];
     const errors = [];
     const derivativeJobIds = [];
@@ -468,6 +476,38 @@ router.post('/import', async (req, res) => {
                 // Keep original sequence naming
                 vaultBaseName = seq.baseName;
                 vaultExt = seq.ext;
+            } else if (namingConvention && namingConvention.length > 0) {
+                // Use project's Shot Builder convention
+                const convResult = generateFromConvention(namingConvention, {
+                    project: project.code,
+                    sequence: sequence?.code,
+                    shot: shot?.code,
+                    role: role?.code,
+                    version: 1,
+                    take: take_number || 1,
+                    counter: seqCounter,
+                    wildcards: wildcardValues,
+                }, seq.ext);
+                if (convResult) {
+                    vaultBaseName = path.basename(convResult.vaultName, convResult.ext);
+                    vaultExt = convResult.ext;
+                } else {
+                    // Fallback to legacy naming
+                    const naming = require('../utils/naming');
+                    const nameResult = naming.generateVaultName({
+                        originalName: seqOriginalName,
+                        projectCode: project.code,
+                        sequenceCode: sequence?.code,
+                        shotCode: shot?.code,
+                        roleCode: role?.code,
+                        takeNumber: take_number || 1,
+                        mediaType,
+                        customName: custom_name || null,
+                        counter: seqCounter,
+                    });
+                    vaultBaseName = path.basename(nameResult.vaultName, nameResult.ext);
+                    vaultExt = nameResult.ext;
+                }
             } else {
                 const naming = require('../utils/naming');
                 const nameResult = naming.generateVaultName({
@@ -659,6 +699,18 @@ router.post('/import', async (req, res) => {
 
                 if (keepOriginalNames) {
                     vaultName = originalName;
+                } else if (namingConvention && namingConvention.length > 0) {
+                    const convResult = generateFromConvention(namingConvention, {
+                        project: project.code,
+                        sequence: sequence?.code,
+                        shot: shot?.code,
+                        role: role?.code,
+                        version: 1,
+                        take: take_number || (i + 1),
+                        counter: i + 1,
+                        wildcards: wildcardValues,
+                    }, path.extname(originalName));
+                    vaultName = convResult ? convResult.vaultName : originalName;
                 } else {
                     const naming = require('../utils/naming');
                     const nameResult = naming.generateVaultName({
@@ -674,6 +726,22 @@ router.post('/import', async (req, res) => {
                     vaultName = nameResult.vaultName;
                 }
             } else {
+                // Pre-compute convention name if project has one
+                let overrideVaultName = null;
+                if (!keepOriginalNames && namingConvention && namingConvention.length > 0) {
+                    const convResult = generateFromConvention(namingConvention, {
+                        project: project.code,
+                        sequence: sequence?.code,
+                        shot: shot?.code,
+                        role: role?.code,
+                        version: 1,
+                        take: take_number || (i + 1),
+                        counter: i + 1,
+                        wildcards: wildcardValues,
+                    }, path.extname(originalName));
+                    if (convResult) overrideVaultName = convResult.vaultName;
+                }
+
                 const imported = FileService.importFile(filePath, {
                     projectCode: project.code,
                     sequenceCode: sequence?.code,
@@ -685,6 +753,7 @@ router.post('/import', async (req, res) => {
                     counter: i + 1,
                     keepOriginals: !!req.body.keep_originals,
                     keepOriginalName: keepOriginalNames,
+                    overrideVaultName,
                 });
                 vaultPath = imported.vaultPath;
                 vaultName = imported.vaultName;

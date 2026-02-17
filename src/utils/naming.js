@@ -280,8 +280,65 @@ function resolveCollision(directory, filename) {
     return `${base}_${String(suffix).padStart(2, '0')}${ext}`;
 }
 
+/**
+ * Generate a filename from a project's custom naming convention (Shot Builder).
+ * The convention is an ordered array of token objects, each with a type, separator,
+ * and optional config (for wildcards).
+ *
+ * @param {Array} convention - Array of { type, separator, label?, value? }
+ * @param {object} values - Token values: { project, sequence, shot, role, version, take, episode, date, counter, wildcards: { Label: 'val' } }
+ * @param {string} ext - File extension including dot (e.g. ".exr")
+ * @returns {{ vaultName: string, ext: string }}
+ */
+function generateFromConvention(convention, values, ext) {
+    if (!convention || !convention.length) {
+        // No convention set — fall back to legacy behavior
+        return null;
+    }
+
+    const resolve = (token) => {
+        switch (token.type) {
+            case 'project':  return values.project || '';
+            case 'episode':  return values.episode || '';
+            case 'sequence': return values.sequence || '';
+            case 'shot':     return values.shot || '';
+            case 'role':     return (values.role || '').toLowerCase();
+            case 'version':  return 'v' + String(values.version || 1).padStart(token.padding || 3, '0');
+            case 'take':     return 'T' + String(values.take || 1).padStart(2, '0');
+            case 'date':     return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            case 'counter':  return String(values.counter || 1).padStart(token.padding || 4, '0');
+            case 'wildcard': {
+                // Check per-import override first, then token's default value
+                const label = token.label || 'custom';
+                return (values.wildcards && values.wildcards[label]) || token.value || '';
+            }
+            default: return '';
+        }
+    };
+
+    let name = '';
+    for (let i = 0; i < convention.length; i++) {
+        const token = convention[i];
+        const resolved = resolve(token);
+        if (!resolved) continue; // skip empty tokens
+
+        if (name.length > 0) {
+            // separator is stored on each token as "what comes before me"
+            name += token.separator ?? '_';
+        }
+        name += resolved;
+    }
+
+    // Clean up: collapse multiple underscores, strip leading/trailing
+    name = name.replace(/_+/g, '_').replace(/^_|_$/g, '');
+
+    if (!name) return null; // all tokens empty
+    return { vaultName: `${name}${ext}`, ext };
+}
+
 module.exports = {
     generateVaultName,
+    generateFromConvention,
     parseStructuredName,
     getNextVersion,
     getVaultDirectory,

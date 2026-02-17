@@ -93,6 +93,9 @@ class FileService {
         let vaultName;
         if (opts.keepOriginalName) {
             vaultName = originalName;
+        } else if (opts.overrideVaultName) {
+            // Convention-generated name from Shot Builder
+            vaultName = opts.overrideVaultName;
         } else {
             const result = generateVaultName({
                 originalName,

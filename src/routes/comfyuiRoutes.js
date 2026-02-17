@@ -21,6 +21,7 @@ const ThumbnailService = require('../services/ThumbnailService');
 const MediaInfoService = require('../services/MediaInfoService');
 const { detectMediaType, isMediaFile } = require('../utils/mediaTypes');
 const { resolveFilePath } = require('../utils/pathResolver');
+const { generateFromConvention, getNextVersion } = require('../utils/naming');
 
 // ═══════════════════════════════════════════
 //  LOAD FROM VAULT (ComfyUI reads assets)
@@ -208,12 +209,45 @@ router.post('/save', async (req, res) => {
         if (shot_id) shot = db.prepare('SELECT * FROM shots WHERE id = ?').get(shot_id);
         if (role_id) role = db.prepare('SELECT * FROM roles WHERE id = ?').get(role_id);
 
+        // Check if project has a Shot Builder naming convention
+        let overrideVaultName = null;
+        if (project.naming_convention) {
+            try {
+                const convention = JSON.parse(project.naming_convention);
+                const ext = path.extname(originalName).toLowerCase();
+
+                // Auto-detect next version for this context
+                const vaultRoot = getSetting('vault_root');
+                let nextVersion = 1;
+                if (vaultRoot) {
+                    const vaultDir = path.join(vaultRoot, project.code,
+                        sequence?.code || '', shot?.code || '');
+                    nextVersion = getNextVersion(vaultDir, role?.code || 'output');
+                }
+
+                const result = generateFromConvention(convention, {
+                    project: project.code,
+                    sequence: sequence?.name || '',
+                    shot: shot?.name || '',
+                    role: role?.code || 'output',
+                    version: nextVersion,
+                    episode: project.episode || '',
+                    take: 1,
+                    counter: 1,
+                }, ext);
+                if (result) overrideVaultName = result.vaultName;
+            } catch (e) {
+                console.warn('[ComfyUI] Failed to apply naming convention, using default:', e.message);
+            }
+        }
+
         const imported = FileService.importFile(file_path, {
             projectCode: project.code,
             sequenceCode: sequence?.code,
             shotCode: shot?.code,
             roleCode: role?.code,
             customName: custom_name,
+            overrideVaultName,
         });
 
         const info = await MediaInfoService.probe(imported.vaultPath);
