@@ -97,7 +97,7 @@ router.get('/probe/:id', (req, res) => {
         asset.file_path,
     ];
 
-    execFile(resolvedFFprobe, args, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(resolvedFFprobe, args, { maxBuffer: 1024 * 1024, windowsHide: true }, (err, stdout) => {
         if (err) return res.status(500).json({ error: 'ffprobe failed: ' + err.message });
 
         try {
@@ -383,7 +383,7 @@ function exportSingleAsset(asset, opts) {
         args.push(safePath);
 
         // Run FFmpeg
-        const ffmpeg = spawn(resolvedFFmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        const ffmpeg = spawn(resolvedFFmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 
         let stderr = '';
         ffmpeg.stderr.on('data', (d) => { stderr += d.toString(); });

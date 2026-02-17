@@ -1105,7 +1105,7 @@ router.get('/:id/stream', (req, res) => {
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Cache-Control', 'no-cache');
 
-    const ffmpeg = spawn(ffmpegPath, args);
+    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true });
     ffmpeg.stdout.pipe(res);
     ffmpeg.stderr.on('data', () => {}); // Swallow stderr
 

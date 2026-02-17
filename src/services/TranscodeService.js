@@ -401,7 +401,7 @@ class TranscodeService {
         return new Promise((resolve, reject) => {
             console.log(`[Transcode] FFmpeg: ${resolvedFFmpeg} ${args.join(' ').substring(0, 200)}...`);
 
-            const ffmpeg = spawn(resolvedFFmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+            const ffmpeg = spawn(resolvedFFmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 
             let stderr = '';
 

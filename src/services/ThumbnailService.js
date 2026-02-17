@@ -99,7 +99,7 @@ class ThumbnailService {
                 thumbPath
             ];
 
-            execFile(ffmpegPath, args, { timeout: 15000 }, (err) => {
+            execFile(ffmpegPath, args, { timeout: 15000, windowsHide: true }, (err) => {
                 if (err) reject(err);
                 else resolve(thumbPath);
             });
@@ -129,7 +129,7 @@ class ThumbnailService {
                     '-q:v', '5',
                     thumbPath
                 ];
-                execFile(ffmpegPath, args, { timeout: 10000 }, (err) => {
+                execFile(ffmpegPath, args, { timeout: 10000, windowsHide: true }, (err) => {
                     if (err) reject(err);
                     else resolve(thumbPath);
                 });

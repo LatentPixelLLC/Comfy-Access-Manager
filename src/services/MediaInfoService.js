@@ -38,7 +38,7 @@ class MediaInfoService {
                 filePath
             ];
 
-            execFile(ffprobePath, args, { timeout: 15000 }, (err, stdout) => {
+            execFile(ffprobePath, args, { timeout: 15000, windowsHide: true }, (err, stdout) => {
                 if (err) {
                     // Silently fall back to basic stats
                     const stats = fs.statSync(filePath);

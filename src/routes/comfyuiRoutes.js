@@ -317,7 +317,7 @@ function extractVideoWorkflow(filePath) {
     try {
         const out = execFileSync(ffprobe, [
             '-v', 'quiet', '-print_format', 'json', '-show_format', filePath
-        ], { maxBuffer: 20 * 1024 * 1024, timeout: 15000 }).toString();
+        ], { maxBuffer: 20 * 1024 * 1024, timeout: 15000, windowsHide: true }).toString();
 
         const info = JSON.parse(out);
         const comment = info.format?.tags?.comment || info.format?.tags?.Comment;
