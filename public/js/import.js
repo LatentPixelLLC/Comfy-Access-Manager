@@ -1198,6 +1198,17 @@ async function executeIngest() {
     const projectId = document.getElementById('importProject').value;
     if (!projectId || !state.selectedFiles.length || !activeInboxId) return;
 
+    // Respect the import mode radio (Copy keeps originals, Move cleans up)
+    const importMode = document.querySelector('input[name="importMode"]:checked')?.value || 'copy';
+    const keepOriginals = importMode === 'copy';
+    const registerInPlace = importMode === 'register';
+
+    // Move-mode confirmation gate
+    if (importMode === 'move') {
+        const confirmed = await showMoveConfirmation(state.selectedFiles.length);
+        if (!confirmed) return;
+    }
+
     const seqId = document.getElementById('importSequence')?.value || undefined;
     const shotId = document.getElementById('importShot')?.value || undefined;
     const roleId = document.getElementById('importRole')?.value || undefined;
@@ -1226,7 +1237,8 @@ async function executeIngest() {
             shot_id: shotId ? parseInt(shotId) : undefined,
             role_id: roleId ? parseInt(roleId) : undefined,
             take_number: parseInt(take),
-            keep_originals: true,  // Copy mode — originals stay for cleanup step
+            keep_originals: keepOriginals,
+            register_in_place: registerInPlace,
         };
 
         // Use SSE for 2+ files
@@ -1241,8 +1253,10 @@ async function executeIngest() {
             if (progressText) progressText.textContent = '';
         }
 
-        // Only clean up files that were successfully imported
-        if (result.imported > 0) {
+        // Only clean up (move to _ingested/) when NOT in copy mode
+        // Copy mode: originals stay exactly where they are
+        // Move/Register mode: move originals to _ingested/ so they leave the inbox
+        if (result.imported > 0 && !keepOriginals && !registerInPlace) {
             try {
                 await api(`/api/settings/watches/${activeInboxId}/cleanup`, {
                     method: 'POST',
@@ -1253,11 +1267,13 @@ async function executeIngest() {
             }
         }
 
+        const modeLabel = keepOriginals ? 'copied' : registerInPlace ? 'registered' : 'moved';
         resultDiv.style.display = 'block';
         if (result.imported > 0) {
             resultDiv.className = 'import-result success';
-            resultDiv.innerHTML = `✅ Ingested ${result.imported} file(s) — named by convention and moved to vault.` +
-                (result.errors > 0 ? `<br>⚠️ ${result.errors} error(s)` : '');
+            resultDiv.innerHTML = `✅ Ingested ${result.imported} file(s) — ${modeLabel} to vault.` +
+                (result.errors > 0 ? `<br>⚠️ ${result.errors} error(s)` : '') +
+                (keepOriginals ? '<br>📁 Originals kept in place.' : '');
         } else {
             resultDiv.className = 'import-result error';
             resultDiv.innerHTML = `❌ No files ingested. ` +
