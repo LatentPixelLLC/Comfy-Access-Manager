@@ -480,8 +480,8 @@ router.post('/import', async (req, res) => {
                 // Use project's Shot Builder convention
                 const convResult = generateFromConvention(namingConvention, {
                     project: project.code,
-                    sequence: sequence?.code,
-                    shot: shot?.code,
+                    sequence: sequence?.name || sequence?.code,
+                    shot: shot?.name || shot?.code,
                     role: role?.code,
                     version: 1,
                     take: take_number || 1,
@@ -702,8 +702,8 @@ router.post('/import', async (req, res) => {
                 } else if (namingConvention && namingConvention.length > 0) {
                     const convResult = generateFromConvention(namingConvention, {
                         project: project.code,
-                        sequence: sequence?.code,
-                        shot: shot?.code,
+                        sequence: sequence?.name || sequence?.code,
+                        shot: shot?.name || shot?.code,
                         role: role?.code,
                         version: 1,
                         take: take_number || (i + 1),
@@ -731,8 +731,8 @@ router.post('/import', async (req, res) => {
                 if (!keepOriginalNames && namingConvention && namingConvention.length > 0) {
                     const convResult = generateFromConvention(namingConvention, {
                         project: project.code,
-                        sequence: sequence?.code,
-                        shot: shot?.code,
+                        sequence: sequence?.name || sequence?.code,
+                        shot: shot?.name || shot?.code,
                         role: role?.code,
                         version: 1,
                         take: take_number || (i + 1),
