@@ -78,5 +78,35 @@ export function closeModal() {
     document.getElementById('modal').style.display = 'none';
 }
 
+/**
+ * Ensure a hex color is readable on dark backgrounds.
+ * Lightens colors with luminance < 90.
+ */
+export function ensureReadableColor(hex) {
+    if (!hex || hex.length < 4) return '#aaa';
+    const raw = hex.replace('#', '');
+    const r = parseInt(raw.substring(0, 2), 16) || 0;
+    const g = parseInt(raw.substring(2, 4), 16) || 0;
+    const b = parseInt(raw.substring(4, 6), 16) || 0;
+    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (luminance < 90) {
+        const boost = 80;
+        const nr = Math.min(255, r + boost);
+        const ng = Math.min(255, g + boost);
+        const nb = Math.min(255, b + boost);
+        return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`;
+    }
+    return hex;
+}
+
+/**
+ * Confirm a destructive action. Respects the confirm_delete preference.
+ */
+export function confirmDelete(message) {
+    const pref = localStorage.getItem('cam_pref_confirm_delete');
+    if (pref === 'false') return true;
+    return confirm(message);
+}
+
 // Expose on window for HTML onclick handlers
 window.closeModal = closeModal;

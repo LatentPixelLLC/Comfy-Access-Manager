@@ -1,0 +1,243 @@
+/**
+ * Comfy Asset Manager - Copyright (c) 2026 Greg Tee. All Rights Reserved.
+ * This source code is proprietary and confidential. Unauthorized copying,
+ * modification, distribution, or use of this file is strictly prohibited.
+ * See LICENSE file for details.
+ */
+/**
+ * CAM — Tree Navigation Module
+ * Left-side hierarchical tree: projects → sequences → shots → roles.
+ */
+
+import { state } from './state.js';
+import { api } from './api.js';
+import { esc, ensureReadableColor } from './utils.js';
+import { isShowArchived } from './projectView.js';
+
+// ═══════════════════════════════════════════
+//  MODULE STATE
+// ═══════════════════════════════════════════
+
+let treeData = [];
+let treeExpanded = {};  // { 'p_1': true, 'seq_3': true }
+
+/** Expand a tree node programmatically (used by assetGrid.openProject) */
+export function expandNode(key) { treeExpanded[key] = true; }
+
+// ═══════════════════════════════════════════
+//  LOAD & RENDER TREE
+// ═══════════════════════════════════════════
+
+export async function loadTree() {
+    try {
+        treeData = await api(`/api/projects/tree${isShowArchived() ? '?include_archived=1' : ''}`);
+        renderTree();
+    } catch (err) {
+        console.error('Failed to load tree:', err);
+        document.getElementById('treeContainer').innerHTML =
+            '<div style="color:var(--text-muted);padding:8px;font-size:0.8rem;">Failed to load tree</div>';
+    }
+}
+
+function refreshTree() { loadTree(); }
+
+function renderTree() {
+    const container = document.getElementById('treeContainer');
+    if (!container) return;
+
+    if (treeData.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:0.8rem;">No projects yet</div>';
+        return;
+    }
+
+    let html = '';
+    for (const project of treeData) {
+        const pKey = `p_${project.id}`;
+        const isOpen = treeExpanded[pKey];
+        const isActive = state.currentProject?.id === project.id && !state.currentSequence && !state.currentShot;
+        const hasChildren = project.sequences.length > 0;
+        const icon = project.type === 'shot_based' ? '🎬' : '📁';
+
+        html += `<div class="tree-node ${isActive ? 'tree-active' : ''}" onclick="treeSelectProject(${project.id})"
+            oncontextmenu="treeSelectProject(${project.id});showProjectContextMenu(event)">
+            <span class="tree-toggle" onclick="event.stopPropagation();treeToggle('${pKey}')">${hasChildren ? (isOpen ? '▼' : '▶') : '  '}</span>
+            <span class="tree-icon">${icon}</span>
+            <span class="tree-label">${esc(project.name)}</span>
+            <span class="tree-count">${project.asset_count}</span>
+        </div>`;
+
+        if (isOpen && hasChildren) {
+            for (const seq of project.sequences) {
+                const sKey = `seq_${seq.id}`;
+                const sOpen = treeExpanded[sKey];
+                const sActive = state.currentSequence?.id === seq.id && !state.currentShot;
+                const sHasChildren = seq.shots.length > 0;
+
+                html += `<div class="tree-node tree-indent-1 ${sActive ? 'tree-active' : ''}" onclick="treeSelectSequence(${project.id}, ${seq.id})"
+                    oncontextmenu="showSeqContextMenu(event, ${seq.id}, '${esc(seq.name).replace(/'/g, "\\'")}')"
+                    ondragover="onSeqDragOver(event)" ondragleave="onSeqDragLeave(event)"
+                    ondrop="onSeqDrop(event, ${seq.id}, ${project.id})">
+                    <span class="tree-toggle" onclick="event.stopPropagation();treeToggle('${sKey}')">${sHasChildren ? (sOpen ? '▼' : '▶') : '  '}</span>
+                    <span class="tree-icon">📋</span>
+                    <span class="tree-label">${esc(seq.name)}</span>
+                    <span class="tree-count">${seq.asset_count}</span>
+                </div>`;
+
+                if (sOpen && sHasChildren) {
+                    for (const shot of seq.shots) {
+                        const shKey = `sh_${shot.id}`;
+                        const shOpen = treeExpanded[shKey];
+                        const shActive = state.currentShot?.id === shot.id && !state.currentRole;
+                        const shHasRoles = shot.roles && shot.roles.length > 0;
+                        html += `<div class="tree-node tree-indent-2 ${shActive ? 'tree-active' : ''}" onclick="treeSelectShot(${project.id}, ${seq.id}, ${shot.id})"
+                            oncontextmenu="showShotContextMenu(event, ${seq.id}, ${shot.id}, '${esc(shot.name).replace(/'/g, "\\'")}')"
+                            ondragover="onSeqDragOver(event)" ondragleave="onSeqDragLeave(event)"
+                            ondrop="event.stopPropagation();onShotDrop(event, ${seq.id}, ${shot.id})">
+                            <span class="tree-toggle" onclick="event.stopPropagation();treeToggle('${shKey}')">${shHasRoles ? (shOpen ? '▼' : '▶') : '  '}</span>
+                            <span class="tree-icon">🎬</span>
+                            <span class="tree-label">${esc(shot.name)}</span>
+                            <span class="tree-count">${shot.asset_count}</span>
+                        </div>`;
+
+                        if (shOpen && shHasRoles) {
+                            for (const role of shot.roles) {
+                                const rActive = state.currentRole?.id === role.role_id && state.currentShot?.id === shot.id;
+                                const roleColor = ensureReadableColor(role.role_color);
+                                html += `<div class="tree-node tree-indent-3 ${rActive ? 'tree-active' : ''}" onclick="treeSelectRole(${project.id}, ${seq.id}, ${shot.id}, ${role.role_id})">
+                                    <span class="tree-toggle">  </span>
+                                    <span class="tree-icon">${role.role_icon || '🎭'}</span>
+                                    <span class="tree-label" style="color:${roleColor}">${esc(role.role_name)}</span>
+                                    <span class="tree-count">${role.asset_count}</span>
+                                </div>`;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    container.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════
+//  TREE INTERACTION
+// ═══════════════════════════════════════════
+
+function treeToggle(key) {
+    treeExpanded[key] = !treeExpanded[key];
+    renderTree();
+}
+
+async function treeSelectProject(projectId) {
+    treeExpanded[`p_${projectId}`] = true;
+
+    try {
+        const project = await api(`/api/projects/${projectId}`);
+        state.currentProject = project;
+        state.currentSequence = null;
+        state.currentShot = null;
+        state.currentRole = null;
+        state.selectedAssets = [];
+        state.lastClickedAsset = -1;
+
+        window.renderProjectDetail?.(project);
+        window.loadProjectAssets?.(project.id);
+        renderTree();
+    } catch (err) {
+        console.error('Failed to select project:', err);
+    }
+}
+
+async function treeSelectSequence(projectId, seqId) {
+    if (!state.currentProject || state.currentProject.id !== projectId) {
+        const project = await api(`/api/projects/${projectId}`);
+        state.currentProject = project;
+    }
+
+    const seq = state.currentProject.sequences?.find(s => s.id === seqId);
+    state.currentSequence = seq || { id: seqId };
+    state.currentShot = null;
+    state.currentRole = null;
+    state.selectedAssets = [];
+
+    treeExpanded[`p_${projectId}`] = true;
+    treeExpanded[`seq_${seqId}`] = true;
+
+    window.renderProjectDetail?.(state.currentProject);
+    window.loadProjectAssets?.(state.currentProject.id);
+    renderTree();
+}
+
+async function treeSelectShot(projectId, seqId, shotId) {
+    if (!state.currentProject || state.currentProject.id !== projectId) {
+        const project = await api(`/api/projects/${projectId}`);
+        state.currentProject = project;
+    }
+
+    const seq = state.currentProject.sequences?.find(s => s.id === seqId);
+    state.currentSequence = seq || { id: seqId };
+
+    try {
+        const shots = await api(`/api/projects/${projectId}/sequences/${seqId}/shots`);
+        state.currentShot = shots.find(sh => sh.id === shotId) || { id: shotId };
+    } catch {
+        state.currentShot = { id: shotId };
+    }
+
+    state.currentRole = null;
+    state.selectedAssets = [];
+
+    treeExpanded[`p_${projectId}`] = true;
+    treeExpanded[`seq_${seqId}`] = true;
+
+    window.renderProjectDetail?.(state.currentProject);
+    window.loadProjectAssets?.(state.currentProject.id);
+    renderTree();
+}
+
+async function treeSelectRole(projectId, seqId, shotId, roleId) {
+    if (!state.currentProject || state.currentProject.id !== projectId) {
+        const project = await api(`/api/projects/${projectId}`);
+        state.currentProject = project;
+    }
+
+    const seq = state.currentProject.sequences?.find(s => s.id === seqId);
+    state.currentSequence = seq || { id: seqId };
+
+    try {
+        const shots = await api(`/api/projects/${projectId}/sequences/${seqId}/shots`);
+        state.currentShot = shots.find(sh => sh.id === shotId) || { id: shotId };
+    } catch {
+        state.currentShot = { id: shotId };
+    }
+
+    try {
+        const roles = await api('/api/roles');
+        state.currentRole = roles.find(r => r.id === roleId) || { id: roleId };
+    } catch {
+        state.currentRole = { id: roleId };
+    }
+
+    state.selectedAssets = [];
+
+    treeExpanded[`p_${projectId}`] = true;
+    treeExpanded[`seq_${seqId}`] = true;
+    treeExpanded[`sh_${shotId}`] = true;
+
+    window.renderProjectDetail?.(state.currentProject);
+    window.loadProjectAssets?.(state.currentProject.id);
+    renderTree();
+}
+
+// ═══════════════════════════════════════════
+//  EXPOSE ON WINDOW
+// ═══════════════════════════════════════════
+
+window.loadTree = loadTree;
+window.refreshTree = refreshTree;
+window.treeSelectProject = treeSelectProject;
+window.treeSelectSequence = treeSelectSequence;
+window.treeSelectShot = treeSelectShot;
+window.treeSelectRole = treeSelectRole;
+window.treeToggle = treeToggle;
