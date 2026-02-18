@@ -15,6 +15,27 @@ import { esc, escAttr, formatSize, formatDuration, formatDate, formatDateTime, t
 import { openPlayer } from './player.js';
 import { renderShotBuilder, getConvention } from './shotBuilder.js';
 
+/**
+ * Ensure a hex color is readable on a dark background.
+ * If luminance is below threshold, return a lighter fallback.
+ */
+function ensureReadableColor(hex) {
+    if (!hex || typeof hex !== 'string') return '#aaa';
+    const h = hex.replace('#', '');
+    if (h.length < 6) return '#aaa';
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    // Relative luminance (simplified)
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b);
+    // If too dark for dark bg (< 90 out of 255), lighten it
+    if (lum < 90) {
+        const boost = 140 / Math.max(lum, 1);
+        return `rgb(${Math.min(255, Math.round(r * boost))}, ${Math.min(255, Math.round(g * boost))}, ${Math.min(255, Math.round(b * boost))})`;
+    }
+    return hex;
+}
+
 /** Check confirm_delete preference — returns true if user confirms (or pref is off) */
 function confirmDelete(msg) {
     if (state.settings?.confirm_delete === 'false') return true;
@@ -532,10 +553,12 @@ function renderTree() {
                         if (shOpen && shHasRoles) {
                             for (const role of shot.roles) {
                                 const rActive = state.currentRole?.id === role.role_id && state.currentShot?.id === shot.id;
+                                // Ensure role color is readable on dark bg — lighten if too dark
+                                const roleColor = ensureReadableColor(role.role_color);
                                 html += `<div class="tree-node tree-indent-3 ${rActive ? 'tree-active' : ''}" onclick="treeSelectRole(${project.id}, ${seq.id}, ${shot.id}, ${role.role_id})">
                                     <span class="tree-toggle">  </span>
                                     <span class="tree-icon">${role.role_icon || '🎭'}</span>
-                                    <span class="tree-label" style="color:${role.role_color || 'inherit'}">${esc(role.role_name)}</span>
+                                    <span class="tree-label" style="color:${roleColor}">${esc(role.role_name)}</span>
                                     <span class="tree-count">${role.asset_count}</span>
                                 </div>`;
                             }
