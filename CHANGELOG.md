@@ -2,6 +2,18 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.3.2] - 2026-02-18
+
+### Added
+- **OpenRV overlay system** — metadata burn-in, status stamp, and watermark rendered directly in the RV viewport
+  - Embedded 5×7 pixel font via pure `glBitmap` — no GLUT/freeglut dependency (works on all platforms)
+  - **Metadata burn-in** (bottom-right, above timeline) — single-line `ShotName  0001` format with 4-digit zero-padded frame number
+  - **Status stamp** (top-right) — colored badge: WIP (orange), Review (blue), Approved (green), Final (gold)
+  - **Watermark** (center) — faint "CONFIDENTIAL" or "INTERNAL USE ONLY" text
+  - **Shift+O** hotkey + MediaVault menu checkboxes to toggle each overlay layer independently
+  - `GET /api/assets/overlay-info` endpoint provides asset metadata (shot name, role, version, status) for overlay display
+  - `_refreshOverlayMeta()` fetches metadata from CAM server when file changes in RV
+
 ## [1.3.1] - 2026-02-17
 
 ### Added

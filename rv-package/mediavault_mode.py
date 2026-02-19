@@ -14,11 +14,30 @@ import rv.extra_commands as rve
 import json
 import os
 
+import time
+
 try:
     import urllib.request
     import urllib.parse
 except ImportError:
     urllib = None
+
+# ─── OpenGL for overlay rendering ─────────────────────────────
+_HAS_GL = False
+try:
+    from OpenGL.GL import (
+        glMatrixMode, glPushMatrix, glPopMatrix, glLoadIdentity,
+        glEnable, glDisable, glBlendFunc, glColor4f,
+        glBegin, glEnd, glVertex2f, glRasterPos2f, glLineWidth,
+        glBitmap, glPixelStorei,
+        GL_PROJECTION, GL_MODELVIEW, GL_BLEND,
+        GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_QUADS, GL_LINE_LOOP,
+        GL_UNPACK_ALIGNMENT,
+    )
+    from OpenGL.GLU import gluOrtho2D
+    _HAS_GL = True
+except ImportError:
+    pass
 
 try:
     from PySide2.QtWidgets import (
@@ -185,6 +204,132 @@ QLabel#titleLabel {
     font-weight: 700;
 }
 """
+
+
+# ─── Overlay visual constants ─────────────────────────────────
+_OV_BG      = (0.0, 0.0, 0.0, 0.55)       # semi-transparent black background
+_OV_TEXT    = (1.0, 1.0, 1.0, 0.90)       # white text
+_OV_WM      = (1.0, 1.0, 1.0, 0.07)       # very faint watermark
+_STATUS_COLORS = {
+    "WIP":      (1.0, 0.65, 0.0,  0.85),   # orange
+    "Review":   (0.3, 0.6,  1.0,  0.85),   # blue
+    "Approved": (0.2, 0.8,  0.2,  0.85),   # green
+    "Final":    (0.0, 0.75, 0.95, 0.85),   # cyan
+}
+
+# ─── Built-in 5×7 pixel font (pure GL – no GLUT or freeglut DLL needed) ──────
+# Each glyph is 8 px wide (5 used + 3 padding) × 7 rows, stored MSB-first.
+# One byte per row, top row first.  Only printable ASCII 32-126 defined.
+_GLYPH_W = 6     # advance per character (px) – includes 1px spacing
+_GLYPH_H = 8     # bitmap height for glBitmap (px)
+_FONT_DATA = {}   # ord(char) -> bytes(7)  filled below
+
+def _def_glyphs():
+    """Populate _FONT_DATA with a compact 5×7 bitmap font."""
+    # fmt: off
+    _raw = {
+        ' ': (0x00,0x00,0x00,0x00,0x00,0x00,0x00),
+        '!': (0x20,0x20,0x20,0x20,0x20,0x00,0x20),
+        '"': (0x50,0x50,0x00,0x00,0x00,0x00,0x00),
+        '#': (0x50,0xF8,0x50,0x50,0xF8,0x50,0x00),
+        '$': (0x20,0x78,0xA0,0x70,0x28,0xF0,0x20),
+        '%': (0xC8,0xD0,0x20,0x40,0x58,0x98,0x00),
+        '&': (0x40,0xA0,0x40,0xA8,0x90,0x68,0x00),
+        "'": (0x20,0x20,0x00,0x00,0x00,0x00,0x00),
+        '(': (0x10,0x20,0x40,0x40,0x40,0x20,0x10),
+        ')': (0x40,0x20,0x10,0x10,0x10,0x20,0x40),
+        '*': (0x00,0x50,0x20,0xF8,0x20,0x50,0x00),
+        '+': (0x00,0x20,0x20,0xF8,0x20,0x20,0x00),
+        ',': (0x00,0x00,0x00,0x00,0x00,0x20,0x40),
+        '-': (0x00,0x00,0x00,0xF8,0x00,0x00,0x00),
+        '.': (0x00,0x00,0x00,0x00,0x00,0x00,0x20),
+        '/': (0x08,0x10,0x10,0x20,0x40,0x40,0x80),
+        '0': (0x70,0x88,0x98,0xA8,0xC8,0x88,0x70),
+        '1': (0x20,0x60,0x20,0x20,0x20,0x20,0x70),
+        '2': (0x70,0x88,0x08,0x10,0x20,0x40,0xF8),
+        '3': (0x70,0x88,0x08,0x30,0x08,0x88,0x70),
+        '4': (0x10,0x30,0x50,0x90,0xF8,0x10,0x10),
+        '5': (0xF8,0x80,0xF0,0x08,0x08,0x88,0x70),
+        '6': (0x30,0x40,0x80,0xF0,0x88,0x88,0x70),
+        '7': (0xF8,0x08,0x10,0x20,0x40,0x40,0x40),
+        '8': (0x70,0x88,0x88,0x70,0x88,0x88,0x70),
+        '9': (0x70,0x88,0x88,0x78,0x08,0x10,0x60),
+        ':': (0x00,0x00,0x20,0x00,0x00,0x20,0x00),
+        ';': (0x00,0x00,0x20,0x00,0x00,0x20,0x40),
+        '<': (0x08,0x10,0x20,0x40,0x20,0x10,0x08),
+        '=': (0x00,0x00,0xF8,0x00,0xF8,0x00,0x00),
+        '>': (0x80,0x40,0x20,0x10,0x20,0x40,0x80),
+        '?': (0x70,0x88,0x08,0x10,0x20,0x00,0x20),
+        '@': (0x70,0x88,0xB8,0xA8,0xB8,0x80,0x78),
+        'A': (0x70,0x88,0x88,0xF8,0x88,0x88,0x88),
+        'B': (0xF0,0x88,0x88,0xF0,0x88,0x88,0xF0),
+        'C': (0x70,0x88,0x80,0x80,0x80,0x88,0x70),
+        'D': (0xE0,0x90,0x88,0x88,0x88,0x90,0xE0),
+        'E': (0xF8,0x80,0x80,0xF0,0x80,0x80,0xF8),
+        'F': (0xF8,0x80,0x80,0xF0,0x80,0x80,0x80),
+        'G': (0x70,0x88,0x80,0xB8,0x88,0x88,0x70),
+        'H': (0x88,0x88,0x88,0xF8,0x88,0x88,0x88),
+        'I': (0x70,0x20,0x20,0x20,0x20,0x20,0x70),
+        'J': (0x38,0x10,0x10,0x10,0x10,0x90,0x60),
+        'K': (0x88,0x90,0xA0,0xC0,0xA0,0x90,0x88),
+        'L': (0x80,0x80,0x80,0x80,0x80,0x80,0xF8),
+        'M': (0x88,0xD8,0xA8,0x88,0x88,0x88,0x88),
+        'N': (0x88,0xC8,0xA8,0x98,0x88,0x88,0x88),
+        'O': (0x70,0x88,0x88,0x88,0x88,0x88,0x70),
+        'P': (0xF0,0x88,0x88,0xF0,0x80,0x80,0x80),
+        'Q': (0x70,0x88,0x88,0x88,0xA8,0x90,0x68),
+        'R': (0xF0,0x88,0x88,0xF0,0xA0,0x90,0x88),
+        'S': (0x70,0x88,0x80,0x70,0x08,0x88,0x70),
+        'T': (0xF8,0x20,0x20,0x20,0x20,0x20,0x20),
+        'U': (0x88,0x88,0x88,0x88,0x88,0x88,0x70),
+        'V': (0x88,0x88,0x88,0x88,0x50,0x50,0x20),
+        'W': (0x88,0x88,0x88,0x88,0xA8,0xD8,0x88),
+        'X': (0x88,0x88,0x50,0x20,0x50,0x88,0x88),
+        'Y': (0x88,0x88,0x50,0x20,0x20,0x20,0x20),
+        'Z': (0xF8,0x08,0x10,0x20,0x40,0x80,0xF8),
+        '[': (0x70,0x40,0x40,0x40,0x40,0x40,0x70),
+        '\\': (0x80,0x40,0x40,0x20,0x10,0x10,0x08),
+        ']': (0x70,0x10,0x10,0x10,0x10,0x10,0x70),
+        '^': (0x20,0x50,0x88,0x00,0x00,0x00,0x00),
+        '_': (0x00,0x00,0x00,0x00,0x00,0x00,0xF8),
+        '`': (0x40,0x20,0x00,0x00,0x00,0x00,0x00),
+        'a': (0x00,0x00,0x70,0x08,0x78,0x88,0x78),
+        'b': (0x80,0x80,0xF0,0x88,0x88,0x88,0xF0),
+        'c': (0x00,0x00,0x70,0x80,0x80,0x88,0x70),
+        'd': (0x08,0x08,0x78,0x88,0x88,0x88,0x78),
+        'e': (0x00,0x00,0x70,0x88,0xF8,0x80,0x70),
+        'f': (0x30,0x48,0x40,0xE0,0x40,0x40,0x40),
+        'g': (0x00,0x00,0x78,0x88,0x78,0x08,0x70),
+        'h': (0x80,0x80,0xB0,0xC8,0x88,0x88,0x88),
+        'i': (0x20,0x00,0x60,0x20,0x20,0x20,0x70),
+        'j': (0x10,0x00,0x30,0x10,0x10,0x90,0x60),
+        'k': (0x80,0x80,0x90,0xA0,0xC0,0xA0,0x90),
+        'l': (0x60,0x20,0x20,0x20,0x20,0x20,0x70),
+        'm': (0x00,0x00,0xD0,0xA8,0xA8,0x88,0x88),
+        'n': (0x00,0x00,0xB0,0xC8,0x88,0x88,0x88),
+        'o': (0x00,0x00,0x70,0x88,0x88,0x88,0x70),
+        'p': (0x00,0x00,0xF0,0x88,0xF0,0x80,0x80),
+        'q': (0x00,0x00,0x78,0x88,0x78,0x08,0x08),
+        'r': (0x00,0x00,0xB0,0xC8,0x80,0x80,0x80),
+        's': (0x00,0x00,0x78,0x80,0x70,0x08,0xF0),
+        't': (0x40,0x40,0xE0,0x40,0x40,0x48,0x30),
+        'u': (0x00,0x00,0x88,0x88,0x88,0x98,0x68),
+        'v': (0x00,0x00,0x88,0x88,0x88,0x50,0x20),
+        'w': (0x00,0x00,0x88,0x88,0xA8,0xA8,0x50),
+        'x': (0x00,0x00,0x88,0x50,0x20,0x50,0x88),
+        'y': (0x00,0x00,0x88,0x88,0x78,0x08,0x70),
+        'z': (0x00,0x00,0xF8,0x10,0x20,0x40,0xF8),
+        '{': (0x10,0x20,0x20,0x40,0x20,0x20,0x10),
+        '|': (0x20,0x20,0x20,0x20,0x20,0x20,0x20),
+        '}': (0x40,0x20,0x20,0x10,0x20,0x20,0x40),
+        '~': (0x00,0x00,0x48,0xA8,0x90,0x00,0x00),
+    }
+    # fmt: on
+    for ch, rows in _raw.items():
+        # glBitmap expects bottom row first, MSB on the left, byte-aligned
+        _FONT_DATA[ord(ch)] = bytes(reversed(rows))
+
+_def_glyphs()
 
 
 class AssetPickerDialog(QDialog):
@@ -503,6 +648,22 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
     def __init__(self):
         rv.rvtypes.MinorMode.__init__(self)
+
+        # ── Overlay state ────────────────────────────────────────
+        self._overlay_enabled  = False
+        self._show_metadata    = True   # on by default when overlay enabled
+        self._show_status      = True
+        self._show_watermark   = False  # off by default (opt-in)
+        self._overlay_meta     = None   # cached API response
+        self._overlay_path     = None   # path the cache belongs to
+        self._overlay_tick     = 0      # frame counter for lazy refresh
+
+        # ── Compare / version cache ──────────────────────────────
+        self._cached_data = None
+        self._cached_path = None
+
+        print("[MediaVault] Initialising mediavault-mode (overlay build)")
+
         self.init(
             "mediavault-mode",
             None,
@@ -513,10 +674,21 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 ("_", None),
                 ("Prev Version", self.prevVersion, "alt+Left", None),
                 ("Next Version", self.nextVersion, "alt+Right", None),
+                ("_", None),
+                ("Toggle Overlay", self._toggleOverlay, "shift+o",
+                 lambda: rvc.CheckedMenuState if self._overlay_enabled
+                         else rvc.UncheckedMenuState),
+                ("  Metadata Burn-in", self._toggleMetadata, None,
+                 lambda: rvc.CheckedMenuState if self._show_metadata
+                         else rvc.UncheckedMenuState),
+                ("  Status Stamp", self._toggleStatus, None,
+                 lambda: rvc.CheckedMenuState if self._show_status
+                         else rvc.UncheckedMenuState),
+                ("  Watermark", self._toggleWatermark, None,
+                 lambda: rvc.CheckedMenuState if self._show_watermark
+                         else rvc.UncheckedMenuState),
             ])]
         )
-        self._cached_data = None
-        self._cached_path = None
 
     # ── source path resolution ───────────────────────────────────
 
@@ -832,6 +1004,259 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     def nextVersion(self, event):
         """MediaVault -> Next Version"""
         self._stepVersion(1)
+
+    # ── overlay toggle handlers ──────────────────────────────────
+
+    def _toggleOverlay(self, event):
+        self._overlay_enabled = not self._overlay_enabled
+        print("[MediaVault] Overlay toggled: %s  GL=%s" % (
+            self._overlay_enabled, _HAS_GL))
+        if self._overlay_enabled:
+            self._refreshOverlayMeta()
+        rve.displayFeedback(
+            "Overlay: %s" % ("ON" if self._overlay_enabled else "OFF"), 2.0)
+
+    def _toggleMetadata(self, event):
+        self._show_metadata = not self._show_metadata
+        if self._show_metadata and not self._overlay_enabled:
+            self._overlay_enabled = True
+            self._refreshOverlayMeta()
+        rve.displayFeedback(
+            "Metadata: %s" % ("ON" if self._show_metadata else "OFF"), 1.5)
+
+    def _toggleStatus(self, event):
+        self._show_status = not self._show_status
+        if self._show_status and not self._overlay_enabled:
+            self._overlay_enabled = True
+            self._refreshOverlayMeta()
+        rve.displayFeedback(
+            "Status Stamp: %s" % ("ON" if self._show_status else "OFF"), 1.5)
+
+    def _toggleWatermark(self, event):
+        self._show_watermark = not self._show_watermark
+        if self._show_watermark and not self._overlay_enabled:
+            self._overlay_enabled = True
+        rve.displayFeedback(
+            "Watermark: %s" % ("ON" if self._show_watermark else "OFF"), 1.5)
+
+    # ── overlay metadata fetch ───────────────────────────────────
+
+    def _refreshOverlayMeta(self):
+        """Fetch lightweight overlay metadata from CAM server."""
+        filepath = self._getCurrentSourcePath()
+        if not filepath:
+            self._overlay_meta = None
+            return
+
+        # Already cached for this path
+        if filepath == self._overlay_path and self._overlay_meta:
+            return
+
+        if urllib is None:
+            self._overlay_meta = {"vault_name": os.path.basename(filepath)}
+            self._overlay_path = filepath
+            return
+
+        try:
+            encoded = urllib.parse.quote(filepath, safe="")
+            url = "%s/api/assets/overlay-info?path=%s" % (DMV_URL, encoded)
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                self._overlay_meta = data if data.get("found") else {
+                    "vault_name": os.path.basename(filepath)}
+                self._overlay_path = filepath
+        except Exception as e:
+            print("[MediaVault] Overlay fetch error: %s" % e)
+            self._overlay_meta = {"vault_name": os.path.basename(filepath)}
+            self._overlay_path = filepath
+
+    # ── overlay GL rendering ─────────────────────────────────────
+
+    def render(self, event):
+        """Called every frame by RV (auto-bound by MinorMode name convention).
+        Draw overlay when enabled."""
+        if not self._overlay_enabled or not _HAS_GL:
+            return
+
+        # One-time render confirmation
+        if not hasattr(self, '_render_logged'):
+            print("[MediaVault] render() called – drawing overlay (w=%s, h=%s)" %
+                  (event.domain()[0], event.domain()[1]))
+            self._render_logged = True
+
+        try:
+            domain = event.domain()
+            w = int(domain[0])
+            h = int(domain[1])
+            if w < 100 or h < 100:
+                return
+
+            # Re-fetch metadata if source changed (check every 30 frames)
+            self._overlay_tick += 1
+            if self._overlay_tick % 30 == 1:
+                cur = self._getCurrentSourcePath()
+                if cur and cur != self._overlay_path:
+                    self._refreshOverlayMeta()
+
+            # ── Set up 2D ortho projection ──
+            glMatrixMode(GL_PROJECTION)
+            glPushMatrix()
+            glLoadIdentity()
+            gluOrtho2D(0, w, 0, h)
+            glMatrixMode(GL_MODELVIEW)
+            glPushMatrix()
+            glLoadIdentity()
+
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+            if self._show_metadata:
+                self._drawMetadataBurnIn(w, h)
+            if self._show_status:
+                self._drawStatusStamp(w, h)
+            if self._show_watermark:
+                self._drawWatermarkText(w, h)
+
+            glDisable(GL_BLEND)
+            glPopMatrix()
+            glMatrixMode(GL_PROJECTION)
+            glPopMatrix()
+            glMatrixMode(GL_MODELVIEW)
+
+        except Exception:
+            pass  # never crash RV's render loop
+
+    # ── GL drawing helpers ───────────────────────────────────────
+
+    @staticmethod
+    def _glText(x, y, text, scale=1):
+        """Render *text* at pixel coords (x, y) using built-in glBitmap font.
+        *scale* is ignored for bitmap fonts but kept for API compat."""
+        if not _HAS_GL or not text:
+            return
+        try:
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+            glRasterPos2f(float(x), float(y))
+            for ch in text:
+                code = ord(ch)
+                glyph = _FONT_DATA.get(code)
+                if glyph is None:
+                    glyph = _FONT_DATA.get(ord(' '), b'\x00' * 7)
+                glBitmap(8, 7, 0.0, 0.0, float(_GLYPH_W), 0.0, glyph)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _textW(text, scale=1):
+        """Text width in pixels for the built-in font."""
+        if not text:
+            return 0
+        return len(text) * _GLYPH_W
+
+    @staticmethod
+    def _box(x, y, bw, bh, color):
+        """Draw a filled rectangle."""
+        glColor4f(*color)
+        glBegin(GL_QUADS)
+        glVertex2f(x, y)
+        glVertex2f(x + bw, y)
+        glVertex2f(x + bw, y + bh)
+        glVertex2f(x, y + bh)
+        glEnd()
+
+    @staticmethod
+    def _boxOutline(x, y, bw, bh, color, width=1.0):
+        """Draw a rectangle outline."""
+        glColor4f(*color)
+        glLineWidth(width)
+        glBegin(GL_LINE_LOOP)
+        glVertex2f(x, y)
+        glVertex2f(x + bw, y)
+        glVertex2f(x + bw, y + bh)
+        glVertex2f(x, y + bh)
+        glEnd()
+
+    # ── metadata burn-in (top-left) ──────────────────────────────
+
+    def _drawMetadataBurnIn(self, w, h):
+        meta = self._overlay_meta or {}
+
+        # Shot name: prefer shot > sequence > project > filename > RV path
+        shot = (meta.get("shot_name")
+                or meta.get("sequence_name")
+                or meta.get("project_name")
+                or meta.get("vault_name")
+                or meta.get("original_name"))
+        if not shot:
+            try:
+                src = self._getCurrentSourcePath()
+                shot = os.path.basename(src) if src else None
+            except Exception:
+                pass
+        shot = shot or "Unknown"
+
+        # Frame number – 4-digit zero-padded
+        frame_str = "0001"
+        try:
+            frame_str = "%04d" % rvc.frame()
+        except Exception:
+            pass
+
+        label = "%s  %s" % (shot, frame_str)
+
+        padding = 8
+        tw = self._textW(label)
+        bw = tw + padding * 2 + 4
+        bh = _GLYPH_H + padding * 2
+        bx = w - bw - 10         # right-aligned
+        by = 55                   # above RV's timeline/transport bar
+
+        self._box(bx, by, bw, bh, _OV_BG)
+        glColor4f(*_OV_TEXT)
+        self._glText(bx + padding, by + padding, label)
+
+    # ── status stamp (top-right) ─────────────────────────────────
+
+    def _drawStatusStamp(self, w, h):
+        meta = self._overlay_meta or {}
+        status = meta.get("status", "WIP")
+        color = _STATUS_COLORS.get(status, _STATUS_COLORS["WIP"])
+
+        label = status.upper()
+        tw = self._textW(label)
+
+        pad = 12
+        badge_w = tw + pad * 2
+        badge_h = 24
+        badge_x = w - badge_w - 15
+        badge_y = h - badge_h - 15
+
+        # Filled badge with thin outline
+        self._box(badge_x, badge_y, badge_w, badge_h, color)
+        self._boxOutline(badge_x, badge_y, badge_w, badge_h,
+                         (0.0, 0.0, 0.0, 0.3), 1.5)
+
+        # Dark text on bright badge
+        glColor4f(0.0, 0.0, 0.0, 0.9)
+        self._glText(badge_x + pad, badge_y + 9, label)
+
+    # ── watermark (center) ───────────────────────────────────────
+
+    def _drawWatermarkText(self, w, h):
+        text = "C O N F I D E N T I A L"
+        tw = self._textW(text)
+        tx = (w - tw) // 2
+        ty = h // 2
+
+        glColor4f(*_OV_WM)
+        self._glText(tx, ty, text)
+
+        # second line for emphasis
+        text2 = "INTERNAL USE ONLY"
+        tw2 = self._textW(text2)
+        tx2 = (w - tw2) // 2
+        self._glText(tx2, ty - 20, text2)
 
 
 def createMode():

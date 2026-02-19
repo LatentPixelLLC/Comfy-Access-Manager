@@ -368,6 +368,60 @@ router.get('/compare-targets-by-path', (req, res) => {
 });
 
 
+// GET /api/assets/overlay-info — Lightweight metadata for RV overlay burn-in
+// Used by RV plugin to show filename, version, role, project/shot info on screen
+router.get('/overlay-info', (req, res) => {
+    const db = getDb();
+    const filePath = req.query.path;
+    if (!filePath) return res.status(400).json({ found: false, error: 'Provide ?path= parameter' });
+
+    const variants = getAllPathVariants(filePath);
+    const stmt = db.prepare(`
+        SELECT a.id, a.vault_name, a.original_name, a.version, a.file_ext,
+               a.media_type, a.resolution, a.created_at,
+               r.name AS role_name, r.code AS role_code,
+               p.name AS project_name, p.code AS project_code,
+               seq.name AS sequence_name, seq.code AS sequence_code,
+               sh.name AS shot_name, sh.code AS shot_code
+        FROM assets a
+        LEFT JOIN roles r ON a.role_id = r.id
+        LEFT JOIN projects p ON a.project_id = p.id
+        LEFT JOIN sequences seq ON a.sequence_id = seq.id
+        LEFT JOIN shots sh ON a.shot_id = sh.id
+        WHERE replace(a.file_path, '\\', '/') = ?
+        LIMIT 1
+    `);
+
+    let asset = null;
+    for (const variant of variants) {
+        asset = stmt.get(variant);
+        if (asset) break;
+    }
+
+    if (!asset) {
+        return res.json({ found: false, vault_name: require('path').basename(filePath) });
+    }
+
+    res.json({
+        found: true,
+        vault_name: asset.vault_name,
+        original_name: asset.original_name,
+        version: asset.version,
+        file_ext: asset.file_ext,
+        media_type: asset.media_type,
+        resolution: asset.resolution || null,
+        created_at: asset.created_at || null,
+        role_name: asset.role_name || null,
+        role_code: asset.role_code || null,
+        project_name: asset.project_name || null,
+        project_code: asset.project_code || null,
+        sequence_name: asset.sequence_name || null,
+        shot_name: asset.shot_name || null,
+        status: 'WIP'  // TODO: Add status column to assets table in future
+    });
+});
+
+
 // GET /api/assets/:id — Single asset with full details
 router.get('/:id', (req, res) => {
     const db = getDb();
