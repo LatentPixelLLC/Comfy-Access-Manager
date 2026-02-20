@@ -39,3 +39,5 @@ Thumbs.db
 *.bak
 data/mediavault.db.backup-*
 data/uploads/
+data/*.db-shm
+data/*.db-wal

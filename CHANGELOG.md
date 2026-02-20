@@ -12,6 +12,13 @@ All notable changes to Comfy Asset Manager (CAM) will be documented in this file
   - Works in both grid and list views
   - Cursor switches to crosshair during drag, text selection disabled
 
+### Changed
+- **Database Engine Migration** — Replaced `sql.js` (WASM) with `better-sqlite3` (native C++) for massive performance gains
+  - Enabled Write-Ahead Logging (WAL) mode for concurrent reads/writes without locking
+  - Eliminated memory-locking issues during large imports or heavy API usage
+  - Removed legacy `.export()` and `getRowsModified()` methods across all routes
+  - Auto-updater seamlessly installs the new native driver for end-users
+
 ### Fixed
 - **Click-to-deselect after marquee** — the `click` event that fires after `mouseup` was clearing the selection made by the marquee; added `_suppressNextClick` flag to prevent this
 - **Deselect on background click** — now correctly detects clicks on both `#assetContainer` and `#assetContainerWrap` as "empty space" clicks

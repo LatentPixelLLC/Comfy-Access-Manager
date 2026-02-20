@@ -5,11 +5,11 @@
  * See LICENSE file for details.
  */
 /**
- * MediaVault - SQLite Database Layer (sql.js — pure WASM, no native deps)
- * Provides a better-sqlite3–compatible API wrapper around sql.js
+ * MediaVault - SQLite Database Layer (better-sqlite3)
+ * Disk-backed, high-performance SQLite driver
  */
 
-const initSqlJs = require('sql.js');
+const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
@@ -18,11 +18,7 @@ const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const LOCAL_DB_PATH = path.join(DATA_DIR, 'mediavault.db');
 
 let dbPath = LOCAL_DB_PATH;   // Active DB path (may point to shared location)
-let db = null;                // DatabaseWrapper instance
-let SQL = null;               // sql.js module ref (for reloads)
-let lastExternalMtime = 0;    // Track external modifications for polling
-let pollTimer = null;         // Polling interval handle
-const POLL_INTERVAL = 5000;   // Check for external changes every 5s
+let db = null;                // better-sqlite3 instance
 
 // ─── Local Config (machine-specific, NOT in DB) ───
 
@@ -64,121 +60,6 @@ function resolveDbPath() {
     return LOCAL_DB_PATH;
 }
 
-// ─── Compatibility Wrapper ───
-// Provides the same .prepare().run/get/all() API as better-sqlite3
-
-class PreparedStatement {
-    constructor(rawDb, sql, wrapper) {
-        this._rawDb = rawDb;
-        this._sql = sql;
-        this._wrapper = wrapper;
-    }
-
-    run(...params) {
-        const clean = params.map(p => (p === undefined ? null : p));
-        if (clean.length > 0) {
-            this._rawDb.run(this._sql, clean);
-        } else {
-            this._rawDb.run(this._sql);
-        }
-        const lastRes = this._rawDb.exec('SELECT last_insert_rowid()');
-        const lastInsertRowid = lastRes.length ? lastRes[0].values[0][0] : 0;
-        const chgRes = this._rawDb.exec('SELECT changes()');
-        const changes = chgRes.length ? chgRes[0].values[0][0] : 0;
-
-        if (!this._wrapper._inTransaction) this._wrapper._save();
-        return { lastInsertRowid, changes };
-    }
-
-    get(...params) {
-        const clean = params.map(p => (p === undefined ? null : p));
-        let stmt;
-        try {
-            stmt = this._rawDb.prepare(this._sql);
-            if (clean.length > 0) stmt.bind(clean);
-            if (stmt.step()) {
-                return stmt.getAsObject();
-            }
-            return undefined;
-        } finally {
-            if (stmt) stmt.free();
-        }
-    }
-
-    all(...params) {
-        const clean = params.map(p => (p === undefined ? null : p));
-        const results = [];
-        let stmt;
-        try {
-            stmt = this._rawDb.prepare(this._sql);
-            if (clean.length > 0) stmt.bind(clean);
-            while (stmt.step()) {
-                results.push(stmt.getAsObject());
-            }
-        } finally {
-            if (stmt) stmt.free();
-        }
-        return results;
-    }
-}
-
-class DatabaseWrapper {
-    constructor(rawDb) {
-        this._rawDb = rawDb;
-        this._inTransaction = false;
-    }
-
-    prepare(sql) {
-        return new PreparedStatement(this._rawDb, sql, this);
-    }
-
-    exec(sql) {
-        this._rawDb.exec(sql);
-        if (!this._inTransaction) this._save();
-    }
-
-    pragma(str) {
-        try { this._rawDb.exec(`PRAGMA ${str}`); } catch (_) { /* ignore unsupported */ }
-    }
-
-    transaction(fn) {
-        const self = this;
-        return function (...args) {
-            self._rawDb.exec('BEGIN');
-            self._inTransaction = true;
-            try {
-                fn(...args);
-                self._rawDb.exec('COMMIT');
-                self._inTransaction = false;
-                self._save();
-            } catch (e) {
-                self._rawDb.exec('ROLLBACK');
-                self._inTransaction = false;
-                throw e;
-            }
-        };
-    }
-
-    close() {
-        this._save();
-        this._rawDb.close();
-    }
-
-    _save() {
-        try {
-            const data = this._rawDb.export();
-            const buffer = Buffer.from(data);
-            const tmp = dbPath + '.tmp';
-            fs.writeFileSync(tmp, buffer);
-            fs.renameSync(tmp, dbPath);
-            // Update our own mtime so polling doesn't treat our write as external
-            try { lastExternalMtime = fs.statSync(dbPath).mtimeMs; } catch (_) {}
-        } catch (e) {
-            console.error('[DB] Save failed:', e.message);
-        }
-    }
-}
-
 // ─── Async Init (call once in server.js before starting) ───
 
 async function initDb() {
@@ -187,8 +68,6 @@ async function initDb() {
     if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-
-    SQL = await initSqlJs();
 
     // Resolve DB path (local or shared)
     dbPath = resolveDbPath();
@@ -201,63 +80,22 @@ async function initDb() {
         fs.copyFileSync(LOCAL_DB_PATH, dbPath);
     }
 
-    let rawDb;
-    if (fs.existsSync(dbPath)) {
-        const buffer = fs.readFileSync(dbPath);
-        rawDb = new SQL.Database(buffer);
-    } else {
-        rawDb = new SQL.Database();
-    }
-
-    db = new DatabaseWrapper(rawDb);
+    db = new Database(dbPath);
     db.pragma('foreign_keys = ON');
+    db.pragma('journal_mode = WAL'); // Better concurrency for disk-backed DB
+    
     runMigrations(db);
-
-    // Track mtime for external change detection
-    try { lastExternalMtime = fs.statSync(dbPath).mtimeMs; } catch (_) {}
-
-    // Start polling for external changes (other machines writing to shared DB)
-    if (isShared) startPolling();
 
     return db;
 }
 
 // ─── External Change Detection (Shared DB Sync) ───
-
-function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(() => {
-        try {
-            if (!fs.existsSync(dbPath)) return;
-            const stat = fs.statSync(dbPath);
-            if (stat.mtimeMs > lastExternalMtime + 500) {
-                console.log('[DB] External change detected — reloading shared database');
-                reloadFromDisk();
-            }
-        } catch (e) {
-            // Network drive temporarily unavailable — ignore
-        }
-    }, POLL_INTERVAL);
-    pollTimer.unref();  // Don't prevent process exit
-}
-
-function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
+// With better-sqlite3 and WAL mode, we don't need to manually poll and reload
+// the entire database into memory. The driver handles concurrent reads/writes.
 
 function reloadFromDisk() {
-    try {
-        const buffer = fs.readFileSync(dbPath);
-        const rawDb = new SQL.Database(buffer);
-        const oldRaw = db._rawDb;
-        db._rawDb = rawDb;
-        try { oldRaw.close(); } catch (_) {}
-        db.pragma('foreign_keys = ON');
-        lastExternalMtime = fs.statSync(dbPath).mtimeMs;
-        console.log('[DB] Shared database reloaded successfully');
-    } catch (e) {
-        console.error('[DB] Reload failed:', e.message);
-    }
+    // No-op for better-sqlite3, it reads from disk automatically
+    console.log('[DB] reloadFromDisk called (no-op for better-sqlite3)');
 }
 
 function getDb() {
@@ -391,9 +229,8 @@ function runMigrations(wrapper) {
     // ─── Add role_id column to assets if missing (migration) ───
     try {
         const cols = [];
-        let st = wrapper._rawDb.prepare('PRAGMA table_info(assets)');
-        while (st.step()) cols.push(st.getAsObject().name);
-        st.free();
+        let st = wrapper.prepare('PRAGMA table_info(assets)');
+        for (const row of st.iterate()) cols.push(row.name);
         if (!cols.includes('role_id')) {
             wrapper.exec('ALTER TABLE assets ADD COLUMN role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL');
         }
@@ -404,9 +241,8 @@ function runMigrations(wrapper) {
     // ─── Add is_linked column to assets if missing (linked/reference import) ───
     try {
         const assetCols2 = [];
-        let stLink = wrapper._rawDb.prepare('PRAGMA table_info(assets)');
-        while (stLink.step()) assetCols2.push(stLink.getAsObject().name);
-        stLink.free();
+        let stLink = wrapper.prepare('PRAGMA table_info(assets)');
+        for (const row of stLink.iterate()) assetCols2.push(row.name);
         if (!assetCols2.includes('is_linked')) {
             wrapper.exec('ALTER TABLE assets ADD COLUMN is_linked INTEGER DEFAULT 0');
         }
@@ -424,9 +260,8 @@ function runMigrations(wrapper) {
     };
     try {
         const assetColsSD = [];
-        let stSD = wrapper._rawDb.prepare('PRAGMA table_info(assets)');
-        while (stSD.step()) assetColsSD.push(stSD.getAsObject().name);
-        stSD.free();
+        let stSD = wrapper.prepare('PRAGMA table_info(assets)');
+        for (const row of stSD.iterate()) assetColsSD.push(row.name);
         for (const [col, typedef] of Object.entries(seqDerivCols)) {
             if (!assetColsSD.includes(col)) {
                 wrapper.exec(`ALTER TABLE assets ADD COLUMN ${col} ${typedef}`);
@@ -441,9 +276,8 @@ function runMigrations(wrapper) {
     for (const table of flowTables) {
         try {
             const cols = [];
-            let st2 = wrapper._rawDb.prepare(`PRAGMA table_info(${table})`);
-            while (st2.step()) cols.push(st2.getAsObject().name);
-            st2.free();
+            let st2 = wrapper.prepare(`PRAGMA table_info(${table})`);
+            for (const row of st2.iterate()) cols.push(row.name);
             if (!cols.includes('flow_id')) {
                 wrapper.exec(`ALTER TABLE ${table} ADD COLUMN flow_id INTEGER`);
                 wrapper.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_flow_id ON ${table}(flow_id)`);
@@ -454,9 +288,8 @@ function runMigrations(wrapper) {
     // ─── Add naming_convention column to projects (Shot Builder) ───
     try {
         const projCols = [];
-        let stProj = wrapper._rawDb.prepare('PRAGMA table_info(projects)');
-        while (stProj.step()) projCols.push(stProj.getAsObject().name);
-        stProj.free();
+        let stProj = wrapper.prepare('PRAGMA table_info(projects)');
+        for (const row of stProj.iterate()) projCols.push(row.name);
         if (!projCols.includes('naming_convention')) {
             wrapper.exec("ALTER TABLE projects ADD COLUMN naming_convention TEXT DEFAULT NULL");
         }
@@ -610,7 +443,6 @@ function getRecentActivity(limit = 50) {
 // ─── Close gracefully ───
 
 function closeDb() {
-    stopPolling();
     if (db) {
         db.close();
         db = null;
