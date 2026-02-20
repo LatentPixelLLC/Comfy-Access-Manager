@@ -43,8 +43,11 @@ if (IS_PRODUCTION && fs.existsSync(path.join(__dirname, '..', 'public', 'js-dist
 }
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Serve thumbnails directory
-app.use('/thumbnails', express.static(path.join(__dirname, '..', 'thumbnails')));
+// Serve thumbnails directory (with caching — thumbnails rarely change)
+app.use('/thumbnails', (req, res, next) => {
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
+    next();
+}, express.static(path.join(__dirname, '..', 'thumbnails')));
 
 // Ensure key folders exist on startup
 const { getSetting } = require('./database');
@@ -175,6 +178,18 @@ async function start() {
         } catch (err) {
             console.log('[Discovery] Deferred:', err.message);
         }
+
+        // Batch-repair missing thumbnail files in background (non-blocking)
+        setTimeout(async () => {
+            try {
+                const ThumbnailService = require('./services/ThumbnailService');
+                const db = require('./database').getDb();
+                const pathResolver = require('./utils/pathResolver');
+                await ThumbnailService.batchRepairMissing(db, pathResolver.resolveFilePath);
+            } catch (err) {
+                console.error('[Thumbnails] Batch repair error:', err.message);
+            }
+        }, 5000); // Wait 5s after startup so the UI is responsive first
     });
 
     // ─── Graceful Shutdown ───

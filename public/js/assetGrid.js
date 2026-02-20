@@ -239,6 +239,31 @@ export function updateSelectionClasses() {
     updateSelectionToolbar();
 }
 
+
+// ─── Lazy-load thumbnails via IntersectionObserver ───
+let _thumbObserver = null;
+
+function _observeThumbnails(container) {
+    if (_thumbObserver) _thumbObserver.disconnect();
+    const lazyImages = container.querySelectorAll('img[data-src]');
+    if (!lazyImages.length) return;
+    if ('IntersectionObserver' in window) {
+        _thumbObserver = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    img.src = img.dataset.src;
+                    delete img.dataset.src;
+                    _thumbObserver.unobserve(img);
+                }
+            }
+        }, { rootMargin: '200px' });
+        lazyImages.forEach(img => _thumbObserver.observe(img));
+    } else {
+        lazyImages.forEach(img => { img.src = img.dataset.src; delete img.dataset.src; });
+    }
+}
+
 function renderAssets() {
     const container = document.getElementById('assetContainer');
 
@@ -260,7 +285,7 @@ function renderAssets() {
                 data-aidx="${i}" onclick="handleAssetClick(event, ${i})" ondblclick="handleAssetDblClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
                 draggable="true" ondragstart="onAssetDragStart(event, ${i})">
                 <div class="asset-thumb" ${a.media_type === 'video' ? `data-duration="${a.duration || 0}" data-codec="${a.codec || ''}" onmouseenter="handleVideoHover(this, ${a.id})" onmousemove="handleVideoMove(event, this)" onmouseleave="handleVideoLeave(this)"` : ''}>
-                    <img src="/api/assets/${a.id}/thumbnail" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                    <img data-src="/thumbnails/thumb_${a.id}.jpg" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
                     <div class="thumb-placeholder" style="display:none">${typeIcon(a.media_type)}</div>
                     <span class="asset-type-badge ${a.media_type}">${a.media_type}</span>
                     ${a.is_linked ? '<span class="asset-link-badge" title="Linked - file remains at original location"></span>' : ''}
@@ -301,7 +326,7 @@ function renderAssets() {
                 draggable="true" ondragstart="onAssetDragStart(event, ${i})">
                 <div class="row-id">${a.id}</div>
                 <div class="row-thumb" ${a.media_type === 'video' ? `data-duration="${a.duration || 0}" data-codec="${a.codec || ''}" onmouseenter="handleVideoHover(this, ${a.id})" onmousemove="handleVideoMove(event, this)" onmouseleave="handleVideoLeave(this)"` : ''}>
-                    <img src="/api/assets/${a.id}/thumbnail" onerror="this.outerHTML='<span>${typeIcon(a.media_type)}</span>'">
+                    <img data-src="/thumbnails/thumb_${a.id}.jpg" loading="lazy" onerror="this.outerHTML='<span>${typeIcon(a.media_type)}</span>'">
                     <span class="row-type-pip ${a.media_type}" title="${a.media_type}">${a.file_ext || ''}</span>
                 </div>
                 <div class="row-audio">${hasAudio ? '' : '<span style="opacity:.25"></span>'}</div>
@@ -318,6 +343,7 @@ function renderAssets() {
         container.innerHTML = headerRow + rows;
     }
 
+    _observeThumbnails(container);
     updateSelectionToolbar();
 }
 

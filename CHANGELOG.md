@@ -2,6 +2,20 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.4.2] - 2026-02-20
+
+### Performance
+- **Lazy-loaded thumbnails** — asset grid now uses `IntersectionObserver` so thumbnails only load when scrolled into view; eliminates thousands of simultaneous HTTP requests on large projects
+- **Static thumbnail serving** — thumbnails served directly from `/thumbnails/` via Express static middleware instead of per-asset API route + DB query; dramatically reduces server load
+- **24-hour Cache-Control headers** — thumbnail responses include `Cache-Control: public, max-age=86400` so browsers cache them and skip repeat downloads
+- **FFmpeg path caching** — `ThumbnailService.findFFmpeg()` now resolves once and caches the result instead of re-discovering on every thumbnail generation
+
+### Added
+- **Auto-repair missing thumbnails on startup** — server automatically detects thumbnail files missing from disk (e.g., after moving the database to a different machine) and regenerates them in the background with controlled concurrency; no manual intervention required
+
+### Fixed
+- **Cross-platform thumbnail availability** — when sharing a database between Windows and Mac, thumbnails that were generated on one platform are now automatically regenerated on the other at startup, rather than triggering slow on-demand FFmpeg calls during browsing
+
 ## [1.4.1] - 2026-02-19
 
 ### Added

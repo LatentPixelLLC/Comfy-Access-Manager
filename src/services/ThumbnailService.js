@@ -24,6 +24,9 @@ try {
 
 const THUMB_DIR = path.join(__dirname, '..', '..', 'thumbnails');
 
+// Cached FFmpeg path — resolved once, reused forever
+let _cachedFFmpegPath = undefined; // undefined = not yet looked up, null = not found
+
 class ThumbnailService {
 
     static init() {
@@ -161,6 +164,9 @@ class ThumbnailService {
      * Find FFmpeg in common locations
      */
     static findFFmpeg() {
+        // Return cached result if we've already looked
+        if (_cachedFFmpegPath !== undefined) return _cachedFFmpegPath;
+
         const isWin = process.platform === 'win32';
         const localTools = path.join(__dirname, '..', '..', 'tools', 'ffmpeg', 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg');
         const candidates = [
@@ -183,12 +189,15 @@ class ThumbnailService {
             try {
                 if (candidate === 'ffmpeg') {
                     execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 5000 });
-                    return 'ffmpeg';
+                    _cachedFFmpegPath = 'ffmpeg';
+                    return _cachedFFmpegPath;
                 } else if (fs.existsSync(candidate)) {
-                    return candidate;
+                    _cachedFFmpegPath = candidate;
+                    return _cachedFFmpegPath;
                 }
             } catch {}
         }
+        _cachedFFmpegPath = null;
         return null;
     }
 
@@ -208,6 +217,67 @@ class ThumbnailService {
         if (fs.existsSync(thumbPath)) {
             fs.unlinkSync(thumbPath);
         }
+    }
+
+    /**
+     * Batch-regenerate missing thumbnails in the background.
+     * Processes assets whose thumbnail_path is set in the DB but the
+     * actual file doesn't exist on disk (e.g. after moving between machines).
+     * Runs with concurrency control so it doesn't overwhelm the system.
+     */
+    static async batchRepairMissing(db, resolveFilePath, concurrency = 3) {
+        const assets = db.prepare(
+            "SELECT id, file_path, thumbnail_path FROM assets WHERE thumbnail_path IS NOT NULL AND thumbnail_path != ''"
+        ).all();
+
+        // Find assets whose thumbnail file is missing on disk
+        const missing = [];
+        for (const a of assets) {
+            const thumbFile = path.join(THUMB_DIR, `thumb_${a.id}.jpg`);
+            if (!fs.existsSync(thumbFile)) {
+                missing.push(a);
+            }
+        }
+
+        if (missing.length === 0) {
+            console.log('[Thumbnails] All thumbnail files present — nothing to repair.');
+            return;
+        }
+
+        console.log(`[Thumbnails] Repairing ${missing.length} missing thumbnails in background...`);
+        const updateStmt = db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?');
+        let done = 0;
+        let failed = 0;
+
+        // Process in batches with limited concurrency
+        for (let i = 0; i < missing.length; i += concurrency) {
+            const batch = missing.slice(i, i + concurrency);
+            const results = await Promise.allSettled(batch.map(async (a) => {
+                try {
+                    const filePath = resolveFilePath(a.file_path);
+                    if (!fs.existsSync(filePath)) {
+                        failed++;
+                        return;
+                    }
+                    const thumbPath = await this.generate(filePath, a.id);
+                    if (thumbPath) {
+                        updateStmt.run(thumbPath, a.id);
+                        done++;
+                    } else {
+                        failed++;
+                    }
+                } catch {
+                    failed++;
+                }
+            }));
+
+            // Log progress every 50
+            if ((done + failed) % 50 < concurrency) {
+                console.log(`[Thumbnails] Repair progress: ${done + failed}/${missing.length} (${done} ok, ${failed} failed)`);
+            }
+        }
+
+        console.log(`[Thumbnails] Repair complete: ${done} regenerated, ${failed} failed out of ${missing.length} missing.`);
     }
 }
 
