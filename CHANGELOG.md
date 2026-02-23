@@ -2,6 +2,18 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.5.0] - 2026-02-23
+
+### Added
+- **Send to ComfyUI** — Right-click any asset(s) in CAM → "Send to ComfyUI" creates LoadFromMediaVault nodes pre-populated with the correct project/sequence/shot/role/asset. Works with multi-select. Nodes appear in the most recently focused ComfyUI tab within 3 seconds (polling-based, no page reload).
+- **Active tab tracking** — When multiple ComfyUI tabs are open, "Send to ComfyUI" delivers nodes only to the most recently clicked/focused tab (not a random race condition)
+- **Workflow metadata embedding** — SaveToMediaVault now embeds ComfyUI workflow + prompt metadata in saved files:
+  - PNG: Embedded in tEXt chunks (same format as ComfyUI's built-in save)
+  - Video (MP4/WebM/MKV): Embedded as FFmpeg `-metadata comment=` (same format as VHS Video Combine)
+- **Metadata-aware "Load in ComfyUI"** — Right-click menu now checks if the file actually contains an embedded ComfyUI workflow before showing the option (replaces old extension-based filtering)
+- **TIFF workflow extraction** — `.tif`/`.tiff` files with embedded ComfyUI workflows can now be detected and loaded back into ComfyUI
+- **Pipeline debug logging** — Console logging at every step of the Send to ComfyUI pipeline (CAM browser, CAM server, ComfyUI browser) for easy troubleshooting
+
 ## [1.4.6] - 2026-02-22
 
 ### Added

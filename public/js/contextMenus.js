@@ -53,14 +53,22 @@ async function showContextMenu(event, assetIdx) {
     const count = state.selectedAssets.length;
     const isSingle = count === 1;
 
-    // Fetch format variants for single-asset actions
+    // Fetch format variants + check for embedded ComfyUI workflow (in parallel)
     let formats = [];
+    let hasComfyWorkflow = false;
     if (isSingle) {
+        const [fmtRes, wfRes] = await Promise.all([
+            fetch(`/api/assets/${asset.id}/formats`).catch(() => null),
+            fetch(`/api/comfyui/check-workflow/${asset.id}`).catch(() => null),
+        ]);
         try {
-            const resp = await fetch(`/api/assets/${asset.id}/formats`);
-            const data = await resp.json();
-            formats = data.formats || [];
+            const data = await fmtRes?.json();
+            formats = data?.formats || [];
         } catch { formats = [{ id: asset.id, file_ext: asset.file_ext || '?', media_type: asset.media_type, file_size: asset.file_size }]; }
+        try {
+            const wfData = await wfRes?.json();
+            hasComfyWorkflow = !!wfData?.hasWorkflow;
+        } catch { /* no workflow */ }
     }
 
     // Remove any existing context menu
@@ -139,9 +147,7 @@ async function showContextMenu(event, assetIdx) {
     if (isSingle && asset.file_path) {
         html += `<div class="ctx-separator"></div>`;
         html += `<div class="ctx-item" data-action="showPath"> Show File Path</div>`;
-        const comfyExts = ['png', 'mp4', 'webm', 'mkv', 'mov', 'avi'];
-        const assetExt = (asset.file_ext || '').replace('.', '').toLowerCase();
-        if (comfyExts.includes(assetExt)) {
+        if (hasComfyWorkflow) {
             html += `<div class="ctx-item" data-action="loadComfy"> Load in ComfyUI</div>`;
         }
     }
@@ -863,6 +869,7 @@ async function loadInComfyUI(assetId, assetName) {
 async function sendToComfyUI(assetIds) {
     try {
         const n = assetIds.length;
+        console.log(`[CAM→ComfyUI] Step 1: Sending ${n} asset(s) to CAM backend...`, assetIds);
         showToast(`Sending ${n} asset${n > 1 ? 's' : ''} to ComfyUI...`);
 
         const res = await fetch('/api/comfyui/send-to-comfy', {
@@ -871,16 +878,20 @@ async function sendToComfyUI(assetIds) {
             body: JSON.stringify({ assetIds }),
         });
         const data = await res.json();
+        console.log(`[CAM→ComfyUI] Step 2: Backend response — status=${res.status}`, data);
 
         if (!res.ok || !data.success) {
+            console.error(`[CAM→ComfyUI] FAILED:`, data.error);
             showToast(data.error || 'Failed to send to ComfyUI', 5000);
             return;
         }
 
         // Don't window.open — it reloads ComfyUI and wipes the existing graph.
         // The ComfyUI JS extension polls for pending assets every 3s and adds nodes automatically.
+        console.log(`[CAM→ComfyUI] Step 3: ✓ ${data.assetCount} asset(s) stored in ComfyUI Python. ComfyUI JS will pick them up within 3s.`);
         showToast(`Sent ${data.assetCount} asset${data.assetCount > 1 ? 's' : ''} to ComfyUI — switch to ComfyUI to see them`);
     } catch (e) {
+        console.error(`[CAM→ComfyUI] ERROR:`, e);
         showToast('Error: ' + e.message, 5000);
     }
 }

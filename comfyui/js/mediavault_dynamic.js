@@ -550,15 +550,37 @@ app.registerExtension({
      * - If URL contains ?cam_load=1, fetches pending workflow
      */
     async setup() {
+        // ── Tab identity: each ComfyUI tab gets a unique ID ──
+        // The most-recently-focused tab claims "active" status so that
+        // "Send to ComfyUI" only delivers to one tab (not a random race).
+        const MV_TAB_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        console.log(`[MediaVault] Extension setup() running — tabId=${MV_TAB_ID}`);
+
+        const claimActiveTab = () => {
+            fetch("/mediavault/set-active-tab", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tabId: MV_TAB_ID }),
+            }).catch(() => {});
+        };
+
+        // Claim on initial load + whenever this tab gets focus
+        claimActiveTab();
+        window.addEventListener("focus", claimActiveTab);
+        // Also claim on any click (covers clicking within an already-focused tab)
+        document.addEventListener("pointerdown", claimActiveTab, { once: false, passive: true });
+
         // ── Poll for "Send to ComfyUI" assets ──
         // CAM stores assets on the Python side; we poll and create loader nodes.
         // This avoids reloading ComfyUI (window.open wipes the existing graph).
+        console.log(`[MediaVault] Poll started — tabId=${MV_TAB_ID}, polling /mediavault/send-assets every 3s`);
         setInterval(async () => {
             try {
-                const res = await fetch("/mediavault/send-assets");
-                if (!res.ok) return;
+                const res = await fetch(`/mediavault/send-assets?tabId=${MV_TAB_ID}`);
+                if (!res.ok) { console.warn(`[MediaVault] Poll: HTTP ${res.status}`); return; }
                 const data = await res.json();
                 if (!data.hasAssets || !data.assets?.length) return;
+                console.log(`[MediaVault] Poll: ✓ Received ${data.assets.length} asset(s)!`, data.assets);
 
                 const COLS = 3;
                 const NODE_W = 340;
@@ -613,8 +635,9 @@ app.registerExtension({
 
                 console.log(`[MediaVault] ✓ Created ${data.assets.length} LoadFromMediaVault node(s)`);
                 app.canvas.setDirty(true, true);
-            } catch {
-                // Silently ignore — MediaVault server may not be running
+            } catch (pollErr) {
+                // Only log if it's not a simple network error (MediaVault server may not be running)
+                if (pollErr?.name !== 'TypeError') console.warn('[MediaVault] Poll error:', pollErr);
             }
         }, 3000);
 

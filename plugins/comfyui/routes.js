@@ -345,6 +345,11 @@ function extractWorkflowFromFile(filePath) {
         return extractPngWorkflow(filePath);
     }
 
+    // ── TIFF/TIF files: workflow in EXIF/metadata tags (same as video approach) ──
+    if (ext === '.tif' || ext === '.tiff') {
+        return extractVideoWorkflow(filePath); // ffprobe reads TIFF metadata too
+    }
+
     return null;
 }
 
@@ -606,7 +611,10 @@ router.post('/send-to-comfy', async (req, res) => {
         }));
 
         // 5. POST to ComfyUI's pending-send endpoint
+        console.log(`[ComfyUI] send-to-comfy: POSTing ${assetData.length} asset(s) to ${comfyUrl}/mediavault/send-assets`);
+        console.log(`[ComfyUI] send-to-comfy: Asset data:`, JSON.stringify(assetData, null, 2));
         const result = await httpPost(comfyUrl + '/mediavault/send-assets', { assets: assetData });
+        console.log(`[ComfyUI] send-to-comfy: ComfyUI response — status=${result.status}, body=`, result.body);
         if (result.status !== 200 || !result.body?.success) {
             const hint = result.status === 404
                 ? ' — Restart ComfyUI to load the updated MediaVault plugin.'

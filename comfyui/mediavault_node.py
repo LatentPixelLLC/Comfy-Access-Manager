@@ -22,6 +22,7 @@ import urllib.request
 import urllib.error
 import numpy as np
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 import torch
 import cv2
 import tempfile
@@ -182,6 +183,18 @@ try:
 
     # ── Pending Assets (one-shot storage for "Send to ComfyUI") ──
     _pending_assets = None
+    _active_tab_id = None  # Most-recently-focused tab gets priority
+
+    @PromptServer.instance.routes.post("/mediavault/set-active-tab")
+    async def mv_set_active_tab(request):
+        """Register a ComfyUI tab as the active receiver for Send to ComfyUI."""
+        global _active_tab_id
+        try:
+            data = await request.json()
+            _active_tab_id = data.get("tabId")
+            return web.json_response({"success": True, "activeTab": _active_tab_id})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
 
     @PromptServer.instance.routes.post("/mediavault/send-assets")
     async def mv_store_pending_assets(request):
@@ -197,9 +210,14 @@ try:
 
     @PromptServer.instance.routes.get("/mediavault/send-assets")
     async def mv_get_pending_assets(request):
-        """Retrieve and clear pending assets (one-shot)."""
-        global _pending_assets
+        """Retrieve and clear pending assets (one-shot).
+        Only the most-recently-focused tab receives the assets."""
+        global _pending_assets, _active_tab_id
         if _pending_assets is not None and len(_pending_assets) > 0:
+            tab_id = request.rel_url.query.get("tabId")
+            # If an active tab is registered, only that tab gets the assets
+            if _active_tab_id and tab_id != _active_tab_id:
+                return web.json_response({"hasAssets": False})
             data = _pending_assets
             _pending_assets = None
             return web.json_response({"hasAssets": True, "assets": data})
@@ -566,8 +584,8 @@ class SaveToMediaVault:
             print(f"[MediaVault] Warning: API save failed, file kept at {file_path}")
             return file_path
 
-    def _save_images(self, images, format, quality, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None):
-        """Save frames as individual image files."""
+    def _save_images(self, images, format, quality, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None, extra_pnginfo=None, prompt=None):
+        """Save frames as individual image files. Embeds ComfyUI workflow in PNG metadata."""
         saved_paths = []
         for i, image in enumerate(images):
             img_np = image.cpu().numpy()
@@ -588,16 +606,24 @@ class SaveToMediaVault:
             elif format == "webp":
                 img.save(temp_path, "WEBP", quality=quality)
             else:
-                img.save(temp_path, "PNG")
+                # Embed workflow + prompt in PNG tEXt chunks (same as ComfyUI built-in save)
+                metadata = PngInfo()
+                if extra_pnginfo:
+                    for key, value in extra_pnginfo.items():
+                        metadata.add_text(key, json.dumps(value))
+                if prompt:
+                    metadata.add_text("prompt", json.dumps(prompt))
+                img.save(temp_path, "PNG", pnginfo=metadata)
 
             vault_path = self._send_to_vault(temp_path, project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
             saved_paths.append(vault_path)
 
         return saved_paths
 
-    def _save_video(self, images, format, quality, fps, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None, audio=None, images_b=None):
+    def _save_video(self, images, format, quality, fps, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None, audio=None, images_b=None, extra_pnginfo=None, prompt=None):
         """Encode all frames into a single video file via FFmpeg.
-        Supports optional audio muxing and side-by-side A|B comparison."""
+        Supports optional audio muxing, side-by-side A|B comparison,
+        and embedding ComfyUI workflow in metadata comment."""
         vfmt = VIDEO_FORMATS[format]
         ext = vfmt["ext"]
         timestamp = int(time.time() * 1000)
@@ -705,8 +731,18 @@ class SaveToMediaVault:
                 cmd += ["-acodec", "pcm_s16le"]
             cmd += ["-shortest"]
 
+        # Embed workflow JSON as metadata comment (same format as VHS Video Combine)
+        workflow_json = None
+        if extra_pnginfo and "workflow" in extra_pnginfo:
+            try:
+                workflow_json = json.dumps(extra_pnginfo["workflow"])
+                cmd += ["-metadata", f"comment={workflow_json}"]
+                print(f"[MediaVault] Embedding workflow metadata ({len(workflow_json)} chars)")
+            except Exception as e:
+                print(f"[MediaVault] ⚠ Could not embed workflow: {e}")
+
         cmd.append(os.path.abspath(temp_video))
-        print(f"[MediaVault] FFmpeg cmd: {' '.join(cmd)}")
+        print(f"[MediaVault] FFmpeg cmd: {' '.join(cmd[:20])}{'...' if len(cmd) > 20 else ''}")
 
         # --- Redirect stderr to temp file to avoid Windows pipe deadlock ---
         stderr_file = tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False, prefix='mv_ffmpeg_')
@@ -924,7 +960,8 @@ class SaveToMediaVault:
         if format in VIDEO_FORMATS:
             saved_paths = self._save_video(images, format, quality, fps,
                                            project_id, sequence_id, shot_id, role_id, custom_name, gen_info,
-                                           audio=audio, images_b=images_b)
+                                           audio=audio, images_b=images_b,
+                                           extra_pnginfo=extra_pnginfo, prompt=prompt)
         elif format in AUDIO_FORMATS:
             if audio is None:
                 raise ValueError("[MediaVault] Audio format selected but no audio input connected!")
@@ -932,7 +969,8 @@ class SaveToMediaVault:
                                            project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
         else:
             saved_paths = self._save_images(images, format, quality,
-                                            project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
+                                            project_id, sequence_id, shot_id, role_id, custom_name, gen_info,
+                                            extra_pnginfo=extra_pnginfo, prompt=prompt)
 
         return (", ".join(saved_paths),)
 
