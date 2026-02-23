@@ -355,8 +355,8 @@ class TranscodeService {
                 width, height, duration, fps, codec,
                 version, parent_asset_id, is_derivative,
                 is_sequence, frame_start, frame_end, frame_count, frame_pattern,
-                notes, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                notes, metadata, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         `).run(
             sourceAsset.project_id,
             sourceAsset.sequence_id || null,

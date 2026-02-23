@@ -572,8 +572,8 @@ router.post('/rebuild-vault', async (req, res) => {
                                 original_name, vault_name, file_path, relative_path,
                                 media_type, file_ext, file_size,
                                 width, height, duration, fps, codec,
-                                take_number, version
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                take_number, version, status
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         `).run(
                             project.id, null, null,
                             file.name, file.name, filePath, relativePath,

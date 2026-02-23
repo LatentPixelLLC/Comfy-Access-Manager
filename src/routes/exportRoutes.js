@@ -529,8 +529,8 @@ async function registerExportedAsset(sourceAsset, exportedFilePath, codecKey, re
             media_type, file_ext, file_size,
             width, height, duration, fps, codec,
             take_number, version,
-            notes, metadata
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            notes, metadata, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     `).run(
         hierarchy.project_id  ?? sourceAsset.project_id  ?? null,
         hierarchy.sequence_id ?? sourceAsset.sequence_id ?? null,
