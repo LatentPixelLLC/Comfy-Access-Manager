@@ -218,6 +218,7 @@ _STATUS_COLORS = {
     "Review":   (0.3, 0.6,  1.0,  0.85),   # blue
     "Approved": (0.2, 0.8,  0.2,  0.85),   # green
     "Final":    (0.0, 0.75, 0.95, 0.85),   # cyan
+    "Reject":   (1.0, 0.2,  0.2,  0.85),   # red
 }
 
 # ─── Built-in 5×7 pixel font (pure GL – no GLUT or freeglut DLL needed) ──────
@@ -683,6 +684,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     ("Review", lambda *args, **kwargs: self.setStatus("Review"), None, None),
                     ("Approved", lambda *args, **kwargs: self.setStatus("Approved"), "alt+a", None),
                     ("Final", lambda *args, **kwargs: self.setStatus("Final"), None, None),
+                    ("_", None),
+                    ("Reject", lambda *args, **kwargs: self.setStatus("Reject"), "alt+r", None),
                 ]),
                 ("_", None),
                 ("Publish Frame", self.publishFrame, "alt+p", None),

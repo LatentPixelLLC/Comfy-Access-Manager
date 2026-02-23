@@ -917,6 +917,7 @@ label {
 .status-review { background: #4c99ff; }
 .status-approved { background: #33cc33; }
 .status-final { background: #00bfff; color: #000; text-shadow: none; }
+.status-reject { background: #e53935; }
     font-weight: 600;
 }
 

@@ -447,7 +447,7 @@ router.put('/:id/status', (req, res) => {
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: 'Status required' });
     
-    const validStatuses = ['WIP', 'Review', 'Approved', 'Final'];
+    const validStatuses = ['WIP', 'Review', 'Approved', 'Final', 'Reject'];
     if (!validStatuses.includes(status)) {
         return res.status(400).json({ error: 'Invalid status' });
     }
