@@ -168,7 +168,7 @@ function runMigrations(wrapper) {
             comfyui_node_id TEXT,
             comfyui_workflow TEXT,
             starred INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'WIP',
+            status TEXT DEFAULT NULL,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
@@ -255,9 +255,21 @@ function runMigrations(wrapper) {
         let stStatus = wrapper.prepare('PRAGMA table_info(assets)');
         for (const row of stStatus.iterate()) assetCols3.push(row.name);
         if (!assetCols3.includes('status')) {
-            wrapper.exec("ALTER TABLE assets ADD COLUMN status TEXT DEFAULT 'WIP'");
+            wrapper.exec("ALTER TABLE assets ADD COLUMN status TEXT DEFAULT NULL");
         }
     } catch (_) { /* column already exists */ }
+
+    // ─── Fix: ensure status column defaults to NULL, not 'WIP' ───
+    // SQLite can't ALTER COLUMN defaults, so we clear any lingering WIP
+    // and rely on explicit NULL in INSERT statements for new assets.
+    try {
+        const statusCol = wrapper.prepare('PRAGMA table_info(assets)').all().find(c => c.name === 'status');
+        if (statusCol && statusCol.dflt_value === "'WIP'") {
+            // Clear any auto-assigned WIP (user hasn't explicitly set these)
+            wrapper.exec("UPDATE assets SET status = NULL WHERE status = 'WIP'");
+            console.log('[DB] Cleared auto-assigned WIP statuses (default changed to NULL)');
+        }
+    } catch (_) {}
 
     // ─── Add sequence + derivative columns to assets ───
     const seqDerivCols = {

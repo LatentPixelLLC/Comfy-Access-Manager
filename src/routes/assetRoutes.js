@@ -677,8 +677,9 @@ router.post('/import', async (req, res) => {
                     media_type, file_ext, file_size,
                     width, height, duration, fps, codec,
                     take_number, version, is_linked,
-                    is_sequence, frame_start, frame_end, frame_count, frame_pattern
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_sequence, frame_start, frame_end, frame_count, frame_pattern,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             `).run(
                 project.id,
                 sequence?.id || null,
@@ -863,8 +864,9 @@ router.post('/import', async (req, res) => {
                     original_name, vault_name, file_path, relative_path,
                     media_type, file_ext, file_size,
                     width, height, duration, fps, codec,
-                    take_number, version, is_linked
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    take_number, version, is_linked,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             `).run(
                 project.id,
                 sequence?.id || null,
@@ -995,8 +997,9 @@ router.post('/upload', upload.array('files', 50), async (req, res) => {
                     original_name, vault_name, file_path, relative_path,
                     media_type, file_ext, file_size,
                     width, height, duration, fps, codec,
-                    take_number, version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    take_number, version,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             `).run(
                 project.id, sequence_id || null, shot_id || null,
                 originalName, imported.vaultName, imported.vaultPath, imported.relativePath,
@@ -2253,8 +2256,8 @@ router.post('/publish-frame', async (req, res) => {
             INSERT INTO assets (
                 project_id, sequence_id, shot_id, role_id,
                 original_name, vault_name, file_path, relative_path,
-                media_type, file_ext, file_size, version, is_linked
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                media_type, file_ext, file_size, version, is_linked, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
         `).run(
             asset.project_id, asset.sequence_id || null, asset.shot_id || null, refRole.id,
             vaultName, vaultName, filePath, relativePath,
