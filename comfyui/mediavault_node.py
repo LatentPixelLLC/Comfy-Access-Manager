@@ -24,6 +24,14 @@ import numpy as np
 from PIL import Image
 import torch
 import cv2
+import tempfile
+
+# Optional: torchaudio for native audio saving
+try:
+    import torchaudio
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    TORCHAUDIO_AVAILABLE = False
 
 # File extensions recognised as video (not loadable by PIL)
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg"}
@@ -427,7 +435,16 @@ VIDEO_FORMATS = {
 }
 
 IMAGE_FORMATS = ["png", "jpg", "webp"]
+
+AUDIO_FORMATS = {
+    "wav":  {"ext": "wav"},
+    "flac": {"ext": "flac"},
+    "mp3":  {"ext": "mp3"},
+    "ogg":  {"ext": "ogg"},
+}
+
 ALL_FORMATS = IMAGE_FORMATS + list(VIDEO_FORMATS.keys())
+ALL_FORMATS_WITH_AUDIO = ALL_FORMATS + list(AUDIO_FORMATS.keys())
 
 
 class SaveToMediaVault:
@@ -452,7 +469,9 @@ class SaveToMediaVault:
                 "custom_name": ("STRING", {"default": "", "multiline": False}),
             },
             "optional": {
-                "format": (ALL_FORMATS, {"default": "png"}),
+                "images_b": ("IMAGE", {"tooltip": "Optional second image batch for side-by-side A|B comparison video (doubles output width)"}),
+                "audio": ("AUDIO", {"tooltip": "Optional audio to mux into the video file"}),
+                "format": (ALL_FORMATS_WITH_AUDIO, {"default": "png"}),
                 "quality": ("INT", {"default": 95, "min": 1, "max": 100, "step": 1,
                                     "tooltip": "Image: JPEG/WebP quality. Video: CRF (lower=better, 18-28 typical)"}),
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 0.01,
@@ -551,37 +570,94 @@ class SaveToMediaVault:
 
         return saved_paths
 
-    def _save_video(self, images, format, quality, fps, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None):
-        """Encode all frames into a single video file via FFmpeg."""
+    def _save_video(self, images, format, quality, fps, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None, audio=None, images_b=None):
+        """Encode all frames into a single video file via FFmpeg.
+        Supports optional audio muxing and side-by-side A|B comparison."""
         vfmt = VIDEO_FORMATS[format]
         ext = vfmt["ext"]
         timestamp = int(time.time() * 1000)
         name_part = custom_name if custom_name else "comfyui_output"
-        temp_video = os.path.join(os.path.dirname(__file__), "..", "temp", f"{name_part}_{timestamp}.{ext}")
-        os.makedirs(os.path.dirname(temp_video), exist_ok=True)
+        temp_dir = os.path.join(os.path.dirname(__file__), "..", "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_video = os.path.join(temp_dir, f"{name_part}_{timestamp}.{ext}")
 
-        # Get frame dimensions from first image
+        # --- Side-by-side: determine composite frame dimensions ---
         h, w = images[0].shape[0], images[0].shape[1]
-        num_frames = len(images)
+        num_frames_a = len(images)
+        side_by_side = images_b is not None and len(images_b) > 0
 
-        print(f"[MediaVault] Encoding {num_frames} frames → {format} ({w}x{h} @ {fps}fps)")
+        if side_by_side:
+            h_b, w_b = images_b[0].shape[0], images_b[0].shape[1]
+            num_frames_b = len(images_b)
+            num_frames = max(num_frames_a, num_frames_b)
+            # Heights must match for horizontal concat; use A's height as reference
+            out_h = h
+            scaled_w_b = w_b if h_b == h else int(w_b * h / h_b)
+            out_w = w + scaled_w_b
+            # H.264/H.265 with yuv420p require even width AND height
+            if out_w % 2 != 0:
+                out_w += 1
+                scaled_w_b += 1  # pad B side by 1px
+            if out_h % 2 != 0:
+                out_h += 1
+            print(f"[MediaVault] Side-by-side: A={w}x{h} ({num_frames_a}f) | B={w_b}x{h_b} ({num_frames_b}f) → {out_w}x{out_h}")
+        else:
+            num_frames = num_frames_a
+            out_h, out_w = h, w
+            # Ensure even dimensions for YUV 4:2:0 codecs
+            if out_w % 2 != 0:
+                out_w += 1
+            if out_h % 2 != 0:
+                out_h += 1
 
-        # Build FFmpeg command: pipe raw RGB frames in, encode to file
+        print(f"[MediaVault] Encoding {num_frames} frames → {format} ({out_w}x{out_h} @ {fps}fps)")
+
+        # --- Prepare optional audio temp file ---
+        temp_audio = None
+        if audio is not None:
+            try:
+                waveform = audio["waveform"]  # [batch, channels, samples]
+                sample_rate = audio["sample_rate"]
+                wav_data = waveform.squeeze(0)  # [channels, samples]
+                if wav_data.dim() == 1:
+                    wav_data = wav_data.unsqueeze(0)
+                temp_audio = os.path.join(temp_dir, f"{name_part}_{timestamp}_audio.wav")
+                if TORCHAUDIO_AVAILABLE:
+                    torchaudio.save(temp_audio, wav_data.cpu(), sample_rate)
+                else:
+                    import wave
+                    wav_np = (wav_data.cpu().numpy() * 32767).clip(-32768, 32767).astype(np.int16)
+                    n_channels = wav_np.shape[0]
+                    with wave.open(temp_audio, 'wb') as wf:
+                        wf.setnchannels(n_channels)
+                        wf.setsampwidth(2)
+                        wf.setframerate(sample_rate)
+                        wf.writeframes(wav_np.T.tobytes())
+                print(f"[MediaVault] Audio: {sample_rate}Hz, {wav_data.shape[0]}ch, {wav_data.shape[1]} samples")
+            except Exception as e:
+                print(f"[MediaVault] ⚠ Audio prep failed, encoding video without audio: {e}")
+                temp_audio = None
+
+        # --- Build FFmpeg command ---
         cmd = [
             "ffmpeg", "-y",
             "-f", "rawvideo",
             "-vcodec", "rawvideo",
-            "-s", f"{w}x{h}",
+            "-s", f"{out_w}x{out_h}",
             "-pix_fmt", "rgb24",
             "-r", str(fps),
             "-i", "pipe:0",
-            "-vcodec", vfmt["vcodec"],
-            "-pix_fmt", vfmt["pix_fmt"],
         ]
 
-        # Codec-specific quality settings
+        # Add audio input if available
+        if temp_audio:
+            cmd += ["-i", temp_audio]
+
+        # Video codec settings
+        cmd += ["-vcodec", vfmt["vcodec"], "-pix_fmt", vfmt["pix_fmt"]]
+
         if vfmt["vcodec"] == "libx264":
-            crf = max(0, min(51, 51 - int(quality * 51 / 100)))  # quality 95→2, quality 50→25
+            crf = max(0, min(51, 51 - int(quality * 51 / 100)))
             cmd += ["-crf", str(crf), "-preset", "medium"]
         elif vfmt["vcodec"] == "libx265":
             crf = max(0, min(51, 51 - int(quality * 51 / 100)))
@@ -594,27 +670,133 @@ class SaveToMediaVault:
         elif vfmt["vcodec"] == "ffv1":
             cmd += ["-level", "3"]
 
+        # Audio codec (when audio is present)
+        if temp_audio:
+            if ext == "mp4" or ext == "mov":
+                cmd += ["-acodec", "aac", "-b:a", "192k"]
+            elif ext == "webm":
+                cmd += ["-acodec", "libvorbis", "-b:a", "192k"]
+            elif ext == "avi":
+                cmd += ["-acodec", "pcm_s16le"]
+            cmd += ["-shortest"]
+
         cmd.append(os.path.abspath(temp_video))
+        print(f"[MediaVault] FFmpeg cmd: {' '.join(cmd)}")
 
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # --- Redirect stderr to temp file to avoid Windows pipe deadlock ---
+        stderr_file = tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False, prefix='mv_ffmpeg_')
+        stderr_path = stderr_file.name
 
-        # Feed frames to FFmpeg
-        for i, image in enumerate(images):
-            frame_np = image.cpu().numpy()
-            frame_np = (frame_np * 255).clip(0, 255).astype(np.uint8)
-            proc.stdin.write(frame_np.tobytes())
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_file,
+        )
+
+        # --- Feed frames to FFmpeg (with BrokenPipeError handling) ---
+        try:
+            for i in range(num_frames):
+                # Get frame A (hold last if past end)
+                idx_a = min(i, num_frames_a - 1)
+                frame_a = images[idx_a].cpu().numpy()
+                frame_a = (frame_a * 255).clip(0, 255).astype(np.uint8)
+
+                if side_by_side:
+                    idx_b = min(i, num_frames_b - 1)
+                    frame_b = images_b[idx_b].cpu().numpy()
+                    frame_b = (frame_b * 255).clip(0, 255).astype(np.uint8)
+                    # Resize B to match A's height if needed
+                    if frame_b.shape[0] != h:
+                        new_w = int(frame_b.shape[1] * h / frame_b.shape[0])
+                        frame_b = cv2.resize(frame_b, (new_w, h), interpolation=cv2.INTER_LANCZOS4)
+                    frame_np = np.concatenate([frame_a, frame_b], axis=1)
+                else:
+                    frame_np = frame_a
+
+                # Pad to match declared out_w x out_h (even-dimension enforcement)
+                if frame_np.shape[1] != out_w or frame_np.shape[0] != out_h:
+                    padded = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+                    padded[:frame_np.shape[0], :frame_np.shape[1]] = frame_np
+                    frame_np = padded
+
+                proc.stdin.write(frame_np.tobytes())
+        except (BrokenPipeError, OSError) as e:
+            print(f"[MediaVault] ⚠ FFmpeg stdin pipe broke ({type(e).__name__}: {e}) — reading error log...")
 
         proc.stdin.close()
-        _, stderr = proc.communicate()
+        proc.wait()
+        stderr_file.close()
+
+        # Read FFmpeg log
+        ffmpeg_log = ""
+        try:
+            with open(stderr_path, 'r', errors='replace') as f:
+                ffmpeg_log = f.read()
+        except Exception:
+            pass
+        finally:
+            try:
+                os.remove(stderr_path)
+            except OSError:
+                pass
 
         if proc.returncode != 0:
-            err_msg = stderr.decode("utf-8", errors="replace")[-500:]
-            raise RuntimeError(f"[MediaVault] FFmpeg encode failed (exit {proc.returncode}):\n{err_msg}")
+            err_tail = ffmpeg_log[-500:] if ffmpeg_log else "(no log)"
+            raise RuntimeError(f"[MediaVault] FFmpeg encode failed (exit {proc.returncode}):\n{err_tail}")
+
+        # Clean up temp audio
+        if temp_audio:
+            try:
+                os.remove(temp_audio)
+            except OSError:
+                pass
 
         file_size = os.path.getsize(temp_video)
         print(f"[MediaVault] ✓ Video saved: {os.path.basename(temp_video)} ({file_size / 1024 / 1024:.1f} MB)")
 
         vault_path = self._send_to_vault(temp_video, project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
+        return [vault_path]
+
+    def _save_audio(self, audio, format, project_id, sequence_id, shot_id, role_id, custom_name, gen_info=None):
+        """Save standalone audio file."""
+        afmt = AUDIO_FORMATS[format]
+        ext = afmt["ext"]
+        timestamp = int(time.time() * 1000)
+        name_part = custom_name if custom_name else "comfyui_output"
+        temp_dir = os.path.join(os.path.dirname(__file__), "..", "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_audio = os.path.join(temp_dir, f"{name_part}_{timestamp}.{ext}")
+
+        waveform = audio["waveform"].squeeze(0)  # [channels, samples]
+        sample_rate = audio["sample_rate"]
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+
+        if TORCHAUDIO_AVAILABLE:
+            torchaudio.save(temp_audio, waveform.cpu(), sample_rate)
+        else:
+            # Fallback: save WAV then convert with FFmpeg
+            import wave
+            temp_wav = temp_audio + ".tmp.wav"
+            wav_np = (waveform.cpu().numpy() * 32767).clip(-32768, 32767).astype(np.int16)
+            n_channels = wav_np.shape[0]
+            with wave.open(temp_wav, 'wb') as wf:
+                wf.setnchannels(n_channels)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(wav_np.T.tobytes())
+            if ext == "wav":
+                shutil.move(temp_wav, temp_audio)
+            else:
+                subprocess.run(["ffmpeg", "-y", "-i", temp_wav, temp_audio],
+                               capture_output=True, check=True)
+                os.remove(temp_wav)
+
+        file_size = os.path.getsize(temp_audio)
+        print(f"[MediaVault] ✓ Audio saved: {os.path.basename(temp_audio)} ({file_size / 1024:.1f} KB)")
+
+        vault_path = self._send_to_vault(temp_audio, project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
         return [vault_path]
 
     @staticmethod
@@ -705,7 +887,7 @@ class SaveToMediaVault:
 
     def save_output(self, images, project, custom_name="", format="png", quality=95, fps=24.0,
                     sequence="* (All Sequences)", shot="* (All Shots)", role="* (All Roles)",
-                    prompt=None, extra_pnginfo=None):
+                    prompt=None, extra_pnginfo=None, audio=None, images_b=None):
         project_id, sequence_id, shot_id, role_id = self._resolve_ids(project, sequence, shot, role)
 
         # Extract generation metadata from prompt
@@ -716,6 +898,12 @@ class SaveToMediaVault:
 
         if format in VIDEO_FORMATS:
             saved_paths = self._save_video(images, format, quality, fps,
+                                           project_id, sequence_id, shot_id, role_id, custom_name, gen_info,
+                                           audio=audio, images_b=images_b)
+        elif format in AUDIO_FORMATS:
+            if audio is None:
+                raise ValueError("[MediaVault] Audio format selected but no audio input connected!")
+            saved_paths = self._save_audio(audio, format,
                                            project_id, sequence_id, shot_id, role_id, custom_name, gen_info)
         else:
             saved_paths = self._save_images(images, format, quality,

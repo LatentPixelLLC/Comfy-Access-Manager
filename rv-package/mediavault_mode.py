@@ -678,6 +678,13 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 ("Prev Version", self.prevVersion, "alt+Left", None),
                 ("Next Version", self.nextVersion, "alt+Right", None),
                 ("_", None),
+                ("Set Status", [
+                    ("WIP", lambda: self.setStatus("WIP"), None, None),
+                    ("Review", lambda: self.setStatus("Review"), None, None),
+                    ("Approved", lambda: self.setStatus("Approved"), "alt+a", None),
+                    ("Final", lambda: self.setStatus("Final"), None, None),
+                ]),
+                ("_", None),
                 ("Publish Frame", self.publishFrame, "alt+p", None),
                 ("Add to Crate ...", self.addToCrateMenu, "alt+c", None),
                 ("_", None),
@@ -955,6 +962,54 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         except Exception as e:
             print("[MediaVault] _switchTo error: %s" % e)
             rve.displayFeedback("Error: %s" % e, 5.0)
+
+    def setStatus(self, status):
+        """Update the status of the currently viewed asset."""
+        filepath = self._getCurrentSourcePath()
+        if not filepath:
+            rve.displayFeedback("No source loaded", 3.0)
+            return
+
+        # We need the asset ID to update status. We can get it from overlay-info or compare-targets
+        # Let's fetch overlay-info to get the asset ID
+        if not urllib:
+            rve.displayFeedback("urllib not available", 4.0)
+            return
+
+        try:
+            url = "%s/api/assets/overlay-info?path=%s" % (DMV_URL, urllib.parse.quote(filepath))
+            req = urllib.request.Request(url)
+            req.add_header("X-CAM-User", "rv-plugin")
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                
+            if not data or "asset_id" not in data:
+                rve.displayFeedback("Asset not found in MediaVault", 4.0)
+                return
+                
+            asset_id = data["asset_id"]
+            
+            # Now send the PUT request to update status
+            put_url = "%s/api/assets/%s/status" % (DMV_URL, asset_id)
+            put_data = json.dumps({"status": status}).encode("utf-8")
+            put_req = urllib.request.Request(put_url, data=put_data, method="PUT")
+            put_req.add_header("Content-Type", "application/json")
+            put_req.add_header("X-CAM-User", "rv-plugin")
+            
+            with urllib.request.urlopen(put_req, timeout=2.0) as put_response:
+                put_result = json.loads(put_response.read().decode("utf-8"))
+                
+            if put_result.get("success"):
+                rve.displayFeedback("Status set to: %s" % status, 3.0)
+                # Force overlay refresh
+                self._overlay_meta = None
+                self._overlay_tick = 0
+            else:
+                rve.displayFeedback("Failed to set status", 4.0)
+                
+        except Exception as e:
+            print("[MediaVault] setStatus error: %s" % e)
+            rve.displayFeedback("Error setting status", 4.0)
 
     # ── picker dialog ────────────────────────────────────────────
 

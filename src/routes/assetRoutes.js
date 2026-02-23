@@ -378,7 +378,7 @@ router.get('/overlay-info', (req, res) => {
     const variants = getAllPathVariants(filePath);
     const stmt = db.prepare(`
         SELECT a.id, a.vault_name, a.original_name, a.version, a.file_ext,
-               a.media_type, a.resolution, a.created_at,
+               a.media_type, a.resolution, a.created_at, a.status,
                r.name AS role_name, r.code AS role_code,
                p.name AS project_name, p.code AS project_code,
                seq.name AS sequence_name, seq.code AS sequence_code,
@@ -404,6 +404,7 @@ router.get('/overlay-info', (req, res) => {
 
     res.json({
         found: true,
+        asset_id: asset.id,
         vault_name: asset.vault_name,
         original_name: asset.original_name,
         version: asset.version,
@@ -417,7 +418,7 @@ router.get('/overlay-info', (req, res) => {
         project_code: asset.project_code || null,
         sequence_name: asset.sequence_name || null,
         shot_name: asset.shot_name || null,
-        status: 'WIP'  // TODO: Add status column to assets table in future
+        status: asset.status || 'WIP'
     });
 });
 
@@ -440,6 +441,25 @@ router.get('/:id', (req, res) => {
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
     asset.file_path = resolveFilePath(asset.file_path);
     res.json(asset);
+});
+
+// PUT /api/assets/:id/status — Update asset status
+router.put('/:id/status', (req, res) => {
+    const { status } = req.body;
+    if (!status) return res.status(400).json({ error: 'Status required' });
+    
+    const validStatuses = ['WIP', 'Review', 'Approved', 'Final'];
+    if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const db = getDb();
+    const result = db.prepare("UPDATE assets SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, req.params.id);
+    
+    if (result.changes === 0) return res.status(404).json({ error: 'Asset not found' });
+    
+    logActivity('update_status', 'asset', req.params.id, JSON.stringify({ status }));
+    res.json({ success: true, status });
 });
 
 
@@ -602,18 +622,25 @@ router.post('/import', async (req, res) => {
                 // have frame files in the vault (e.g. from a previous import)
                 const naming = require('../utils/naming');
                 const testFrame = buildFrameFilename(vaultBaseName, seq.frameStart, seq.digits, vaultExt);
-                if (fs.existsSync(path.join(vaultDir, testFrame))) {
+
+                // Put each sequence inside its own named subfolder so multiple
+                // sequences don't dump hundreds of frames into the same directory.
+                // e.g. Project/SQ010/SH020/image/render_comp_v001/render_comp_v001.0001.exr
+                let seqDir = path.join(vaultDir, vaultBaseName);
+                if (fs.existsSync(path.join(seqDir, testFrame))) {
                     const resolved = naming.resolveCollision(
                         path.join(vaultDir, `${vaultBaseName}${vaultExt}`)
                     );
                     vaultBaseName = path.basename(resolved, vaultExt);
+                    seqDir = path.join(vaultDir, vaultBaseName);
                 }
+                FileService.ensureDir(seqDir);
 
                 for (let fi = 0; fi < seq.files.length; fi++) {
                     const srcFrame = seq.files[fi];
                     const frameNum = seq.frameStart + fi;
                     const frameFilename = buildFrameFilename(vaultBaseName, frameNum, seq.digits, vaultExt);
-                    const destPath = path.join(vaultDir, frameFilename);
+                    const destPath = path.join(seqDir, frameFilename);
 
                     if (req.body.keep_originals) {
                         fs.copyFileSync(srcFrame, destPath);

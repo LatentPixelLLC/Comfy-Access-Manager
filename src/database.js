@@ -168,6 +168,7 @@ function runMigrations(wrapper) {
             comfyui_node_id TEXT,
             comfyui_workflow TEXT,
             starred INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'WIP',
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
@@ -245,6 +246,16 @@ function runMigrations(wrapper) {
         for (const row of stLink.iterate()) assetCols2.push(row.name);
         if (!assetCols2.includes('is_linked')) {
             wrapper.exec('ALTER TABLE assets ADD COLUMN is_linked INTEGER DEFAULT 0');
+        }
+    } catch (_) { /* column already exists */ }
+
+    // ─── Add status column to assets if missing ───
+    try {
+        const assetCols3 = [];
+        let stStatus = wrapper.prepare('PRAGMA table_info(assets)');
+        for (const row of stStatus.iterate()) assetCols3.push(row.name);
+        if (!assetCols3.includes('status')) {
+            wrapper.exec("ALTER TABLE assets ADD COLUMN status TEXT DEFAULT 'WIP'");
         }
     } catch (_) { /* column already exists */ }
 

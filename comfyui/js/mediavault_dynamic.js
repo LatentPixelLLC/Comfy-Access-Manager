@@ -269,9 +269,9 @@ function updateNodePreview(node) {
         node._mvPreviewImg.crossOrigin = "anonymous";
         node._mvPreviewImg.onload = () => {
             node._mvPreviewReady = true;
-            // Resize the node to fit the preview
+            // Resize the node to fit ALL widgets (preview + refresh button)
             const sz = node.computeSize();
-            if (node.size[1] < sz[1]) node.setSize(sz);
+            node.setSize([Math.max(node.size[0], sz[0]), Math.max(node.size[1], sz[1])]);
             node.setDirtyCanvas?.(true, true);
         };
         node._mvPreviewImg.onerror = () => {
@@ -353,51 +353,191 @@ async function prefillFromLoadNode(saveNode) {
     }
 }
 
-// ── Refresh button (persistent) ─────────────────────────
+// ── Refresh button (custom-rendered, placed above preview) ──
 const REFRESH_BTN_NAME = "🔄 Refresh Assets";
 
 /**
- * Add (or re-add) the Refresh Assets button to a MediaVault node.
- * ComfyUI can strip dynamically-added widgets during configure/
- * serialization cycles, so we guard against duplicates and re-add
- * if the button goes missing.
+ * Execute the refresh action: re-query projects, roles, and cascade.
  */
-function addRefreshButton(node) {
-    // Don't add a duplicate
-    if (findWidget(node, REFRESH_BTN_NAME)) return;
-
-    const btn = node.addWidget("button", REFRESH_BTN_NAME, null, async () => {
-        // Refresh projects
-        const projW = findWidget(node, "project");
-        if (projW) {
-            const projects = await mvFetch("/mediavault/projects");
-            const projNames = projects.map(p => `${p.name} (${p.code})`);
-            if (projNames.length > 0) {
-                updateComboWidget(projW, projNames, true);
-            }
-        }
-        // Refresh roles (picks up newly added roles without restart)
-        const roleW = findWidget(node, "role");
-        if (roleW) {
-            const roles = await mvFetch("/mediavault/roles");
-            const roleNames = roles.map(r => `${r.name} (${r.code})`);
-            if (roleNames.length > 0) {
-                updateComboWidget(roleW, roleNames, true);
-            }
-        }
-        await cascadeUpdate(node, "project");
-        // Re-ensure button survives after the cascade
-        ensureRefreshButton(node);
+async function doRefreshAction(node) {
+    const projW = findWidget(node, "project");
+    if (projW) {
+        const projects = await mvFetch("/mediavault/projects");
+        const projNames = projects.map(p => `${p.name} (${p.code})`);
+        if (projNames.length > 0) updateComboWidget(projW, projNames, true);
+    }
+    const roleW = findWidget(node, "role");
+    if (roleW) {
+        const roles = await mvFetch("/mediavault/roles");
+        const roleNames = roles.map(r => `${r.name} (${r.code})`);
+        if (roleNames.length > 0) updateComboWidget(roleW, roleNames, true);
+    }
+    await cascadeUpdate(node, "project");
+    // Ensure node is large enough for all widgets after thumbnail loads
+    requestAnimationFrame(() => {
+        const sz = node.computeSize();
+        if (sz[1] > node.size[1]) node.setSize([node.size[0], sz[1]]);
+        node.setDirtyCanvas?.(true);
     });
-    btn.serialize = false;
 }
 
 /**
- * Called after operations that might strip dynamic widgets.
- * Uses a micro-delay so LiteGraph finishes its widget rebuild first.
+ * Add the Refresh Assets button as a custom-rendered widget.
+ * Uses type "MEDIAVAULT_REFRESH" (not "button") so ComfyUI won't strip
+ * it during widget lifecycle events. Handles its own drawing and click
+ * detection. Placed BEFORE the preview widget so it stays visible above
+ * the thumbnail.
+ */
+function addRefreshButton(node) {
+    if (node.widgets?.find(w => w.name === REFRESH_BTN_NAME)) return;
+
+    const btn = {
+        name: REFRESH_BTN_NAME,
+        type: "MEDIAVAULT_REFRESH",
+        value: null,
+        options: { serialize: false },
+        _clicking: false,
+
+        draw(ctx, _node, widgetWidth, y) {
+            const pad = 8;
+            const btnW = widgetWidth - pad * 2;
+            const btnH = 24;
+            const top = y + 2;
+
+            // Store position for click hit-testing
+            _node._mvRefreshBtnY = top;
+            _node._mvRefreshBtnH = btnH;
+
+            // Background
+            ctx.fillStyle = this._clicking ? "#555" : "#383838";
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, btnW, btnH, 4);
+                ctx.fill();
+            } else {
+                ctx.fillRect(pad, top, btnW, btnH);
+            }
+
+            // Border
+            ctx.strokeStyle = this._clicking ? "#888" : "#555";
+            ctx.lineWidth = 1;
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, btnW, btnH, 4);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(pad, top, btnW, btnH);
+            }
+
+            // Label
+            ctx.fillStyle = "#ccc";
+            ctx.font = "12px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("\u{1F504} Refresh Assets", widgetWidth / 2, top + 16);
+            ctx.textAlign = "left";
+        },
+
+        computeSize(width) {
+            return [width, 28];
+        },
+
+        mouse(event, pos, _node) {
+            if (event.type === "pointerdown" || event.type === "mousedown") {
+                this._clicking = true;
+                _node.setDirtyCanvas(true);
+                doRefreshAction(_node).finally(() => {
+                    this._clicking = false;
+                    _node.setDirtyCanvas(true);
+                });
+                return true;
+            }
+            return false;
+        },
+    };
+
+    node.widgets = node.widgets || [];
+    // Insert BEFORE the preview widget so button stays visible above thumbnail
+    const previewIdx = node.widgets.findIndex(w => w.name === "mv_preview");
+    if (previewIdx >= 0) {
+        node.widgets.splice(previewIdx, 0, btn);
+    } else {
+        node.widgets.push(btn);
+    }
+}
+
+/**
+ * Ensure the refresh button exists on the node.
+ * Micro-delay lets LiteGraph finish any widget rebuild first.
  */
 function ensureRefreshButton(node) {
-    setTimeout(() => addRefreshButton(node), 50);
+    setTimeout(() => addRefreshButton(node), 100);
+}
+
+// ── Workflow restore (serialization fix) ─────────────────
+
+/**
+ * After restoring saved dropdown values, fetch live data from MediaVault
+ * while KEEPING the restored selections. Unlike cascadeUpdate() which
+ * resets downstream widgets, this preserves all saved values.
+ */
+async function restoreLiveDropdowns(node) {
+    const projW  = findWidget(node, "project");
+    const seqW   = findWidget(node, "sequence");
+    const shotW  = findWidget(node, "shot");
+    const roleW  = findWidget(node, "role");
+
+    if (!projW) return;
+
+    // Save the restored values before any updates overwrite them
+    const savedProj = projW?.value;
+    const savedSeq  = seqW?.value;
+    const savedShot = shotW?.value;
+    const savedRole = roleW?.value;
+
+    // 1. Fetch projects and update dropdown (keepValue=true preserves saved)
+    const projects = await mvFetch("/mediavault/projects");
+    if (projects.length > 0) {
+        const projNames = projects.map(p => `${p.name} (${p.code})`);
+        updateComboWidget(projW, projNames, true);
+    }
+
+    const projId = await resolveId("/mediavault/projects", savedProj);
+    if (projId === "0") return;
+
+    // 2. Fetch sequences for this project
+    if (seqW) {
+        const seqs = await mvFetch(`/mediavault/sequences?project_id=${projId}`);
+        const seqNames = ["* (All Sequences)", ...seqs.map(s => `${s.name} (${s.code})`)];
+        updateComboWidget(seqW, seqNames, true);
+    }
+
+    // 3. Fetch shots
+    const seqId = await resolveId("/mediavault/sequences", savedSeq);
+    if (shotW) {
+        const shots = await mvFetch(
+            `/mediavault/shots?project_id=${projId}&sequence_id=${seqId}`
+        );
+        const shotNames = ["* (All Shots)", ...shots.map(s => `${s.name} (${s.code})`)];
+        updateComboWidget(shotW, shotNames, true);
+    }
+
+    // 4. Fetch roles
+    if (roleW) {
+        const roles = await mvFetch("/mediavault/roles");
+        const roleNames = ["* (All Roles)", ...roles.map(r => `${r.name} (${r.code})`)];
+        updateComboWidget(roleW, roleNames, true);
+    }
+
+    // 5. For Load nodes: refresh asset list (preserving saved asset selection)
+    const assetW = findWidget(node, "asset");
+    if (assetW) {
+        const shotId = await resolveId("/mediavault/shots", savedShot);
+        const roleId = await resolveId("/mediavault/roles", savedRole);
+        await refreshAssets(node, projId, seqId, shotId, roleId);
+    }
+
+    node.setDirtyCanvas?.(true);
+    console.log(`[MediaVault] ✓ Restored dropdowns for ${node.comfyClass}: ${savedProj}`);
 }
 
 // ── Extension registration ──────────────────────────────
@@ -483,10 +623,44 @@ app.registerExtension({
         addRefreshButton(node);
 
         // Re-add button after workflow load / node configure (ComfyUI strips dynamic widgets)
+        // AND restore saved dropdown values that ComfyUI rejected (not in static options list)
         const origConfigure = node.onConfigure;
         node.onConfigure = function (info) {
             if (origConfigure) origConfigure.call(this, info);
+
+            // ── Restore saved dropdown values ──
+            // ComfyUI combo widgets reject values not in INPUT_TYPES options.
+            // Our dropdowns are dynamically populated, so saved values like
+            // "MyProject (PROJ)" get reset to "(Load MediaVault...)".
+            // Fix: read raw saved values from info.widgets_values and force-inject them.
+            const savedValues = info?.widgets_values;
+            if (savedValues && Array.isArray(savedValues)) {
+                const restoreWidgets = ["project", "sequence", "shot", "role", "asset"];
+                for (const wName of restoreWidgets) {
+                    const widget = findWidget(this, wName);
+                    if (!widget) continue;
+                    const idx = this.widgets.indexOf(widget);
+                    if (idx < 0 || idx >= savedValues.length) continue;
+                    const saved = savedValues[idx];
+                    if (
+                        saved &&
+                        typeof saved === "string" &&
+                        !saved.startsWith("(Load") &&
+                        saved !== "No assets found"
+                    ) {
+                        // Inject into options so ComfyUI/LiteGraph accepts it
+                        if (!widget.options.values.includes(saved)) {
+                            widget.options.values.push(saved);
+                        }
+                        widget.value = saved;
+                    }
+                }
+            }
+
             ensureRefreshButton(this);
+
+            // Fetch live data from MediaVault while preserving restored values
+            setTimeout(() => restoreLiveDropdowns(this), 800);
         };
 
         // ── Auto-populate Save node from any Load node in the graph ──

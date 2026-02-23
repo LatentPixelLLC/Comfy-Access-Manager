@@ -144,7 +144,7 @@ function findRVInstalls() {
         }
     } else if (process.platform === 'win32') {
         // Windows: tools/rv/Packages/ or tools/rv/app/Packages/
-        for (const sub of ['Packages', 'app/Packages']) {
+        for (const sub of ['Packages', 'app/Packages', 'PlugIns/Packages']) {
             const pkg = path.join(appRoot, 'tools', 'rv', sub);
             const bin = path.join(appRoot, 'tools', 'rv', 'bin', 'rvpkg.exe');
             addFlat(pkg, bin);
@@ -190,7 +190,7 @@ function findRVInstalls() {
             try {
                 for (const entry of fs.readdirSync(progDir)) {
                     if (entry.match(/^(RV|Autodesk.*RV|ShotGrid.*RV|Shotgun.*RV)/i)) {
-                        for (const sub of ['Packages', 'app/Packages']) {
+                        for (const sub of ['Packages', 'app/Packages', 'PlugIns/Packages']) {
                             const pkg = path.join(progDir, entry, sub);
                             const bin = path.join(progDir, entry, 'bin', 'rvpkg.exe');
                             addFlat(pkg, bin);
@@ -200,6 +200,8 @@ function findRVInstalls() {
             } catch {}
         }
         addFlat(path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'Packages'),
+                path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'bin', 'rvpkg.exe'));
+        addFlat(path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'PlugIns', 'Packages'),
                 path.join('C:', 'OpenRV', '_build', 'stage', 'app', 'bin', 'rvpkg.exe'));
 
     } else {
