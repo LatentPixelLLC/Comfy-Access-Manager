@@ -689,7 +689,7 @@ class SaveToMediaVault:
                 print(f"[MediaVault] ⚠ Audio prep failed, encoding video without audio: {e}")
                 temp_audio = None
 
-        # --- Build FFmpeg command ---
+        # --- Build FFmpeg command (inputs section) ---
         cmd = [
             "ffmpeg", "-y",
             "-f", "rawvideo",
@@ -704,6 +704,38 @@ class SaveToMediaVault:
         if temp_audio:
             cmd += ["-i", temp_audio]
 
+        # Embed workflow JSON as metadata comment (same format as VHS Video Combine)
+        # NOTE: Write to a temp metadata file instead of passing on the command line,
+        # because Windows has a ~32K character limit on command lines and workflow
+        # JSON can easily exceed that (WinError 206).
+        # IMPORTANT: The metadata -i MUST come before output options (codec, crf, etc.)
+        # or FFmpeg applies output options to the metadata input and fails.
+        workflow_json = None
+        metadata_path = None
+        metadata_input_idx = None  # Track which input index the metadata is
+        if extra_pnginfo and "workflow" in extra_pnginfo:
+            try:
+                workflow_json = json.dumps(extra_pnginfo["workflow"])
+                # Write FFmpeg metadata file format: https://ffmpeg.org/ffmpeg-formats.html#metadata-1
+                metadata_file = tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.txt', delete=False,
+                    prefix='mv_meta_', encoding='utf-8'
+                )
+                metadata_path = metadata_file.name
+                metadata_file.write(";FFMETADATA1\n")
+                # Escape special chars per FFmpeg metadata spec: = ; # \ and newline
+                escaped = workflow_json.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", "\\\n")
+                metadata_file.write(f"comment={escaped}\n")
+                metadata_file.close()
+                # Input index: 0=pipe, 1=audio(if present) or metadata, etc.
+                metadata_input_idx = 2 if temp_audio else 1
+                cmd += ["-f", "ffmetadata", "-i", metadata_path]
+                print(f"[MediaVault] Embedding workflow metadata via file ({len(workflow_json)} chars)")
+            except Exception as e:
+                print(f"[MediaVault] ⚠ Could not embed workflow: {e}")
+                metadata_path = None
+
+        # --- Output options (codec, quality, etc.) ---
         # Video codec settings
         cmd += ["-vcodec", vfmt["vcodec"], "-pix_fmt", vfmt["pix_fmt"]]
 
@@ -731,15 +763,9 @@ class SaveToMediaVault:
                 cmd += ["-acodec", "pcm_s16le"]
             cmd += ["-shortest"]
 
-        # Embed workflow JSON as metadata comment (same format as VHS Video Combine)
-        workflow_json = None
-        if extra_pnginfo and "workflow" in extra_pnginfo:
-            try:
-                workflow_json = json.dumps(extra_pnginfo["workflow"])
-                cmd += ["-metadata", f"comment={workflow_json}"]
-                print(f"[MediaVault] Embedding workflow metadata ({len(workflow_json)} chars)")
-            except Exception as e:
-                print(f"[MediaVault] ⚠ Could not embed workflow: {e}")
+        # Map metadata from the metadata input file (if we have one)
+        if metadata_input_idx is not None:
+            cmd += ["-map_metadata", str(metadata_input_idx)]
 
         cmd.append(os.path.abspath(temp_video))
         print(f"[MediaVault] FFmpeg cmd: {' '.join(cmd[:20])}{'...' if len(cmd) > 20 else ''}")
@@ -799,6 +825,13 @@ class SaveToMediaVault:
         finally:
             try:
                 os.remove(stderr_path)
+            except OSError:
+                pass
+
+        # Clean up metadata temp file
+        if metadata_path:
+            try:
+                os.remove(metadata_path)
             except OSError:
                 pass
 
