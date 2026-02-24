@@ -156,6 +156,45 @@ try:
             print(f"[MediaVault] thumbnail proxy error: {e}")
             return web.Response(status=404, text="Not found")
 
+    @PromptServer.instance.routes.get("/mediavault/probe-video/{asset_id}")
+    async def mv_probe_video(request):
+        """Probe a video asset and return metadata (frame count, fps, resolution, duration).
+        Used by the JS extension to show video info on the node before execution."""
+        asset_id = request.match_info["asset_id"]
+        path_data = _proxy_mv(f"/api/assets/{asset_id}")
+        file_path = path_data.get("file_path") if isinstance(path_data, dict) else None
+        if not file_path:
+            return web.json_response({"error": "Asset not found"}, status=404)
+
+        if not os.path.exists(file_path):
+            return web.json_response({"error": "File not found on disk"}, status=404)
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in VIDEO_EXTENSIONS:
+            return web.json_response({"error": "Not a video file"}, status=400)
+
+        try:
+            cap = cv2.VideoCapture(file_path)
+            if not cap.isOpened():
+                return web.json_response({"error": "Cannot open video"}, status=500)
+
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            duration = total_frames / fps if fps > 0 else 0.0
+            cap.release()
+
+            return web.json_response({
+                "frame_count": total_frames,
+                "fps": round(fps, 2),
+                "width": width,
+                "height": height,
+                "duration": round(duration, 2),
+            })
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     # ── Pending Workflow (one-shot storage for "Load in ComfyUI") ──
     _pending_workflow = None
 
@@ -1037,13 +1076,18 @@ class LoadVideoFromMediaVault:
                 "asset": (["(Select project first)"], {"default": "(Select project first)"}),
             },
             "optional": {
-                "frame_start": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
-                "frame_end": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1,
-                                      "tooltip": "0 = load to end of video"}),
-                "frame_step": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
-                                       "tooltip": "1 = every frame, 2 = every other frame, etc."}),
-                "max_frames": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1,
-                                       "tooltip": "0 = no limit (careful with long videos!)"}),
+                "force_rate": ("INT", {"default": 0, "min": 0, "max": 120, "step": 1,
+                                       "tooltip": "Force output FPS. 0 = use the video's native fps."}),
+                "custom_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
+                                         "tooltip": "Resize width. 0 = original. If only width is set, height scales proportionally."}),
+                "custom_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1,
+                                          "tooltip": "Resize height. 0 = original. If only height is set, width scales proportionally."}),
+                "frame_load_cap": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1,
+                                           "tooltip": "Maximum number of frames to load. 0 = no limit (load entire video)."}),
+                "skip_first_frames": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1,
+                                              "tooltip": "Skip this many frames from the beginning of the video."}),
+                "select_every_nth": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1,
+                                             "tooltip": "1 = every frame, 2 = every other frame, 3 = every 3rd, etc."}),
             },
         }
 
@@ -1059,7 +1103,8 @@ class LoadVideoFromMediaVault:
 
     def load_video(self, project, asset,
                    sequence="* (All Sequences)", shot="* (All Shots)", role="* (All Roles)",
-                   frame_start=0, frame_end=0, frame_step=1, max_frames=0):
+                   force_rate=0, custom_width=0, custom_height=0,
+                   frame_load_cap=0, skip_first_frames=0, select_every_nth=1):
 
         # Resolve hierarchy IDs
         projects = get_projects()
@@ -1108,21 +1153,41 @@ class LoadVideoFromMediaVault:
         source_duration = total_frames / fps if fps > 0 else 0.0
 
         # Resolve range
-        start = min(frame_start, total_frames - 1)
-        end = total_frames if frame_end <= 0 else min(frame_end + 1, total_frames)
-        step = max(1, frame_step)
+        start = min(skip_first_frames, total_frames - 1) if skip_first_frames > 0 else 0
+        step = max(1, select_every_nth)
 
+        # Determine target resize dimensions
+        resize_w, resize_h = 0, 0
+        if custom_width > 0 and custom_height > 0:
+            resize_w, resize_h = custom_width, custom_height
+        elif custom_width > 0:
+            # Scale height proportionally
+            resize_w = custom_width
+            resize_h = int(source_height * (custom_width / source_width))
+        elif custom_height > 0:
+            # Scale width proportionally
+            resize_h = custom_height
+            resize_w = int(source_width * (custom_height / source_height))
+
+        # Determine output FPS
+        output_fps = float(force_rate) if force_rate > 0 else fps
+        # Effective fps accounts for frame stepping
+        effective_fps = output_fps / step if step > 1 and force_rate == 0 else output_fps
+
+        resize_label = f", resize={resize_w}×{resize_h}" if resize_w > 0 else ""
+        rate_label = f", force_rate={force_rate}" if force_rate > 0 else ""
+        cap_label = f", cap={frame_load_cap}" if frame_load_cap > 0 else ""
         print(f"[MediaVault] Loading video: {os.path.basename(file_path)}")
-        print(f"[MediaVault]   Total: {total_frames} frames @ {fps:.2f} fps")
-        print(f"[MediaVault]   Range: {start}–{end - 1}, step={step}")
+        print(f"[MediaVault]   Source: {total_frames} frames @ {fps:.2f} fps, {source_width}×{source_height}")
+        print(f"[MediaVault]   Settings: skip={start}, step={step}{cap_label}{rate_label}{resize_label}")
 
         frames = []
         cap.set(cv2.CAP_PROP_POS_FRAMES, start)
         idx = start
 
-        while idx < end:
-            if max_frames > 0 and len(frames) >= max_frames:
-                print(f"[MediaVault]   Hit max_frames cap ({max_frames})")
+        while idx < total_frames:
+            if frame_load_cap > 0 and len(frames) >= frame_load_cap:
+                print(f"[MediaVault]   Hit frame_load_cap ({frame_load_cap})")
                 break
 
             ret, frame = cap.read()
@@ -1131,6 +1196,12 @@ class LoadVideoFromMediaVault:
 
             if (idx - start) % step == 0:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Resize if custom dimensions are set
+                if resize_w > 0 and resize_h > 0:
+                    frame_rgb = cv2.resize(frame_rgb, (resize_w, resize_h),
+                                           interpolation=cv2.INTER_LANCZOS4)
+
                 frame_np = frame_rgb.astype(np.float32) / 255.0
                 frames.append(frame_np)
 
@@ -1146,9 +1217,8 @@ class LoadVideoFromMediaVault:
         loaded = image_tensor.shape[0]
         loaded_width = image_tensor.shape[2]
         loaded_height = image_tensor.shape[1]
-        loaded_fps = fps / step if step > 0 else fps
-        loaded_duration = loaded / loaded_fps if loaded_fps > 0 else 0.0
-        print(f"[MediaVault]   Loaded {loaded} frames → tensor {list(image_tensor.shape)}")
+        loaded_duration = loaded / effective_fps if effective_fps > 0 else 0.0
+        print(f"[MediaVault]   Loaded {loaded} frames → {loaded_width}×{loaded_height} @ {effective_fps:.2f} fps")
 
         video_info = {
             "source_fps": fps,
@@ -1156,14 +1226,14 @@ class LoadVideoFromMediaVault:
             "source_duration": source_duration,
             "source_width": source_width,
             "source_height": source_height,
-            "loaded_fps": loaded_fps,
+            "loaded_fps": effective_fps,
             "loaded_frame_count": loaded,
             "loaded_duration": loaded_duration,
             "loaded_width": loaded_width,
             "loaded_height": loaded_height,
         }
 
-        return (image_tensor, file_path, loaded, fps, video_info)
+        return (image_tensor, file_path, loaded, effective_fps, video_info)
 
 
 # ═══════════════════════════════════════════

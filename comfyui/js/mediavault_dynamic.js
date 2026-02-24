@@ -23,6 +23,9 @@ const MV_NODES = [
 // Nodes that should show an asset thumbnail preview
 const PREVIEW_NODES = ["LoadFromMediaVault", "LoadVideoFrameFromMediaVault", "LoadVideoFromMediaVault"];
 
+// Nodes that should show video info (frame count, fps, resolution)
+const VIDEO_INFO_NODES = ["LoadVideoFromMediaVault"];
+
 // ── helpers ──────────────────────────────────────────────
 function findWidget(node, name) {
     return node.widgets?.find((w) => w.name === name);
@@ -298,6 +301,137 @@ async function resolveAssetIdAndPreview(node) {
         node._mvAssetMap[a.vault_name] = { id: a.id, width: a.width, height: a.height };
     }
     updateNodePreview(node);
+}
+
+// ── Video Info Widget (frame count, fps, resolution, duration) ──
+
+/**
+ * Probe a video asset via the ComfyUI proxy and return metadata.
+ * Returns { frame_count, fps, width, height, duration } or null on error.
+ */
+async function probeVideo(assetId) {
+    try {
+        const res = await fetch(`/mediavault/probe-video/${assetId}`);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (e) {
+        console.warn("[MediaVault] probe-video error:", e);
+        return null;
+    }
+}
+
+/**
+ * Custom widget that displays video metadata (frame count, fps, resolution, duration)
+ * directly on the node canvas. Shows info from the probe API so the user knows
+ * the video dimensions before execution.
+ */
+function addVideoInfoWidget(node) {
+    if (node.widgets?.find(w => w.name === "mv_video_info")) return;
+
+    const widget = {
+        name: "mv_video_info",
+        type: "MEDIAVAULT_VIDEO_INFO",
+        value: "",
+        options: { serialize: false },
+
+        draw(ctx, _node, widgetWidth, y) {
+            const info = _node._mvVideoInfo;
+            if (!info) return;
+
+            const pad = 8;
+            const boxW = widgetWidth - pad * 2;
+            const boxH = 38;
+            const top = y + 2;
+
+            // Dark background
+            ctx.fillStyle = "#1a1a2e";
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, boxW, boxH, 4);
+                ctx.fill();
+            } else {
+                ctx.fillRect(pad, top, boxW, boxH);
+            }
+
+            // Subtle border
+            ctx.strokeStyle = "#444";
+            ctx.lineWidth = 1;
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, boxW, boxH, 4);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(pad, top, boxW, boxH);
+            }
+
+            // Line 1: frame count + fps
+            const frames = info.frame_count || 0;
+            const fps = info.fps || 0;
+            const dur = info.duration || 0;
+            const line1 = `\u{1F3AC} ${frames} frames \u00B7 ${fps} fps \u00B7 ${dur.toFixed(2)}s`;
+
+            ctx.fillStyle = "#ddd";
+            ctx.font = "11px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText(line1, widgetWidth / 2, top + 15);
+
+            // Line 2: resolution
+            const w = info.width || 0;
+            const h = info.height || 0;
+            const line2 = `${w} \u00D7 ${h}`;
+            ctx.fillStyle = "#999";
+            ctx.fillText(line2, widgetWidth / 2, top + 30);
+            ctx.textAlign = "left";
+        },
+
+        computeSize(width) {
+            if (!node._mvVideoInfo) return [width, 4];
+            return [width, 44];
+        },
+    };
+
+    node.widgets = node.widgets || [];
+
+    // Insert BEFORE the refresh button and preview widget
+    // so it appears right after the input fields
+    const refreshIdx = node.widgets.findIndex(w => w.name === REFRESH_BTN_NAME);
+    const previewIdx = node.widgets.findIndex(w => w.name === "mv_preview");
+    const insertAt = Math.min(
+        refreshIdx >= 0 ? refreshIdx : node.widgets.length,
+        previewIdx >= 0 ? previewIdx : node.widgets.length
+    );
+    node.widgets.splice(insertAt, 0, widget);
+
+    return widget;
+}
+
+/**
+ * Probe the selected asset and update the video info widget.
+ * Called when an asset is selected on a LoadVideoFromMediaVault node.
+ */
+async function updateVideoInfo(node) {
+    if (!VIDEO_INFO_NODES.includes(node.comfyClass)) return;
+
+    const assetW = findWidget(node, "asset");
+    if (!assetW) return;
+
+    const assetName = assetW.value;
+    const assetEntry = node._mvAssetMap?.[assetName];
+    const assetId = assetEntry?.id ?? assetEntry;
+
+    if (!assetId || assetName === "No assets found" || assetName === "(Select project first)") {
+        node._mvVideoInfo = null;
+        node.setDirtyCanvas?.(true);
+        return;
+    }
+
+    const info = await probeVideo(assetId);
+    node._mvVideoInfo = info;
+
+    // Resize node to fit the new widget
+    const sz = node.computeSize();
+    node.setSize([Math.max(node.size[0], sz[0]), Math.max(node.size[1], sz[1])]);
+    node.setDirtyCanvas?.(true, true);
 }
 
 // ── Auto-sync Save node from Load node ──────────────────
@@ -697,6 +831,10 @@ app.registerExtension({
                 assetWidget.callback = function (v) {
                     if (origAssetCb) origAssetCb.call(this, v);
                     updateNodePreview(node);
+                    // Also probe video info if this is a video node
+                    if (VIDEO_INFO_NODES.includes(node.comfyClass)) {
+                        updateVideoInfo(node);
+                    }
                 };
             }
 
@@ -708,6 +846,16 @@ app.registerExtension({
                     updateNodePreview(node);
                 }
             }, 1500);
+        }
+
+        // ── Video info widget for Load Video nodes ──
+        if (VIDEO_INFO_NODES.includes(node.comfyClass)) {
+            addVideoInfoWidget(node);
+
+            // Probe video info after workflow restore (delayed so asset map is ready)
+            setTimeout(() => {
+                updateVideoInfo(node);
+            }, 2000);
         }
 
         // Also add a manual Refresh button so the user can force re-query
@@ -751,8 +899,21 @@ app.registerExtension({
 
             ensureRefreshButton(this);
 
+            // Ensure video info widget exists for video nodes
+            if (VIDEO_INFO_NODES.includes(this.comfyClass)) {
+                const hasInfoWidget = this.widgets?.some(w => w.type === "MEDIAVAULT_VIDEO_INFO");
+                if (!hasInfoWidget) {
+                    addVideoInfoWidget(this);
+                }
+            }
+
             // Fetch live data from MediaVault while preserving restored values
             setTimeout(() => restoreLiveDropdowns(this), 800);
+
+            // Probe video info after dropdowns are restored
+            if (VIDEO_INFO_NODES.includes(this.comfyClass)) {
+                setTimeout(() => updateVideoInfo(this), 2500);
+            }
         };
 
         // ── Auto-populate Save node from any Load node in the graph ──
