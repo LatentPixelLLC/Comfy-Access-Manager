@@ -17,6 +17,35 @@ const { getDb, logActivity } = require('../database');
 const { resolveFilePath } = require('../utils/pathResolver');
 
 // ────────────────────────────────────────────
+//  SSE — push crate changes to open browsers
+// ────────────────────────────────────────────
+
+const _sseClients = new Set();
+
+function _broadcast(crateId, action, detail) {
+    const payload = JSON.stringify({ crateId, action, ...detail });
+    console.log(`[Crate SSE] Broadcasting to ${_sseClients.size} client(s):`, { crateId, action });
+    for (const client of _sseClients) {
+        client.write(`data: ${payload}\n\n`);
+    }
+}
+
+router.get('/events', (req, res) => {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+    });
+    res.write(':\n\n');  // comment line = keepalive
+    _sseClients.add(res);
+    console.log(`[Crate SSE] Client connected (${_sseClients.size} total)`);
+    req.on('close', () => {
+        _sseClients.delete(res);
+        console.log(`[Crate SSE] Client disconnected (${_sseClients.size} remaining)`);
+    });
+});
+
+// ────────────────────────────────────────────
 //  LIST ALL CRATES (with item counts)
 // ────────────────────────────────────────────
 
@@ -153,6 +182,7 @@ router.post('/:id/items', (req, res) => {
         });
         const added = addAll(assetIds);
         logActivity('add_to_crate', 'crate', crate.id, { added, total: assetIds.length });
+        if (added > 0) _broadcast(Number(req.params.id), 'add', { added });
         res.json({ ok: true, added });
     } catch (err) {
         console.error('Failed to add to crate:', err.message);
@@ -182,6 +212,7 @@ router.delete('/:id/items', (req, res) => {
             return removed;
         });
         const removed = removeAll(assetIds);
+        if (removed > 0) _broadcast(Number(req.params.id), 'remove', { removed });
         res.json({ ok: true, removed });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -287,6 +318,7 @@ router.post('/:id/add-by-path', (req, res) => {
         db.prepare('INSERT OR IGNORE INTO crate_items (crate_id, asset_id) VALUES (?, ?)').run(crate.id, asset.id);
 
         logActivity('add_to_crate_by_path', 'crate', crate.id, { assetId: asset.id, vaultName: asset.vault_name });
+        _broadcast(crate.id, 'add', { added: 1, vaultName: asset.vault_name });
         res.json({ ok: true, assetId: asset.id, vaultName: asset.vault_name, crateName: crate.name });
     } catch (err) {
         console.error('Failed to add to crate by path:', err.message);

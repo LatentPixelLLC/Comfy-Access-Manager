@@ -24,7 +24,8 @@ let activeCrateId = null;  // Currently viewed crate (null = normal project view
 let crateAssets = [];       // Assets in the active crate
 let cratePanelOpen = true;
 let _crateRefreshInterval = null;  // Auto-refresh timer while viewing a crate
-const CRATE_POLL_MS = 3000;        // Poll every 3 seconds
+let _sseSource = null;             // SSE connection for real-time crate updates
+const CRATE_POLL_MS = 3000;        // Fallback poll (only if SSE fails)
 
 // ═══════════════════════════════════════════
 //  CRATE LIST (left sidebar panel)
@@ -617,26 +618,70 @@ export function getActiveCrateId() { return activeCrateId; }
 export function getCrates() { return crates; }
 
 // ═══════════════════════════════════════════
-//  AUTO-REFRESH (poll for changes from RV)
+//  REAL-TIME UPDATES (SSE push from server)
+// ═══════════════════════════════════════════
+
+function _connectSSE() {
+    if (_sseSource) return;  // already connected
+    _sseSource = new EventSource('/api/crates/events');
+    _sseSource.onopen = () => console.log('[Crate] SSE connected');
+    _sseSource.onmessage = async (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            console.log('[Crate] SSE event received:', data);
+            // Only refresh if we're viewing the affected crate
+            if (activeCrateId && data.crateId === activeCrateId) {
+                await _refreshActiveCrate();
+            }
+            // Also refresh the sidebar count for any crate change
+            await loadCrates();
+        } catch (_) { /* ignore parse errors */ }
+    };
+    _sseSource.onerror = () => {
+        console.warn('[Crate] SSE disconnected, falling back to polling');
+        // SSE disconnected — close and fall back to polling
+        _disconnectSSE();
+        _startCratePolling(activeCrateId);
+    };
+}
+
+function _disconnectSSE() {
+    if (_sseSource) {
+        _sseSource.close();
+        _sseSource = null;
+    }
+}
+
+async function _refreshActiveCrate() {
+    if (!activeCrateId) return;
+    try {
+        const fresh = await api(`/api/crates/${activeCrateId}/items`);
+        if (fresh.length !== crateAssets.length ||
+            JSON.stringify(fresh.map(a => a.id)) !== JSON.stringify(crateAssets.map(a => a.id))) {
+            crateAssets = fresh;
+            const crate = crates.find(c => c.id === activeCrateId);
+            if (crate) {
+                crate.item_count = fresh.length;
+                showCrateView(crate, crateAssets);
+                renderCrateList();
+            }
+        }
+    } catch (_) { /* ignore */ }
+}
+
+// Connect SSE when module loads — stays open so background adds are instant
+_connectSSE();
+
+// ═══════════════════════════════════════════
+//  FALLBACK POLLING (only used if SSE fails)
 // ═══════════════════════════════════════════
 
 function _startCratePolling(crateId) {
+    if (_sseSource) return;      // SSE is active — no need to poll
     _stopCratePolling();
     _crateRefreshInterval = setInterval(async () => {
         if (activeCrateId !== crateId) { _stopCratePolling(); return; }
-        try {
-            const fresh = await api(`/api/crates/${crateId}/items`);
-            // Only re-render if items changed (added or removed)
-            if (fresh.length !== crateAssets.length) {
-                crateAssets = fresh;
-                const crate = crates.find(c => c.id === crateId);
-                if (crate) {
-                    crate.item_count = fresh.length;
-                    showCrateView(crate, crateAssets);
-                    renderCrateList();
-                }
-            }
-        } catch (_) { /* network hiccup — ignore, try again next tick */ }
+        await _refreshActiveCrate();
     }, CRATE_POLL_MS);
 }
 
@@ -646,6 +691,14 @@ function _stopCratePolling() {
         _crateRefreshInterval = null;
     }
 }
+
+// When tab becomes visible again, try to reconnect SSE if it died
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        if (!_sseSource) _connectSSE();
+        if (activeCrateId) _refreshActiveCrate();
+    }
+});
 
 // ═══════════════════════════════════════════
 //  WINDOW EXPORTS (for onclick handlers)
