@@ -359,6 +359,25 @@ function sync() {
         console.log(`[RVPlugin] Warning: Could not copy to ~/.rv/Python: ${err.message}`);
     }
 
+    // Also copy to any PlugIns/Python/ directories found alongside
+    // PlugIns/Packages/ (self-compiled OpenRV loads from here).
+    try {
+        const pySrc = path.join(PLUGIN_SRC, 'mediavault_mode.py');
+        if (fs.existsSync(pySrc)) {
+            for (const install of installs) {
+                const pluginsPython = path.join(
+                    path.dirname(install.packagesDir), 'Python'
+                );
+                if (fs.existsSync(pluginsPython)) {
+                    fs.copyFileSync(pySrc, path.join(pluginsPython, 'mediavault_mode.py'));
+                    console.log(`[RVPlugin] ✓ Copied .py to ${pluginsPython}`);
+                }
+            }
+        }
+    } catch (err) {
+        console.log(`[RVPlugin] Warning: Could not copy to PlugIns/Python: ${err.message}`);
+    }
+
     if (deployed > 0) {
         console.log(`[RVPlugin] Synced MediaVault plugin to ${deployed} RV installation(s)`);
     } else if (installs.length > 0) {
