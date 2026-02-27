@@ -738,6 +738,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                  "Auto-probe ComfyUI metadata on source load"),
                 ("after-progressive-loading", self._onSourceLoaded,
                  "Auto-probe ComfyUI metadata after progressive load"),
+                ("graph-state-change", self._onViewChanged,
+                 "Update overlay when active source changes"),
                 ("key-down--alt--v", self._showCompareRoleMenu,
                  "Compare to ... role popup"),
                 ("key-down--alt--shift--v", self._showSwitchRoleMenu,
@@ -2083,16 +2085,43 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             print("[MediaVault] ComfyUI auto-probe: %d new source(s) cached"
                   " (%d total)" % (newly_probed, len(self._comfyui_cache)))
 
-        # If overlay is already visible, update current-file pointer
+        # Update current-file pointers (both standard + ComfyUI)
+        self._syncCurrentSource()
+
+    def _onViewChanged(self, event):
+        """Handle source switching (PageUp/Down, timeline click, etc.).
+
+        Fires on 'graph-state-change'.  This is lightweight — just
+        updates pointers from whatever is already cached.  No ffprobe,
+        no HTTP calls unless the source truly changed.
+        """
+        self._syncCurrentSource()
+
+    def _syncCurrentSource(self):
+        """Update overlay pointers for the currently viewed source.
+
+        Called by event handlers (_onSourceLoaded, _onViewChanged) —
+        NEVER from the render loop.  This is the ONLY place that calls
+        _refreshOverlayMeta() or touches _comfyui_meta/_comfyui_path.
+        """
+        cur = self._getCurrentSourcePath()
+        if not cur:
+            return
+
+        # Standard overlay (shot name, status, etc.)
+        if self._overlay_enabled:
+            nkey = self._normKey(cur)
+            if nkey != self._normKey(self._overlay_path):
+                self._refreshOverlayMeta(cur)
+
+        # ComfyUI overlay: pure cache lookup
         if self._show_comfyui:
-            cur = self._getCurrentSourcePath()
-            if cur:
-                key = self._normKey(cur)
-                if key != self._comfyui_path:
-                    self._comfyui_path = key
-                    cached = self._comfyui_cache.get(key)
-                    self._comfyui_meta = (
-                        cached if cached is not False else None)
+            key = self._normKey(cur)
+            if key != self._comfyui_path:
+                self._comfyui_path = key
+                cached = self._comfyui_cache.get(key)
+                self._comfyui_meta = (
+                    cached if cached is not False else None)
 
     # ── ComfyUI metadata extraction ─────────────────────────────
 
@@ -2910,15 +2939,17 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
     # ── overlay metadata fetch ───────────────────────────────────
 
-    def _refreshOverlayMeta(self):
+    def _refreshOverlayMeta(self, filepath=None):
         """Fetch lightweight overlay metadata from CAM server."""
-        filepath = self._getCurrentSourcePath()
+        if filepath is None:
+            filepath = self._getCurrentSourcePath()
         if not filepath:
             self._overlay_meta = None
             return
 
-        # Already cached for this path
-        if filepath == self._overlay_path and self._overlay_meta:
+        # Already cached for this path (normalized comparison)
+        if (self._normKey(filepath) == self._normKey(self._overlay_path)
+                and self._overlay_meta):
             return
 
         if urllib is None:
@@ -2961,24 +2992,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             if w < 100 or h < 100:
                 return
 
-            # Re-fetch metadata if source changed (check every 30 frames)
-            self._overlay_tick += 1
-            if self._overlay_tick % 30 == 1:
-                cur = self._getCurrentSourcePath()
-                if cur and cur != self._overlay_path:
-                    self._refreshOverlayMeta()
-                if self._show_comfyui and cur:
-                    key = self._normKey(cur)
-                    if key != self._comfyui_path:
-                        # Pure cache lookup — never triggers ffprobe
-                        self._comfyui_path = key
-                        cached = self._comfyui_cache.get(key)
-                        if cached is None:
-                            # New file after batch preload — probe once
-                            self._probeAndCacheFile(cur)
-                            cached = self._comfyui_cache.get(key)
-                        self._comfyui_meta = (
-                            cached if cached is not False else None)
+            # Source-change detection is handled by event handlers
+            # (_onSourceLoaded, _onViewChanged) — NOT here.
+            # The render loop is 100% non-blocking: pure display only.
 
             # ── Set up 2D ortho projection ──
             glMatrixMode(GL_PROJECTION)
