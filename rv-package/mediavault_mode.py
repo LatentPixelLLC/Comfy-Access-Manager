@@ -2160,20 +2160,38 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         if not prompt or not isinstance(prompt, dict):
             return None
 
-        def _resolve(val):
+        def _resolve(val, depth=0):
             """Resolve a value that might be a node reference [nodeId, idx]."""
+            if depth > 3:
+                return val  # prevent infinite recursion
             if isinstance(val, list) and len(val) == 2:
                 ref_id = str(val[0])
+                ref_idx = val[1]
                 ref_node = prompt.get(ref_id, {})
                 inputs = ref_node.get("inputs", {})
                 cls = ref_node.get("class_type", "")
-                # For INTConstant / FloatConstant nodes
-                if "Constant" in cls and "value" in inputs:
+                # INTConstant, FloatConstant, PrimitiveInt, easy int
+                if "value" in inputs and (
+                    "Constant" in cls or "Primitive" in cls
+                    or cls in ("easy int", "easy float")):
                     return inputs["value"]
-                # For CreateCFGScheduleFloatList – return start value
+                # SimpleMath+ — eval simple expressions like "a*b"
+                if cls == "SimpleMath+":
+                    return inputs.get("value", val)
+                # CreateCFGScheduleFloatList – return start value
                 if "CFGSchedule" in cls:
                     return inputs.get("cfg_scale_start",
                            inputs.get("value", val))
+                # If ref_idx maps to a named output, try resolve
+                # e.g. ImageResizeKJv2 outputs [IMAGE, width, height]
+                output_keys = ["image", "width", "height", "num_frames",
+                               "fps", "frame_count"]
+                if ref_idx < len(output_keys):
+                    key = output_keys[ref_idx]
+                    if key in inputs:
+                        resolved = _resolve(inputs[key], depth + 1)
+                        if isinstance(resolved, (int, float)):
+                            return resolved
                 # Generic: look for a 'value' input
                 if "value" in inputs:
                     return inputs["value"]
@@ -2184,12 +2202,12 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             """Extract short model name from full path."""
             if not path:
                 return path
-            name = path.replace("\\\\", "\\").replace("\\", "/")
+            name = str(path).replace("\\\\", "\\").replace("\\", "/")
             name = name.rsplit("/", 1)[-1]
             # Remove common extensions
             for ext in (".safetensors", ".ckpt", ".pt", ".pth", ".bin",
                         ".gguf"):
-                if name.endswith(ext):
+                if name.lower().endswith(ext):
                     name = name[:-len(ext)]
                     break
             return name
@@ -2214,19 +2232,30 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     seen_models.add(name)
                     models.append({"name": name, "type": "Checkpoint"})
 
-            elif "ModelLoader" in cls and "model" in inputs:
-                name = _short_name(str(inputs.get("model", "")))
-                if name and name not in seen_models and not isinstance(inputs["model"], list):
+            elif cls == "DiffusionModelLoaderKJ":
+                name = _short_name(inputs.get("model_name",
+                                   inputs.get("unet_name", "")))
+                if name and name not in seen_models:
                     seen_models.add(name)
-                    mtype = "Model"
-                    if "VAE" in cls:
-                        mtype = "VAE"
-                    elif "WanVideo" in cls:
-                        mtype = "WanVideo"
-                    models.append({"name": name, "type": mtype})
+                    models.append({"name": name, "type": "Diffusion"})
 
-            elif cls == "WanVideoVAELoader":
-                name = _short_name(inputs.get("model_name", ""))
+            elif cls == "CLIPLoader":
+                name = _short_name(inputs.get("clip_name", ""))
+                if name and name not in seen_models:
+                    seen_models.add(name)
+                    models.append({"name": name, "type": "CLIP"})
+
+            elif cls == "WanVideoModelLoader":
+                name = _short_name(inputs.get("model", ""))
+                if name and not isinstance(inputs.get("model"), list) \
+                   and name not in seen_models:
+                    seen_models.add(name)
+                    models.append({"name": name, "type": "WanVideo"})
+
+            elif cls in ("WanVideoVAELoader", "WanVideoTinyVAELoader",
+                         "VAELoader"):
+                name = _short_name(inputs.get("model_name",
+                                   inputs.get("vae_name", "")))
                 if name and name not in seen_models:
                     seen_models.add(name)
                     models.append({"name": name, "type": "VAE"})
@@ -2236,6 +2265,61 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 if name and name not in seen_models:
                     seen_models.add(name)
                     models.append({"name": name, "type": "Upscale"})
+
+            # Generic ModelLoader pattern (catches future node types)
+            elif "ModelLoader" in cls and "model" in inputs:
+                name = _short_name(str(inputs.get("model", "")))
+                if name and name not in seen_models \
+                   and not isinstance(inputs["model"], list):
+                    seen_models.add(name)
+                    mtype = "Model"
+                    if "VAE" in cls:
+                        mtype = "VAE"
+                    elif "WanVideo" in cls:
+                        mtype = "WanVideo"
+                    models.append({"name": name, "type": mtype})
+
+            # ── API / cloud generation nodes ──
+            elif cls in ("GeminiImageNode", "GeminiNode"):
+                model = inputs.get("model", "Gemini")
+                seed = inputs.get("seed", "")
+                aspect = inputs.get("aspect_ratio", "")
+                key = "gemini_%s_%s" % (model, seed)
+                if key not in seen_samplers:
+                    seen_samplers.add(key)
+                    entry = {
+                        "sampler": "Gemini", "scheduler": model,
+                        "steps": "", "cfg": "",
+                        "seed": seed, "denoise": "",
+                        "title": title or cls,
+                    }
+                    if aspect:
+                        entry["aspect_ratio"] = aspect
+                    samplers.append(entry)
+                if str(model) not in seen_models:
+                    seen_models.add(str(model))
+                    models.append({"name": str(model), "type": "API"})
+
+            elif cls in ("ByteDanceSeedreamNode", "ByteDanceImageNode"):
+                model = inputs.get("model", "Seedream")
+                seed = inputs.get("seed", "")
+                guidance = inputs.get("guidance_scale", "")
+                key = "bytedance_%s_%s" % (model, seed)
+                if key not in seen_samplers:
+                    seen_samplers.add(key)
+                    entry = {
+                        "sampler": "Seedream", "scheduler": str(model),
+                        "steps": "", "seed": seed,
+                        "denoise": "", "title": title or cls,
+                    }
+                    if guidance:
+                        entry["cfg"] = guidance
+                    else:
+                        entry["cfg"] = ""
+                    samplers.append(entry)
+                if str(model) not in seen_models:
+                    seen_models.add(str(model))
+                    models.append({"name": str(model), "type": "API"})
 
             # ── Sampler nodes ──
             elif cls in ("KSampler", "KSamplerAdvanced"):
@@ -2272,6 +2356,24 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         "shift": shift,
                     })
 
+            elif cls == "UltimateSDUpscaleNoUpscale":
+                # Upscale sampler — has its own steps/cfg/sampler
+                steps = _resolve(inputs.get("steps", "?"))
+                cfg = _resolve(inputs.get("cfg", "?"))
+                seed = inputs.get("seed", "?")
+                sampler = inputs.get("sampler_name", "?")
+                scheduler = inputs.get("scheduler", "?")
+                denoise = inputs.get("denoise", 1.0)
+                key = "upscale_%s_%s" % (sampler, steps)
+                if key not in seen_samplers:
+                    seen_samplers.add(key)
+                    samplers.append({
+                        "sampler": sampler, "scheduler": scheduler,
+                        "steps": steps, "cfg": cfg, "seed": seed,
+                        "denoise": denoise,
+                        "title": title or "Upscale Sampler",
+                    })
+
             # ── LoRA nodes ──
             elif cls in ("LoraLoader", "LoraLoaderModelOnly"):
                 name = _short_name(inputs.get("lora_name", ""))
@@ -2284,17 +2386,50 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             elif cls == "WanVideoLoraSelect":
                 name = _short_name(inputs.get("lora", ""))
                 strength = inputs.get("strength", 1.0)
-                if name and name not in seen_loras:
+                if name and name not in seen_loras and name != "none":
                     seen_loras.add(name)
                     loras.append({"name": name, "strength": strength})
 
+            elif cls in ("WanVideoLoraSelectMulti", "WanVideoSetLoRAs"):
+                # Multi-lora slots: lora_0..lora_4, strength_0..strength_4
+                for i in range(10):
+                    lkey = "lora_%d" % i
+                    skey = "strength_%d" % i
+                    name = _short_name(inputs.get(lkey, ""))
+                    strength = inputs.get(skey, 1.0)
+                    if name and name != "none" and name not in seen_loras:
+                        seen_loras.add(name)
+                        loras.append({"name": name, "strength": strength})
+
             # ── Resolution ──
-            if not resolution and cls in ("EmptyLatentImage",
-                "WanVideoImageToVideoEncode", "ImageResizeKJv2"):
-                w = inputs.get("width")
-                h = inputs.get("height")
-                if isinstance(w, (int, float)) and isinstance(h, (int, float)):
-                    resolution = {"width": int(w), "height": int(h)}
+            if not resolution:
+                if cls in ("EmptyLatentImage", "ImageResizeKJv2",
+                           "ByteDanceSeedreamNode", "ByteDanceImageNode"):
+                    w = _resolve(inputs.get("width"))
+                    h = _resolve(inputs.get("height"))
+                    if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+                        resolution = {"width": int(w), "height": int(h)}
+                    # Check for size_preset override
+                    preset = inputs.get("size_preset", "")
+                    if preset and "x" in str(preset):
+                        try:
+                            parts = str(preset).split("(")[0].strip()
+                            pw, ph = parts.split("x")
+                            resolution = {
+                                "width": int(pw.strip()),
+                                "height": int(ph.strip()),
+                            }
+                        except Exception:
+                            pass
+
+                elif cls == "WanVideoImageToVideoEncode":
+                    w = _resolve(inputs.get("width"))
+                    h = _resolve(inputs.get("height"))
+                    nf = _resolve(inputs.get("num_frames"))
+                    if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+                        resolution = {"width": int(w), "height": int(h)}
+                        if nf and isinstance(nf, (int, float)):
+                            resolution["num_frames"] = int(nf)
 
         if not models and not samplers and not loras:
             return None
@@ -2617,20 +2752,24 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     # Detail line: steps, cfg, seed, denoise
                     detail_parts = []
                     steps = s.get("steps")
-                    if steps is not None:
+                    if steps is not None and steps != "":
                         detail_parts.append("Steps:%s" % steps)
                     cfg = s.get("cfg")
-                    if cfg is not None:
+                    if cfg is not None and cfg != "":
                         detail_parts.append("CFG:%s" % cfg)
                     seed = s.get("seed")
-                    if seed is not None:
+                    if seed is not None and seed != "":
                         detail_parts.append("Seed:%s" % seed)
                     denoise = s.get("denoise")
-                    if denoise is not None and float(denoise) < 1.0:
+                    if denoise is not None and denoise != "" \
+                       and float(denoise) < 1.0:
                         detail_parts.append("Denoise:%s" % denoise)
                     shift = s.get("shift")
-                    if shift is not None:
+                    if shift is not None and shift != "":
                         detail_parts.append("Shift:%s" % shift)
+                    aspect = s.get("aspect_ratio")
+                    if aspect:
+                        detail_parts.append("AR:%s" % aspect)
                     if detail_parts:
                         lines.append((_OV_DIM, "  " + "  ".join(detail_parts)))
 
