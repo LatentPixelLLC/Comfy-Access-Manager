@@ -57,8 +57,18 @@ function updateComboWidget(widget, newValues, keepValue = true) {
     if (!widget) return;
     const old = widget.value;
     widget.options.values = newValues;
-    if (keepValue && newValues.includes(old)) {
-        widget.value = old;
+    if (keepValue && old && typeof old === "string") {
+        if (newValues.includes(old)) {
+            // Exact match found — keep it
+            widget.value = old;
+        } else if (!old.startsWith("(Load") && old !== "No assets found") {
+            // Saved value not in live list (server data changed?) — inject it
+            // so the user sees what was saved and can manually update if needed
+            widget.options.values = [...newValues, old];
+            widget.value = old;
+        } else if (newValues.length > 0) {
+            widget.value = newValues[0];
+        }
     } else if (newValues.length > 0) {
         widget.value = newValues[0];
     }
@@ -189,6 +199,7 @@ function addPreviewWidget(node) {
         name: "mv_preview",
         type: "MEDIAVAULT_PREVIEW",
         value: "",
+        serialize: false,
         options: { serialize: false },
         draw(ctx, _node, widgetWidth, y, widgetHeight) {
             if (!_node._mvPreviewReady || !_node._mvPreviewImg) return;
@@ -332,6 +343,7 @@ function addVideoInfoWidget(node) {
         name: "mv_video_info",
         type: "MEDIAVAULT_VIDEO_INFO",
         value: "",
+        serialize: false,
         options: { serialize: false },
 
         draw(ctx, _node, widgetWidth, y) {
@@ -529,6 +541,7 @@ function addRefreshButton(node) {
         name: REFRESH_BTN_NAME,
         type: "MEDIAVAULT_REFRESH",
         value: null,
+        serialize: false,
         options: { serialize: false },
         _clicking: false,
 
@@ -633,6 +646,19 @@ async function restoreLiveDropdowns(node) {
     if (projects.length > 0) {
         const projNames = projects.map(p => `${p.name} (${p.code})`);
         updateComboWidget(projW, projNames, true);
+    } else {
+        // Server unreachable or no projects — keep saved value as-is
+        console.warn("[MediaVault] restoreLiveDropdowns: no projects returned, keeping saved values");
+        return;
+    }
+
+    // Ensure saved project value is still set (updateComboWidget may have kept it)
+    if (projW.value !== savedProj && savedProj && !savedProj.startsWith("(Load")) {
+        // Force it back — the saved value is more important than a fresh fetch
+        if (!projW.options.values.includes(savedProj)) {
+            projW.options.values.push(savedProj);
+        }
+        projW.value = savedProj;
     }
 
     const projId = await resolveId("/mediavault/projects", savedProj);
@@ -883,13 +909,22 @@ app.registerExtension({
             // Our dropdowns are dynamically populated, so saved values like
             // "MyProject (PROJ)" get reset to "(Load MediaVault...)".
             // Fix: read raw saved values from info.widgets_values and force-inject them.
+            //
+            // IMPORTANT: widgets_values only contains serializable widgets (serialize !== false).
+            // Dynamic widgets (refresh button, preview, video info) have serialize:false and
+            // are NOT in widgets_values. So we must build a filtered index that skips them.
             const savedValues = info?.widgets_values;
             if (savedValues && Array.isArray(savedValues)) {
                 const restoreWidgets = ["project", "sequence", "shot", "role", "asset"];
+                // Build serialization-order index: only widgets that LiteGraph actually serializes.
+                // LiteGraph skips widgets with serialize === false (top-level property).
+                // This must exactly match LiteGraph's own filter for the indices to align.
+                const serializableWidgets = (this.widgets || []).filter(w => w.serialize !== false);
                 for (const wName of restoreWidgets) {
                     const widget = findWidget(this, wName);
                     if (!widget) continue;
-                    const idx = this.widgets.indexOf(widget);
+                    // Find this widget's position in the serializable-only list
+                    const idx = serializableWidgets.indexOf(widget);
                     if (idx < 0 || idx >= savedValues.length) continue;
                     const saved = savedValues[idx];
                     if (
@@ -908,18 +943,6 @@ app.registerExtension({
             }
 
             ensureRefreshButton(this);
-
-            // ── Sanitize INT widgets ──
-            // Saved workflows with old param names (frame_start, frame_step, etc.)
-            // may inject None / "" into the new INT widgets. ComfyUI's type coercion
-            // fails on these BEFORE our Python code runs. Fix: force valid defaults.
-            for (const w of (this.widgets || [])) {
-                if (w.type === "number" && w.options && typeof w.options.min === "number") {
-                    if (w.value === null || w.value === undefined || w.value === "" || w.value === "None") {
-                        w.value = w.options.default ?? w.options.min ?? 0;
-                    }
-                }
-            }
 
             // Ensure video info widget exists for video nodes
             if (VIDEO_INFO_NODES.includes(this.comfyClass)) {
@@ -946,9 +969,10 @@ app.registerExtension({
             setTimeout(() => prefillFromLoadNode(node), 500);
 
             // Manual button to re-sync any time
-            node.addWidget("button", "📂 Copy from Load Node", null, () => {
+            const copyBtn = node.addWidget("button", "📂 Copy from Load Node", null, () => {
                 prefillFromLoadNode(node);
             });
+            copyBtn.serialize = false;
         }
     },
 });

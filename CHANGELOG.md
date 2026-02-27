@@ -2,6 +2,17 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.5.2] - 2026-02-26
+
+### Fixed
+- **ComfyUI node serialization** — MediaVault nodes (Load/Save) now correctly persist dropdown selections (project, sequence, shot, role, asset) when saving and loading ComfyUI workflows. Previously, values were lost on workflow load or randomly reset.
+  - **Root cause**: Custom widgets (preview thumbnail, refresh button, video info) only had `options.serialize = false` but LiteGraph checks the top-level `widget.serialize` property. This caused extra entries in `widgets_values`, inflating the array from 8 to 10+ entries and breaking index alignment during deserialization.
+  - **Fix 1**: Added `serialize: false` at the top level of all 4 custom widgets (preview, refresh button, video info, Copy from Load button) so LiteGraph truly excludes them from serialization.
+  - **Fix 2**: `onConfigure` now uses `w.serialize !== false` filter (matching LiteGraph's own logic) instead of type-name heuristics, ensuring correct index mapping between `widgets_values` and actual widgets.
+  - **Fix 3**: `updateComboWidget()` now injects saved values that aren't in the current live list instead of silently resetting to the first option. This prevents value loss when server data changes between save and load.
+  - **Fix 4**: `restoreLiveDropdowns()` now guards against empty server responses — if MediaVault is unreachable when ComfyUI starts, saved values are preserved instead of being wiped.
+  - Backwards compatible: old workflows with inflated `widgets_values` arrays still load correctly.
+
 ## [1.5.1] - 2026-02-26
 
 ### Fixed
