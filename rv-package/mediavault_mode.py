@@ -734,6 +734,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self.init(
             "mediavault-mode",
             [
+                ("source-group-complete", self._onSourceLoaded,
+                 "Auto-probe ComfyUI metadata on source load"),
+                ("after-progressive-loading", self._onSourceLoaded,
+                 "Auto-probe ComfyUI metadata after progressive load"),
                 ("key-down--alt--v", self._showCompareRoleMenu,
                  "Compare to ... role popup"),
                 ("key-down--alt--shift--v", self._showSwitchRoleMenu,
@@ -2046,9 +2050,49 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             self._overlay_enabled = True
             self._refreshOverlayMeta()
         if self._show_comfyui:
-            self._batchPreloadComfyUI()
+            # Metadata should already be cached by _onSourceLoaded.
+            # Just set the current-file pointer from cache.
+            cur = self._getCurrentSourcePath()
+            if cur:
+                key = self._normKey(cur)
+                cached = self._comfyui_cache.get(key)
+                if cached is None:
+                    # Safety net: not cached yet — probe this one file
+                    self._probeAndCacheFile(cur)
+                    cached = self._comfyui_cache.get(key)
+                self._comfyui_path = key
+                self._comfyui_meta = cached if cached is not False else None
         rve.displayFeedback(
             "ComfyUI Metadata: %s" % ("ON" if self._show_comfyui else "OFF"), 1.5)
+
+    def _onSourceLoaded(self, event):
+        """Auto-probe ComfyUI metadata whenever a source finishes loading.
+
+        Fires on 'source-group-complete' and 'after-progressive-loading'
+        events — BEFORE the user ever toggles the overlay.  This way the
+        cache is already populated and the overlay appears instantly when
+        toggled on, with zero ffprobe delay and zero playback impact.
+        """
+        all_paths = self._getAllSourcePaths()
+        newly_probed = 0
+        for fp in all_paths:
+            if self._normKey(fp) not in self._comfyui_cache:
+                self._probeAndCacheFile(fp)
+                newly_probed += 1
+        if newly_probed:
+            print("[MediaVault] ComfyUI auto-probe: %d new source(s) cached"
+                  " (%d total)" % (newly_probed, len(self._comfyui_cache)))
+
+        # If overlay is already visible, update current-file pointer
+        if self._show_comfyui:
+            cur = self._getCurrentSourcePath()
+            if cur:
+                key = self._normKey(cur)
+                if key != self._comfyui_path:
+                    self._comfyui_path = key
+                    cached = self._comfyui_cache.get(key)
+                    self._comfyui_meta = (
+                        cached if cached is not False else None)
 
     # ── ComfyUI metadata extraction ─────────────────────────────
 
