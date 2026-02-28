@@ -87,14 +87,38 @@ class SpokeService extends EventEmitter {
     }
 
     /**
+     * Settings keys that are local to this machine and must survive DB syncs.
+     * These are saved before replacing the DB and restored afterward.
+     */
+    static LOCAL_SETTINGS = [
+        'path_mappings',    // cross-platform path translation (per-machine)
+        'rv_path',          // path to RV executable (differs per OS/install)
+        'ffmpeg_path',      // path to FFmpeg (differs per machine)
+        'vault_root',       // local vault root folder
+    ];
+
+    /**
      * Download a full DB snapshot from the hub and replace local DB.
      */
     async syncDatabase() {
         console.log('[Spoke] Downloading DB snapshot from hub...');
 
-        const { DATA_DIR, closeDb, initDb } = require('../database');
+        const { DATA_DIR, closeDb, initDb, getDb, getSetting } = require('../database');
         const localDb = path.join(DATA_DIR, 'mediavault.db');
         const tempDb = path.join(DATA_DIR, 'mediavault_hub_sync.db');
+
+        // ── Preserve local-only settings before replacing DB ──
+        const localSettings = {};
+        try {
+            const db = getDb();
+            for (const key of SpokeService.LOCAL_SETTINGS) {
+                const val = getSetting(key);
+                if (val != null) localSettings[key] = val;
+            }
+            if (Object.keys(localSettings).length > 0) {
+                console.log(`[Spoke] Preserving ${Object.keys(localSettings).length} local setting(s): ${Object.keys(localSettings).join(', ')}`);
+            }
+        } catch { /* DB may not be open yet on first sync */ }
 
         // Download to temp file first
         await this._downloadFile('/api/sync/db', tempDb);
@@ -118,6 +142,21 @@ class SpokeService extends EventEmitter {
 
         // Re-initialize DB
         await initDb();
+
+        // ── Restore local-only settings into the new DB ──
+        if (Object.keys(localSettings).length > 0) {
+            try {
+                const db = getDb();
+                const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+                for (const [key, val] of Object.entries(localSettings)) {
+                    upsert.run(key, val);
+                }
+                console.log(`[Spoke] Restored ${Object.keys(localSettings).length} local setting(s)`);
+            } catch (err) {
+                console.error('[Spoke] Failed to restore local settings:', err.message);
+            }
+        }
+
         console.log('[Spoke] Local DB updated from hub snapshot');
 
         this.emit('db-synced');
