@@ -4,7 +4,7 @@
 
 **Comfy Asset Manager (CAM)** — formerly Digital Media Vault (DMV) — is a local media asset manager for creative production. Organize, browse, import, export, and play media files with a project-based hierarchy following ShotGrid/Flow Production Tracking naming conventions.
 
-**Version**: 1.4.1
+**Version**: 1.5.7
 **Port**: 7700
 **Repo**: `github.com/gregtee2/Comfy-Access-Manager` (branches: `main`, `stable`)
 **Status**: Active development (February 2026)
@@ -41,8 +41,8 @@ Built for artists and studios who work with video, images, EXR sequences, 3D fil
 ```
 Comfy-Asset-Manager/
 ├── src/
-│   ├── server.js                 # Express server entry (140 lines)
-│   ├── database.js               # better-sqlite3 wrapper, config.json (615 lines)
+│   ├── server.js                 # Express server entry (~270 lines, hub/spoke/standalone mode)
+│   ├── database.js               # better-sqlite3 wrapper, config.json (505 lines)
 │   ├── routes/
 │   │   ├── assetRoutes.js        # Import, browse, stream, delete, RV launch, compare, overlay (1817 lines)
 │   │   ├── projectRoutes.js      # Project + Sequence + Shot CRUD + access control (497 lines)
@@ -55,12 +55,17 @@ Comfy-Asset-Manager/
 │   │   ├── updateRoutes.js       # Auto-update from GitHub stable branch + PAT auth (226 lines)
 │   │   ├── serverRoutes.js       # Network discovery, multi-machine (160 lines)
 │   │   ├── transcodeRoutes.js    # Transcode queue management (109 lines)
-│   │   └── roleRoutes.js        # Role CRUD (107 lines)
+│   │   ├── roleRoutes.js        # Role CRUD (107 lines)
+│   │   └── syncRoutes.js       # Hub-spoke sync API: SSE events, DB snapshot, write proxy (180 lines)
+│   ├── middleware/
+│   │   └── spokeProxy.js       # Spoke write interceptor — forwards POST/PUT/DELETE to hub (85 lines)
 │   ├── services/
 │   │   ├── TranscodeService.js   # FFmpeg transcode engine (496 lines)
 │   │   ├── FileService.js        # File ops + cross-platform drive detection (474 lines)
 │   │   ├── FlowService.js        # Flow/ShotGrid API client (394 lines)
 │   │   ├── RVPluginSync.js       # Auto-deploy RV plugin via rvpkg CLI (347 lines)
+│   │   ├── HubService.js         # Hub-mode SSE broadcast, spoke registry, DB checkpoint (161 lines)
+│   │   ├── SpokeService.js      # Spoke-mode SSE client, DB sync, write forwarding (310 lines)
 │   │   ├── DiscoveryService.js   # UDP broadcast discovery on LAN (202 lines)
 │   │   ├── ThumbnailService.js   # Thumbnail gen — Sharp + FFmpeg (194 lines)
 │   │   ├── MediaInfoService.js   # Metadata extraction via FFprobe (164 lines)
@@ -381,7 +386,11 @@ better-sqlite3 (Native SQLite). All queries go through `database.js` which wraps
 ```json
 {
   "github_pat": "ghp_xxxxx",     // GitHub Personal Access Token for auto-updates
-  "db_path": null                 // Custom DB path (null = default data/mediavault.db)
+  "db_path": null,                // Custom DB path (null = default data/mediavault.db)
+  "mode": "standalone",           // "standalone" | "hub" | "spoke" (see Hub-Spoke section)
+  "hub_secret": "",               // Shared secret for hub-spoke auth (hub + spoke must match)
+  "hub_url": "",                  // Spoke only: URL of the hub server (e.g. "http://192.168.1.100:7700")
+  "spoke_name": ""                // Spoke only: friendly name shown in hub's spoke list
 }
 ```
 
@@ -1097,6 +1106,141 @@ CAM (Node.js) ← GET /api/resolve/timeline ← scripts/resolve_bridge.py ← Da
 
 ---
 
+## Hub-Spoke Multi-User Sync Architecture
+
+### Overview
+CAM supports a **hub-and-spoke** architecture for multi-user teams connected over a LAN or VPN. One instance acts as the **hub** (central database authority), and other instances run as **spokes** (local replicas that forward writes to the hub and receive real-time updates via SSE).
+
+**This is entirely opt-in.** The default mode is `standalone`, which is identical to the original single-user behavior. No code paths are affected unless `mode` is explicitly set in `data/config.json`.
+
+### Modes
+| Mode | Config | Behavior |
+|------|--------|----------|
+| **standalone** (default) | `{}` or `{"mode": "standalone"}` | Normal single-user app. No sync, no SSE, no extra routes. |
+| **hub** | `{"mode": "hub", "hub_secret": "..."}` | Master DB authority. Mounts `/api/sync/*` routes. Broadcasts DB changes to connected spokes via SSE. |
+| **spoke** | `{"mode": "spoke", "hub_url": "http://...:7700", "hub_secret": "...", "spoke_name": "..."}` | Downloads hub's DB on startup. Subscribes to SSE for real-time changes. All writes (POST/PUT/DELETE to `/api/*`) are intercepted by `spokeProxy` middleware and forwarded to the hub. GETs served from local replica for speed. |
+
+### Architecture Diagram
+```
+                    ┌─────────────────────┐
+                    │   HUB (Windows PC)  │
+                    │   port 7700         │
+                    │   Master SQLite DB  │
+                    │                     │
+                    │  /api/sync/events   │──── SSE broadcast ───┐
+                    │  /api/sync/db       │                      │
+                    │  /api/sync/write    │◄── proxied writes ──┐│
+                    │  /api/sync/status   │                     ││
+                    │  /api/sync/spokes   │                     ││
+                    └─────────────────────┘                     ││
+                              ▲                                 ││
+                              │                                 ││
+              ┌───────────────┴ LAN / VPN ┴────────────┐        ││
+              │                                        │        ││
+     ┌────────┴────────┐                  ┌────────────┴───┐    ││
+     │  SPOKE (Mac)    │                  │  SPOKE (Linux) │    ││
+     │  port 7700      │                  │  port 7700     │    ││
+     │  Local replica  │                  │  Local replica │    ││
+     │  Reads: local   │                  │  Reads: local  │    ││
+     │  Writes: → hub  │──────────────────│  Writes: → hub │────┘│
+     │  SSE: ← hub     │◄────────────────-│  SSE: ← hub    │◄────┘
+     └─────────────────┘                  └────────────────┘
+```
+
+### Key Files
+| File | Mode | Purpose |
+|------|------|---------|
+| `src/services/HubService.js` | hub | SSE broadcast to spokes, spoke registry, DB checkpoint for snapshots, shared-secret auth middleware |
+| `src/services/SpokeService.js` | spoke | SSE client with auto-reconnect (exponential backoff), DB snapshot download, incremental change application, write forwarding |
+| `src/routes/syncRoutes.js` | hub | Hub API: `GET /status`, `GET /events` (SSE), `GET /db` (snapshot), `GET /spokes`, `POST /write` |
+| `src/middleware/spokeProxy.js` | spoke | Express middleware — intercepts POST/PUT/DELETE on `/api/*`, forwards to hub via SpokeService |
+| `src/server.js` | all | Reads `mode` from config.json, conditionally loads hub/spoke components |
+
+### Hub API Endpoints (`/api/sync/*`)
+All require `X-Hub-Secret` header (or `?secret=` query param) matching `hub_secret` in config.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/sync/status` | GET | Health check — returns mode, version, asset count, connected spoke count |
+| `/api/sync/events` | GET | SSE stream — spokes subscribe here for real-time `db-change` events |
+| `/api/sync/db` | GET | Download full SQLite DB snapshot (WAL checkpoint first for consistency) |
+| `/api/sync/spokes` | GET | List connected spokes with names and connection times |
+| `/api/sync/write` | POST | Receive a proxied write from a spoke — executes locally and broadcasts |
+
+### Spoke Startup Sequence
+1. Check hub health via `GET /api/sync/status`
+2. Download full DB snapshot via `GET /api/sync/db` → replace local `mediavault.db`
+3. Connect SSE to `GET /api/sync/events` for real-time incremental updates
+4. If hub is unreachable, retry with exponential backoff (2s → 30s)
+
+### SSE Event Format
+```
+id: <uuid>
+event: db-change
+data: {"table": "assets", "action": "insert", "data": {"record": {...}}, "timestamp": 1234567890}
+```
+Actions: `insert`, `update`, `delete`, `bulk-insert`. Spoke applies via `INSERT OR REPLACE` / `UPDATE` / `DELETE`.
+
+### Spoke Write Proxy Flow
+1. User on spoke makes a POST/PUT/DELETE to any `/api/*` endpoint
+2. `spokeProxy` middleware intercepts (before route handlers)
+3. Request is forwarded to hub's `/api/sync/write` with method, path, body, and user header
+4. Hub executes the write on its own routes (loopback HTTP to itself)
+5. Hub's response is forwarded back to the spoke's browser
+6. Hub broadcasts the change via SSE to all spokes (including the originator)
+
+### Environment Variable: `CAM_DATA_DIR`
+Override the data directory path (default: `./data/`). Used to run multiple instances on the same machine with separate databases:
+```bash
+CAM_DATA_DIR=/path/to/spoke/data PORT=7701 node src/server.js
+```
+
+### Setup: PC as Hub, Mac as Spoke
+
+**On the Windows PC (Hub):**
+1. `git pull` to get latest code
+2. Edit `data\config.json`:
+   ```json
+   { "mode": "hub", "hub_secret": "your-secret-here" }
+   ```
+3. `node src/server.js` (or `start.bat`)
+4. Note the PC's LAN IP (`ipconfig` → IPv4 Address)
+
+**On the Mac (Spoke):**
+1. `git pull` to get latest code
+2. Edit `data/config.json`:
+   ```json
+   {
+     "mode": "spoke",
+     "hub_url": "http://<PC-IP>:7700",
+     "hub_secret": "your-secret-here",
+     "spoke_name": "Greg-Mac"
+   }
+   ```
+3. `./start.sh`
+4. Hub console shows: `[Hub] Spoke connected: "Greg-Mac" (1 total)`
+
+**To revert to standalone:** Set `data/config.json` to `{}` and restart.
+
+### Testing on One Machine
+Run hub + spoke on different ports with separate data dirs:
+```bash
+# Terminal 1 — Hub
+echo '{"mode": "hub", "hub_secret": "test123"}' > data/config.json
+node src/server.js
+
+# Terminal 2 — Spoke
+mkdir -p test-spoke/data
+echo '{"mode": "spoke", "hub_url": "http://localhost:7700", "hub_secret": "test123", "spoke_name": "Test-Spoke"}' > test-spoke/data/config.json
+CAM_DATA_DIR=./test-spoke/data PORT=7701 node src/server.js
+```
+Open `http://localhost:7701` — the spoke should show the hub's projects and assets.
+
+### Firewall Note
+Port 7700 must be open between hub and spokes. On Windows, the first server start usually triggers a firewall prompt — click "Allow". On Mac, no action needed for LAN traffic.
+
+---
+
 ## Recent Development History (February 2026)
 
 | Commit | What Changed |
@@ -1183,6 +1327,14 @@ CAM (Node.js) ← GET /api/resolve/timeline ← scripts/resolve_bridge.py ← Da
 | — | fix: Multi-clip metadata switching — added `frame-changed` event, RVSequenceGroup Strategy 1, frame-aware Strategy 2.5 |
 | — | feat: `_setComfyUIPointersFromCache()` centralized pointer method |
 | — | feat: Source-switch diagnostic print for multi-clip debugging |
+| `c017cf4` | **v1.5.7 — Hub-Spoke Multi-User Sync Architecture** |
+| — | feat: HubService — SSE broadcast to connected spokes, DB snapshot, shared-secret auth |
+| — | feat: SpokeService — SSE client with auto-reconnect, DB sync, write forwarding to hub |
+| — | feat: syncRoutes — Hub API endpoints (`/api/sync/status`, `events`, `db`, `spokes`, `write`) |
+| — | feat: spokeProxy middleware — intercepts spoke writes and forwards to hub transparently |
+| — | feat: server.js conditional hub/spoke/standalone mode from `data/config.json` |
+| — | feat: `CAM_DATA_DIR` env var for running multiple instances with separate data dirs |
+| — | feat: Startup banner shows mode (HUB/SPOKE) when not standalone |
 
 ---
 
