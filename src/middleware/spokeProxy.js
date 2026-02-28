@@ -13,8 +13,25 @@
  *
  * GET requests pass through normally (served from local replica for speed).
  *
+ * Certain POST endpoints that launch local processes (RV, external players,
+ * FFmpeg review renders) or only read data (PIN verification) are excluded
+ * from forwarding — they must execute on the local machine.
+ *
  * This middleware is ONLY loaded when mode === 'spoke'.
  */
+
+// Endpoints that must execute locally even though they use POST/PUT/DELETE.
+// These either launch local processes or are read-only checks disguised as POST.
+const LOCAL_ONLY_PATTERNS = [
+    '/api/assets/rv-push',         // Launch / push to RV (local process)
+    '/api/users/verify-pin',       // PIN check — read-only, use local replica
+    '/api/assets/rv-status',       // Check local RV status
+];
+// Regex patterns for parameterised routes that must run locally
+const LOCAL_ONLY_REGEX = [
+    /^\/api\/assets\/\d+\/open-review$/,    // FFmpeg render + open in RV (local)
+    /^\/api\/assets\/\d+\/open-external$/,  // Open in external player (local)
+];
 
 /**
  * Create the spoke proxy middleware.
@@ -33,6 +50,10 @@ function createSpokeProxy(spokeService) {
 
         // Don't intercept internal hub writes (avoid loop when hub calls itself)
         if (req.headers['x-hub-internal']) return next();
+
+        // Don't intercept local-only endpoints (process launches, read-only checks)
+        if (LOCAL_ONLY_PATTERNS.includes(req.path)) return next();
+        if (LOCAL_ONLY_REGEX.some(rx => rx.test(req.path))) return next();
 
         // Forward the write to the hub
         const forwardPath = req.originalUrl || req.url;
