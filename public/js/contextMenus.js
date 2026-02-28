@@ -123,6 +123,7 @@ async function showContextMenu(event, assetIdx) {
     // Multi-asset actions (always available)
     html += `<div class="ctx-item" data-action="move"> Move to Sequence${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="role"> Set Role${!isSingle ? ` (${count})` : ''}</div>`;
+    html += `<div class="ctx-item" data-action="renameHierarchy"> Rename to Hierarchy${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="export"> Export${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="addToCrate"> Add to Crate${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="sendResolve"> Send to Resolve${!isSingle ? ` (${count})` : ''}</div>`;
@@ -187,6 +188,7 @@ async function showContextMenu(event, assetIdx) {
             case 'star': window.toggleStar?.(asset.id); break;
             case 'move': showMoveToSequenceModal(); break;
             case 'role': showAssignRoleModal(); break;
+            case 'renameHierarchy': showRenameToHierarchyModal(); break;
             case 'export': window.showExportModal?.(); break;
             case 'addToCrate': {
                 const ids = state.selectedAssets.length > 0 ? [...state.selectedAssets] : [asset.id];
@@ -514,6 +516,137 @@ async function executeMoveToSequence() {
         }
     } catch (err) {
         alert(' Move failed: ' + err.message);
+    }
+}
+
+// ===========================================
+//  RENAME TO HIERARCHY
+// ===========================================
+
+async function showRenameToHierarchyModal() {
+    const ids = state.selectedAssets.length > 0 ? [...state.selectedAssets] : [];
+    if (ids.length === 0) return;
+
+    // Remove any existing modal
+    document.getElementById('renameHierarchyModal')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'renameHierarchyModal';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000;';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#222;border:1px solid #444;border-radius:8px;padding:24px 28px;max-width:650px;width:92%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+    box.innerHTML = `
+        <div style="font-size:15px;font-weight:600;color:#ddd;margin-bottom:4px;">Rename to Match Hierarchy</div>
+        <div style="font-size:12px;color:#888;margin-bottom:16px;">
+            Regenerate filenames based on each asset's current sequence, shot, and role assignment.
+        </div>
+        <div id="renameHierStatus" style="font-size:12px;color:#888;margin-bottom:12px;min-height:18px;">Loading preview...</div>
+        <div id="renameHierContent" style="flex:1;overflow-y:auto;max-height:50vh;margin-bottom:14px;"></div>
+        <div id="renameHierActions" style="display:flex;gap:8px;justify-content:flex-end;">
+            <button onclick="document.getElementById('renameHierarchyModal')?.remove()"
+                style="padding:8px 16px;background:#333;border:1px solid #444;border-radius:4px;color:#aaa;cursor:pointer;font-size:13px;">Cancel</button>
+        </div>
+    `;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const onKey = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+
+    const statusEl = document.getElementById('renameHierStatus');
+    const contentEl = document.getElementById('renameHierContent');
+    const actionsEl = document.getElementById('renameHierActions');
+
+    try {
+        // Get preview from backend
+        const preview = await api('/api/assets/rename-to-hierarchy', {
+            method: 'POST',
+            body: { ids, preview: true },
+        });
+
+        const toRename = (preview.results || []).filter(r => !r.skipped);
+        const skipped = (preview.results || []).filter(r => r.skipped);
+
+        if (toRename.length === 0) {
+            statusEl.innerHTML = '<span style="color:#6a6;">All selected assets already match their hierarchy names.</span>';
+            return;
+        }
+
+        statusEl.innerHTML = `<span style="color:#aaa;">${toRename.length} asset${toRename.length !== 1 ? 's' : ''} will be renamed` +
+            (skipped.length > 0 ? `, ${skipped.length} already correct` : '') + '</span>';
+
+        // Build preview table
+        let tableHtml = `<div style="border:1px solid #333;border-radius:4px;background:#1a1a1a;overflow:hidden;">
+            <div style="display:grid;grid-template-columns:1fr 20px 1fr;gap:0;font-size:11px;color:#666;padding:6px 10px;border-bottom:1px solid #333;">
+                <span>Current Name</span><span></span><span>New Name</span>
+            </div>`;
+
+        for (const r of toRename) {
+            tableHtml += `
+                <div style="display:grid;grid-template-columns:1fr 20px 1fr;gap:0;padding:5px 10px;border-bottom:1px solid #222;align-items:center;">
+                    <span style="font-size:12px;color:#a66;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.oldName)}">${esc(r.oldName)}</span>
+                    <span style="font-size:12px;color:#555;text-align:center;">-></span>
+                    <span style="font-size:12px;color:#6a6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.newName)}">${esc(r.newName)}</span>
+                </div>`;
+        }
+        tableHtml += '</div>';
+        contentEl.innerHTML = tableHtml;
+
+        // Add execute button
+        actionsEl.innerHTML = `
+            <button onclick="document.getElementById('renameHierarchyModal')?.remove()"
+                style="padding:8px 16px;background:#333;border:1px solid #444;border-radius:4px;color:#aaa;cursor:pointer;font-size:13px;">Cancel</button>
+            <button id="renameHierExecBtn" onclick="executeRenameToHierarchy()"
+                style="padding:8px 20px;background:#444;border:1px solid #555;border-radius:4px;color:#ddd;cursor:pointer;font-size:13px;font-weight:500;">Rename ${toRename.length} File${toRename.length !== 1 ? 's' : ''}</button>
+        `;
+
+        // Store ids for execute
+        window._renameHierIds = ids;
+
+    } catch (e) {
+        statusEl.innerHTML = `<span style="color:#a66;">${esc(e.message)}</span>`;
+    }
+}
+
+async function executeRenameToHierarchy() {
+    const ids = window._renameHierIds;
+    if (!ids?.length) return;
+
+    const statusEl = document.getElementById('renameHierStatus');
+    const btn = document.getElementById('renameHierExecBtn');
+    if (statusEl) statusEl.innerHTML = '<span style="color:#888;">Renaming files...</span>';
+    if (btn) { btn.disabled = true; btn.textContent = 'Working...'; }
+
+    try {
+        const result = await api('/api/assets/rename-to-hierarchy', {
+            method: 'POST',
+            body: { ids, preview: false },
+        });
+
+        const msg = `${result.renamed} file${result.renamed !== 1 ? 's' : ''} renamed` +
+            (result.skipped > 0 ? `, ${result.skipped} already correct` : '') +
+            (result.errors > 0 ? `, ${result.errors} error${result.errors !== 1 ? 's' : ''}` : '');
+
+        if (statusEl) statusEl.innerHTML = `<span style="color:#6a6;">${esc(msg)}</span>`;
+        showToast(msg, 5000);
+
+        // Refresh the browser view
+        if (state.currentProject) {
+            window.loadProjectAssets?.(state.currentProject.id);
+        }
+
+        setTimeout(() => {
+            document.getElementById('renameHierarchyModal')?.remove();
+        }, 2000);
+
+    } catch (e) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:#a66;">${esc(e.message)}</span>`;
+        if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+        showToast('Rename failed: ' + e.message, 5000);
+    } finally {
+        delete window._renameHierIds;
     }
 }
 
@@ -1390,6 +1523,8 @@ window.showSeqContextMenu = showSeqContextMenu;
 window.showProjectContextMenu = showProjectContextMenu;
 window.showMoveToSequenceModal = showMoveToSequenceModal;
 window.executeMoveToSequence = executeMoveToSequence;
+window.showRenameToHierarchyModal = showRenameToHierarchyModal;
+window.executeRenameToHierarchy = executeRenameToHierarchy;
 window.showAssignRoleModal = showAssignRoleModal;
 window.executeAssignRole = executeAssignRole;
 window.bulkDeleteAssets = bulkDeleteAssets;

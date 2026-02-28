@@ -353,7 +353,7 @@ function drawElement(ctx, cw, ch, el) {
 
     // Background box
     if (el.bgEnabled) {
-        const pad = Math.max(1, Math.round(el.bgPadding * bmpScale));
+        const pad = Math.max(1, Math.round(el.bgPadding));
         ctx.fillStyle = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? 0.5);
         ctx.fillRect(x - pad, y - pad, tw + pad * 2, th + pad * 2);
     }

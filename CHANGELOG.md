@@ -2,6 +2,17 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.5.6] - 2026-02-28
+
+### Added
+- **Rename to Hierarchy** — New right-click context menu action for bulk-renaming assets based on their current project/sequence/shot/role position. Select assets → right-click → "Rename to Hierarchy" shows a preview modal with old vs new names, then executes renames on disk and in the database. Handles both Shot Builder naming conventions and legacy template fallbacks.
+  - New endpoint: `POST /api/assets/rename-to-hierarchy` with preview/execute modes
+  - Frontend: Preview modal with confirmation in `contextMenus.js`
+
+### Fixed
+- **Rename-to-Hierarchy sequential versioning** — Fixed all assets getting the same version (`_0001`) with ugly collision suffixes (`_2`, `_3`). Root cause: `getNextVersion()` returned 1 for every asset because empty `basePattern` hit an early return, and no batch tracking existed between assets. Rewrote the versioning loop with a `usedPaths` Set to track names within the batch and incremental version attempts (1, 2, 3...) until finding a name unique both within the batch and on disk.
+- **Overlay editor blank canvas** — Fixed the WYSIWYG overlay editor rendering nothing. Root cause: `bmpScale` variable on line 356 of `overlayEditor.js` was undefined (leftover from a prior refactor), causing a ReferenceError that silently killed the entire `drawElement()` render loop.
+
 ## [1.5.5] - 2026-02-28
 
 ### Added

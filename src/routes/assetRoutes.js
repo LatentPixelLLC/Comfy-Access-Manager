@@ -211,6 +211,158 @@ router.post('/preview-name', (req, res) => {
 
 
 // ═══════════════════════════════════════════
+//  RENAME TO HIERARCHY — regenerate vault names from current assignment
+//  MUST be above /:id to avoid wildcard match
+// ═══════════════════════════════════════════
+
+// POST /api/assets/rename-to-hierarchy — Preview or execute bulk rename
+// body: { ids: [1,2,3], preview: true|false }
+router.post('/rename-to-hierarchy', (req, res) => {
+    const db = getDb();
+    const { ids, preview } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: 'ids array required' });
+    }
+
+    const vaultRoot = getSetting('vault_root');
+    if (!vaultRoot && !preview) {
+        return res.status(500).json({ error: 'Vault root not configured' });
+    }
+
+    const results = [];
+    let renamed = 0;
+    const errors = [];
+
+    // Track names assigned within this batch to avoid collisions between assets
+    const usedPaths = new Set();
+
+    for (const id of ids) {
+        try {
+            const asset = db.prepare('SELECT * FROM assets WHERE id = ?').get(id);
+            if (!asset) { errors.push({ id, error: 'Not found' }); continue; }
+
+            // Look up current hierarchy
+            const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(asset.project_id);
+            if (!project) { errors.push({ id, error: 'No project' }); continue; }
+
+            const sequence = asset.sequence_id
+                ? db.prepare('SELECT * FROM sequences WHERE id = ?').get(asset.sequence_id)
+                : null;
+            const shot = asset.shot_id
+                ? db.prepare('SELECT * FROM shots WHERE id = ?').get(asset.shot_id)
+                : null;
+            const role = asset.role_id
+                ? db.prepare('SELECT * FROM roles WHERE id = ?').get(asset.role_id)
+                : null;
+
+            // Check if project has a naming convention (Shot Builder)
+            let namingConvention = null;
+            if (project.naming_convention) {
+                try { namingConvention = JSON.parse(project.naming_convention); } catch (_) {}
+            }
+
+            const ext = path.extname(asset.vault_name || asset.original_name).toLowerCase();
+            const { type: mediaType } = detectMediaType(asset.original_name || asset.vault_name);
+            const dir = path.dirname(asset.file_path);
+
+            // Try increasing version/counter until we find a unique name
+            // This handles both ShotGrid templates ({version}) and legacy templates ({counter})
+            let newVaultName = null;
+            for (let attempt = 1; attempt <= 999; attempt++) {
+                let candidateName = null;
+
+                if (namingConvention && namingConvention.length > 0) {
+                    const convResult = generateFromConvention(namingConvention, {
+                        project: project.code,
+                        episode: project.episode || '',
+                        sequence: sequence?.name || sequence?.code || '',
+                        shot: shot?.name || shot?.code || '',
+                        role: role?.code || '',
+                        version: attempt,
+                        counter: attempt,
+                    }, ext);
+                    if (convResult) candidateName = convResult.vaultName;
+                }
+
+                if (!candidateName) {
+                    const nameResult = generateVaultName({
+                        originalName: asset.original_name || asset.vault_name,
+                        projectCode: project.code,
+                        sequenceCode: sequence?.code,
+                        sequenceName: sequence?.name,
+                        shotCode: shot?.code,
+                        shotName: shot?.name,
+                        roleCode: role?.code,
+                        takeNumber: 1,
+                        mediaType,
+                        version: attempt,
+                        counter: attempt,
+                    });
+                    candidateName = nameResult.vaultName;
+                }
+
+                const candidateFullPath = path.join(dir, candidateName);
+                const normalizedKey = candidateFullPath.toLowerCase();
+
+                // Check 1: not already claimed by another asset in this batch
+                if (usedPaths.has(normalizedKey)) continue;
+
+                // Check 2: doesn't exist on disk (or is the same file we're renaming)
+                if (fs.existsSync(candidateFullPath) &&
+                    path.resolve(candidateFullPath) !== path.resolve(asset.file_path)) {
+                    continue;
+                }
+
+                newVaultName = candidateName;
+                usedPaths.add(normalizedKey);
+                break;
+            }
+
+            if (!newVaultName) {
+                errors.push({ id, error: 'Could not find unique name after 999 attempts' });
+                continue;
+            }
+
+            // If name is already the same, skip
+            if (newVaultName === asset.vault_name) {
+                results.push({ id, oldName: asset.vault_name, newName: newVaultName, skipped: true });
+                continue;
+            }
+
+            results.push({ id, oldName: asset.vault_name, newName: newVaultName, skipped: false });
+
+            if (!preview) {
+                const oldPath = asset.file_path;
+                const newPath = path.join(dir, newVaultName);
+
+                if (fs.existsSync(oldPath)) {
+                    fs.renameSync(oldPath, newPath);
+                }
+
+                const relativePath = vaultRoot ? path.relative(vaultRoot, newPath) : newPath;
+
+                db.prepare(`
+                    UPDATE assets SET vault_name = ?, file_path = ?, relative_path = ?, updated_at = datetime('now')
+                    WHERE id = ?
+                `).run(newVaultName, newPath, relativePath, id);
+
+                renamed++;
+            }
+        } catch (err) {
+            errors.push({ id, error: err.message });
+        }
+    }
+
+    if (!preview) {
+        logActivity('bulk_rename_hierarchy', 'asset', null, { count: renamed, total: ids.length });
+    }
+
+    res.json({ preview: !!preview, results, renamed, skipped: results.filter(r => r.skipped).length, errors: errors.length, errors_detail: errors });
+});
+
+
+// ═══════════════════════════════════════════
 //  STRING-PATH GET ROUTES — MUST be above /:id to avoid wildcard match
 // ═══════════════════════════════════════════
 
