@@ -1194,6 +1194,48 @@ Actions: `insert`, `update`, `delete`, `bulk-insert`. Spoke applies via `INSERT 
 5. Hub's response is forwarded back to the spoke's browser
 6. Hub broadcasts the change via SSE to all spokes (including the originator)
 
+### LOCAL_ONLY Endpoints (Bypass Proxy)
+Certain POST endpoints must run on the **local machine** even in spoke mode, because they launch local processes, access local temp files, or are per-machine read-only checks. These are defined in `src/middleware/spokeProxy.js` and skip forwarding to the hub:
+
+| Pattern | Reason |
+|---------|--------|
+| `/api/assets/rv-push` | Launches RV on local machine |
+| `/api/users/verify-pin` | PIN check — read-only, uses local DB replica |
+| `/api/assets/rv-status` | Checks local RV process |
+| `/api/settings/sync-config` | Per-machine hub/spoke config (writes to local `config.json`) |
+| `/api/settings/db-config` | Per-machine shared DB path (writes to local `config.json`) |
+| `/api/assets/publish-frame` | RV frame publish — reads RV temp files + runs FFmpeg locally |
+| `/api/assets/:id/open-review` | FFmpeg render + open in RV (local, regex match) |
+| `/api/assets/:id/open-external` | Open in external player (local, regex match) |
+
+**Important**: When adding new endpoints that launch local processes or read local files, add them to `LOCAL_ONLY_PATTERNS` (exact match) or `LOCAL_ONLY_REGEX` (parameterized routes) in `spokeProxy.js`.
+
+### Spoke-to-Hub Asset Registration
+Some LOCAL_ONLY endpoints create new records in the spoke's local DB (e.g., `publish-frame` creates asset entries). Since the spoke DB is replaced on every sync, these records would be lost.
+
+Solution: After local success, the handler forwards asset metadata to the hub via `POST /api/assets/spoke-register`. This endpoint accepts a full asset record and does `INSERT OR IGNORE` on the hub's DB so the asset survives future syncs.
+
+Access the spoke service from route handlers via `req.app.locals.spokeService` (exposed in `server.js`).
+
+### Local Settings Preservation
+`SpokeService.syncDatabase()` replaces the entire local DB with the hub's snapshot. To prevent losing per-machine settings, it:
+1. Reads `LOCAL_SETTINGS` values before DB replacement: `path_mappings`, `rv_path`, `ffmpeg_path`, `vault_root`
+2. Replaces the DB file with the hub snapshot
+3. Re-inserts the saved local settings
+
+This ensures cross-platform path mappings and local tool paths survive every sync cycle.
+
+### Settings UI — Sync Mode Configuration
+The Settings tab includes a **"Sync Mode"** section (`GET/POST /api/settings/sync-config`) that provides a UI for configuring hub/spoke mode without manually editing `config.json`:
+- **Mode selector**: Standalone / Hub / Spoke dropdown
+- **Hub mode**: Shows Hub Secret input
+- **Spoke mode**: Shows Hub URL, Hub Secret, and Spoke Name inputs
+- **Validation**: Spoke mode requires hub_url and hub_secret
+- **Status indicator**: Shows current active mode
+- Changes require a server restart to take effect
+
+The frontend code is in `public/js/settings.js` (`loadSyncConfig()`, `saveSyncConfig()`, `onSyncModeChange()`).
+
 ### Environment Variable: `CAM_DATA_DIR`
 Override the data directory path (default: `./data/`). Used to run multiple instances on the same machine with separate databases:
 ```bash
@@ -1201,6 +1243,14 @@ CAM_DATA_DIR=/path/to/spoke/data PORT=7701 node src/server.js
 ```
 
 ### Setup: PC as Hub, Mac as Spoke
+
+**Option A: Via Settings UI (recommended)**
+1. Open Settings tab in the browser
+2. Scroll to "Sync Mode" section
+3. Select mode, fill in fields, click "Save Sync Config"
+4. Restart the server
+
+**Option B: Manual config.json**
 
 **On the Windows PC (Hub):**
 1. `git pull` to get latest code
@@ -1225,7 +1275,14 @@ CAM_DATA_DIR=/path/to/spoke/data PORT=7701 node src/server.js
 3. `./start.sh`
 4. Hub console shows: `[Hub] Spoke connected: "Greg-Mac" (1 total)`
 
-**To revert to standalone:** Set `data/config.json` to `{}` and restart.
+**To revert to standalone:** Set `data/config.json` to `{}` (or select "Standalone" in Settings UI) and restart.
+
+### Cross-Platform Path Mappings
+When hub and spoke run on different OSes (e.g., Windows hub, Mac spoke), file paths stored in the DB need translation. Configure path mappings in **Settings → Network & Multi-Machine → Path Mappings**:
+- Example: `Z:\` → `/Volumes/home/AI Projects` (maps Windows NAS mount to Mac mount)
+- Stored in DB as `settings.path_mappings` (JSON array)
+- Used by `src/utils/pathResolver.js` (`resolveFilePath()`, `getAllPathVariants()`)
+- Preserved across spoke DB syncs via `SpokeService.LOCAL_SETTINGS`
 
 ### Testing on One Machine
 Run hub + spoke on different ports with separate data dirs:
@@ -1346,6 +1403,12 @@ Port 7700 must be open between hub and spokes. On Windows, the first server star
 | — | feat: Spoke `syncThumbnails()` — downloads and unpacks binary bundle on startup after DB sync |
 | — | feat: Spoke `fetchSingleThumbnail()` — incremental download triggered by SSE asset insert events |
 | — | feat: `_downloadBuffer()` helper — in-memory HTTP response for binary format parsing |
+| `dc19322` | fix: Thumbnail 404 — use static `/thumbnails/thumb_*.jpg` paths instead of API endpoint |
+| `c01be3e` | fix: PIN verification 502 on spoke — move body-parsing middleware before spokeProxy |
+| `a1af9fd` | fix: RV launches on wrong machine — add LOCAL_ONLY_PATTERNS/REGEX bypass in spokeProxy |
+| `11146c9` | fix: Preserve local settings (path_mappings, rv_path, vault_root) across spoke DB syncs |
+| `ece0a29` | feat: Sync Mode configuration in Settings UI (Standalone/Hub/Spoke with validation) |
+| `cc041d4` | fix: publish-frame 502 on spoke — run locally + forward asset records to hub via spoke-register |
 
 ---
 
