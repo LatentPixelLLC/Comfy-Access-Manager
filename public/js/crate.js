@@ -26,6 +26,7 @@ let cratePanelOpen = true;
 let _crateRefreshInterval = null;  // Auto-refresh timer while viewing a crate
 let _sseSource = null;             // SSE connection for real-time crate updates
 const CRATE_POLL_MS = 3000;        // Fallback poll (only if SSE fails)
+const _thumbCacheBuster = Date.now(); // Bust browser cache for thumbnails
 
 // ═══════════════════════════════════════════
 //  CRATE LIST (left sidebar panel)
@@ -212,7 +213,7 @@ function showCrateView(crate, items) {
                 data-aidx="${i}" onclick="handleAssetClick(event, ${i})" ondblclick="handleAssetDblClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})"
                 draggable="true" ondragstart="onAssetDragStart(event, ${i})">
                 <div class="asset-thumb">
-                    <img src="/api/assets/${a.id}/thumbnail" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                    <img src="/thumbnails/thumb_${a.id}.jpg?v=${_thumbCacheBuster}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
                     <div class="thumb-placeholder" style="display:none">${typeIcon(a.media_type)}</div>
                     <span class="asset-type-badge ${a.media_type}">${a.media_type}</span>
                     ${a.role_name ? `<span class="asset-role-badge" style="background:${a.role_color || '#666'}">${a.role_icon || '🎭'} ${esc(a.role_code)}</span>` : ''}
@@ -246,7 +247,7 @@ function showCrateView(crate, items) {
             <div class="asset-row ${state.selectedAssets.includes(a.id) ? 'asset-selected' : ''}"
                 data-aidx="${i}" onclick="handleAssetClick(event, ${i})" ondblclick="handleAssetDblClick(event, ${i})" oncontextmenu="showContextMenu(event, ${i})">
                 <div class="row-thumb">
-                    <img src="/api/assets/${a.id}/thumbnail" onerror="this.outerHTML='<span>${typeIcon(a.media_type)}</span>'">
+                    <img src="/thumbnails/thumb_${a.id}.jpg?v=${_thumbCacheBuster}" onerror="this.outerHTML='<span>${typeIcon(a.media_type)}</span>'">
                     <span class="row-type-pip ${a.media_type}">${a.file_ext || ''}</span>
                 </div>
                 <div class="row-show">${esc(a.project_code || '')}</div>

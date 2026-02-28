@@ -1584,7 +1584,7 @@ router.get('/:id/thumbnail', async (req, res) => {
     }
 
     if (thumbPath && fs.existsSync(thumbPath)) {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
         res.sendFile(thumbPath);
     } else {
         res.status(404).json({ error: 'Thumbnail not available' });
