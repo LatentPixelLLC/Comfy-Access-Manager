@@ -28,6 +28,7 @@ let _sseSource = null;           // EventSource for signaling
 let _peers = new Map();          // Map<peerId, { pc: RTCPeerConnection, userName: string }>
 let _isMuted = false;            // Whether our mic is muted
 let _isConnected = false;        // Whether we're in a voice room
+let _signalingBaseUrl = '';      // Hub URL for signaling ('' = local, 'http://hub:7700' = spoke)
 
 // ─── Public API ───
 
@@ -48,6 +49,21 @@ async function joinVoiceChat(sessionId) {
     _sessionId = sessionId;
     _peerId = crypto.randomUUID();
     _userName = localStorage.getItem('cam_user_id') || 'Unknown';
+
+    // Resolve signaling server — in spoke mode, connect directly to hub
+    // so all peers share the same in-memory voice room
+    try {
+        const cfg = await api('/api/settings/sync-config');
+        if (cfg?.mode === 'spoke' && cfg?.hub_url) {
+            _signalingBaseUrl = cfg.hub_url;
+            console.log(`[Voice] Spoke mode — signaling via hub: ${_signalingBaseUrl}`);
+        } else {
+            _signalingBaseUrl = '';
+            console.log('[Voice] Hub/standalone mode — signaling locally');
+        }
+    } catch {
+        _signalingBaseUrl = '';
+    }
 
     // Request microphone access
     try {
@@ -95,11 +111,13 @@ async function joinVoiceChat(sessionId) {
 function leaveVoiceChat() {
     if (!_isConnected) return;
 
-    // Notify server
+    // Notify server (send directly to signaling server — hub or local)
     if (_sessionId && _peerId) {
-        api(`/api/voice/signal/${_sessionId}`, {
+        const url = `${_signalingBaseUrl}/api/voice/signal/${_sessionId}`;
+        fetch(url, {
             method: 'POST',
-            body: { peerId: _peerId, type: 'leave' },
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ peerId: _peerId, type: 'leave' }),
         }).catch(() => { /* best effort */ });
     }
 
@@ -152,7 +170,7 @@ function getVoiceState() {
 // ─── Signaling (SSE) ───
 
 function _connectSignaling() {
-    const url = `/api/voice/signal/${_sessionId}?peerId=${encodeURIComponent(_peerId)}&userName=${encodeURIComponent(_userName)}`;
+    const url = `${_signalingBaseUrl}/api/voice/signal/${_sessionId}?peerId=${encodeURIComponent(_peerId)}&userName=${encodeURIComponent(_userName)}`;
     _sseSource = new EventSource(url);
 
     _sseSource.onmessage = (event) => {
@@ -178,10 +196,17 @@ function _connectSignaling() {
  */
 async function _sendSignal(data) {
     try {
-        await api(`/api/voice/signal/${_sessionId}`, {
+        const url = `${_signalingBaseUrl}/api/voice/signal/${_sessionId}`;
+        const body = JSON.stringify({ peerId: _peerId, ...data });
+        const resp = await fetch(url, {
             method: 'POST',
-            body: { peerId: _peerId, ...data },
+            headers: { 'Content-Type': 'application/json' },
+            body,
         });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            console.error('[Voice] Signal error:', err.error || resp.statusText);
+        }
     } catch (err) {
         console.error('[Voice] Failed to send signal:', err.message);
     }
