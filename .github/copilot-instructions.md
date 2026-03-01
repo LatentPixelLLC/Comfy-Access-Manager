@@ -1345,12 +1345,13 @@ CAM orchestrates RV's built-in network sync so multiple users can review media t
 **Endpoints:**
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/review/sessions` | List active review sessions |
+| `GET` | `/api/review/sessions` | List active sessions. Supports `?project_id=N` filter. Returns `is_owner` flag, `project_name`, `project_code`, and `assets[]` (vault_name, media_type) per session |
 | `GET` | `/api/review/sessions/:id` | Get session details + asset info |
-| `POST` | `/api/review/start` | Launch RV as sync host, register session (LOCAL_ONLY) |
+| `POST` | `/api/review/start` | Launch RV as sync host, register session with auto-detected `project_id` (LOCAL_ONLY) |
 | `POST` | `/api/review/join` | Launch RV as sync client (LOCAL_ONLY) |
-| `POST` | `/api/review/end` | End a review session (LOCAL_ONLY) |
-| `POST` | `/api/review/hub-register` | Hub-side: register a spoke's review session |
+| `POST` | `/api/review/end` | End a review session — **host only** (403 if caller IP ≠ session host_ip) (LOCAL_ONLY) |
+| `POST` | `/api/review/leave` | Leave a session — kills local RV process, session stays active for others (LOCAL_ONLY) |
+| `POST` | `/api/review/hub-register` | Hub-side: register a spoke's review session (includes project_id) |
 | `POST` | `/api/review/hub-end` | Hub-side: end a spoke's review session |
 
 **RV Network Flags:**
@@ -1442,9 +1443,27 @@ Then relaunch RV via CAM "Start Sync Review" or "Join Review". The sync.mu and m
 **Duplicate Session Prevention:**
 Both `/start` and `/hub-register` auto-end stale active sessions from the same `host_ip` before inserting a new one. After ending stale sessions, they broadcast SSE `update` events for each ended session so spokes remove them from the active list. Without this broadcast, spokes accumulate duplicate "active" sessions.
 
+**Session Ownership & Permissions:**
+- `is_owner` flag computed per session by comparing `session.host_ip` to `getLocalIP()` — the machine that started it owns it
+- Only the owner can end the session (`/end` returns 403 for non-owners)
+- Non-owners use `/leave` to disconnect their local RV without affecting others
+- Frontend shows "End Session" button only for owner, "Join" + "Leave" for others
+- Owner sessions get green border + "YOUR SESSION" badge in the panel
+
+**Project Filtering & Session Identification:**
+- Sessions auto-populate `project_id` from the first reviewed asset's project
+- `GET /sessions` supports `?project_id=N` query param to filter by project
+- Responses include `project_name`, `project_code`, and `assets[]` array with `vault_name` + `media_type`
+- Sessions grouped by project in the Active Reviews panel
+- Project badge on each session card (shows project code)
+- Asset names shown on cards (up to 3 names + "+N more")
+- Panel auto-filters to current project when opened, "Show All" button to see everything
+
 **UI:**
 - "RV" button in topbar header with badge showing active review count
-- Active Reviews floating panel with session cards (host, assets, Join/End buttons)
+- Active Reviews floating panel with filter bar, project groups, session cards
+- Session cards show: title, host, started_by, project badge, asset names, time ago
+- Host sees "End Session", others see "Join & Launch RV" + "Leave"
 - "Start Sync Review" in asset context menu and selection toolbar
 
 **Windows Hub Setup:** After `git pull`, the hub automatically gets the `review_sessions` table on next server start (DB migrations are auto-applied). The `hub-register` and `hub-end` endpoints handle spoke session forwarding. No manual configuration needed.
@@ -1597,6 +1616,8 @@ Port 7700 must be open between hub and spokes. On Windows, the first server star
 | `9be2ff7` | fix: RV sync scrub — add `event.reject()` to mediavault_mode.py handlers so sync module receives frame-changed events |
 | — | **fix: OpenRV sync.mu `syncFrameChanged` bug — remove `c neq nil` guard to enable scrub sync (applied to installed sync.mu on both Mac and Windows, not in git)** |
 | — | **verified: RV Sync Review scrub sync working end-to-end on Windows ↔ Mac (March 2026)** |
+| `e25e6e4` | feat: Review session identification & project filtering — auto project_id, `?project_id` filter, asset summaries, project badges, grouped cards |
+| `e3e9337` | feat: Session ownership — only host can end (`/end` returns 403), new `/leave` endpoint, `is_owner` flag, End vs Leave UI |
 
 ---
 
