@@ -56,6 +56,7 @@ Comfy-Asset-Manager/
 │   │   ├── serverRoutes.js       # Network discovery, multi-machine (160 lines)
 │   │   ├── transcodeRoutes.js    # Transcode queue management (109 lines)
 │   │   ├── roleRoutes.js        # Role CRUD (107 lines)
+│   │   ├── reviewRoutes.js     # RV Sync Review sessions, RV launch, cross-platform path swap (678 lines)
 │   │   └── syncRoutes.js       # Hub-spoke sync API: SSE events, DB snapshot, write proxy (180 lines)
 │   ├── middleware/
 │   │   └── spokeProxy.js       # Spoke write interceptor — forwards POST/PUT/DELETE to hub (85 lines)
@@ -87,6 +88,7 @@ Comfy-Asset-Manager/
 │       ├── export.js             # Export modal (357 lines)
 │       ├── main.js               # Entry point, tab switching, PIN prompt, server discovery (290 lines)
 │       ├── utils.js              # Shared utilities (82 lines)
+│       ├── syncReview.js         # RV Sync Review frontend — polling, session cards, join/end (256 lines)
 │       ├── state.js              # Global state singleton (40 lines)
 │       ├── api.js                # API client helper (26 lines)
 │       └── lib/mp4box.all.js     # MP4 parsing library (player dependency)
@@ -684,11 +686,20 @@ render (every frame)
 - `_syncCurrentSource()` always updates pointers on source change. The `_show_comfyui` flag only controls whether `_drawComfyUI()` renders anything.
 - Previous bug: gating pointer updates behind `_show_comfyui` caused intermittent "No ComfyUI metadata" because pointers were never set if the toggle was off when sources loaded.
 
-### findRV() Path Priority (assetRoutes.js)
+### findRV() Path Priority
+**reviewRoutes.js** (for Sync Review) and **assetRoutes.js** (for single-asset launch) both have `findRV()`. On macOS, self-compiled OpenRV is checked BEFORE `/Applications/RV.app` because the system RV (v7.7.0, 2020) crashes on modern macOS while the OpenRV build works.
+
 1. User-configured `rv_path` setting
 2. Bundled: `tools/rv/RV.app/Contents/MacOS/RV` (Mac) or `tools/rv/bin/rv.exe` (Win)
-3. Self-compiled: `~/OpenRV/_build/...` (Mac) or `C:\OpenRV\_build\...` (Win)
+3. Self-compiled: `~/OpenRV/_build/stage/app/RV.app/Contents/MacOS/RV` (Mac) or `C:\OpenRV\_build\...` (Win) — **checked before system installs on Mac**
 4. System installs: `/Applications/RV*.app` (Mac) or `C:\Program Files\*RV*` (Win) or `/opt/rv` (Linux)
+
+### macOS RV Launch Method
+RV on macOS **must** be launched via `open -n -a <bundle> --args ...` (not `spawn` or `open -a`):
+- Direct `spawn` of the binary crashes (needs app-bundle context)
+- `open -a` (without `-n`) doesn't reliably forward args to an already-running instance
+- `-n` forces a new instance AND reliably passes all arguments
+- Environment variables are injected via `open --env KEY=VALUE` flags (LaunchServices does NOT inherit the caller's process env)
 
 ### OpenRV Build Status
 | Platform | Status | Binary Location |
@@ -1347,6 +1358,21 @@ CAM orchestrates RV's built-in network sync so multiple users can review media t
 - Client: `rv -network -networkConnect <ip> <port> <files...>`
 - Both machines must have access to the same media files (NAS mount with path mappings)
 
+**Cross-Platform Path Swap (RV_OS_PATH env vars):**
+When RV network sync shares a session between Windows and Mac, media paths use the host OS format (e.g., `Z:/MediaVault/...`). The client RV can't find files at those paths. OpenRV has a built-in mechanism in `Application.cpp` (lines 370-550):
+- `RV_OS_PATH_WINDOWS_<N>=<win_prefix>` + `RV_OS_PATH_OSX_<N>=<mac_prefix>` env vars
+- On startup, RV builds a path swap map. When Mac RV sees a path starting with `RV_OS_PATH_WINDOWS_0`, it replaces that prefix with `RV_OS_PATH_OSX_0`
+
+`buildRVPathSwapEnv()` in `reviewRoutes.js` reads CAM's `path_mappings` setting from the DB and converts:
+```
+[{"windows": "Z:\\", "mac": "/Volumes/home/AI Projects"}]
+→ RV_OS_PATH_WINDOWS_0=Z:    RV_OS_PATH_OSX_0=/Volumes/home/AI Projects
+```
+On macOS, these are injected via `open --env KEY=VALUE` flags. On Windows/Linux, via `spawn({ env })`. This is transparent to the user — RV automatically remaps all synced paths.
+
+**Duplicate Session Prevention:**
+Both `/start` and `/hub-register` auto-end stale active sessions from the same `host_ip` before inserting a new one. After ending stale sessions, they broadcast SSE `update` events for each ended session so spokes remove them from the active list. Without this broadcast, spokes accumulate duplicate "active" sessions.
+
 **UI:**
 - "RV" button in topbar header with badge showing active review count
 - Active Reviews floating panel with session cards (host, assets, Join/End buttons)
@@ -1493,6 +1519,11 @@ Port 7700 must be open between hub and spokes. On Windows, the first server star
 | — | feat: `syncReview.js` frontend module — polls for active sessions every 10s, global `startSyncReview()` / `joinReview()` / `endReview()` |
 | — | feat: "Start Sync Review" in asset context menu and selection toolbar |
 | — | feat: Review routes added to LOCAL_ONLY (RV is a local process) |
+| `56ad7ec` | fix: asset_ids not iterable — keep as raw JSON string in SSE broadcasts, add Array.isArray guards |
+| `7d2949f` | fix: RV launch args dropped on macOS — switch from spawn to `open -n -a` with --args |
+| `cd4df76` | fix: RV crash on macOS — reorder findRV() to check OpenRV builds before /Applications/RV.app; auto-end stale sessions; clearer UI |
+| `f6788a5` | feat: RV cross-platform path swap via RV_OS_PATH env vars — reads path_mappings, injects via `open --env` on macOS |
+| `8eacba0` | fix: Duplicate sessions on spokes — broadcast auto-ended sessions to spokes via SSE update events |
 
 ---
 
