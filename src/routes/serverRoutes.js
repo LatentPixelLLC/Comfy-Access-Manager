@@ -161,4 +161,92 @@ router.post('/path-map', (req, res) => {
     res.json({ mappings });
 });
 
+// ─── GET /api/servers/scan-hubs ───
+// Find hubs using UDP discovery first, then HTTP subnet probe as fallback.
+// Windows Firewall commonly blocks UDP broadcasts, so the HTTP fallback
+// tries every IP on the local /24 subnet on port 7700.
+router.get('/scan-hubs', async (req, res) => {
+    const hubs = [];
+    const seen = new Set();
+
+    // 1. Try UDP discovery first (fast, works on Mac/Linux)
+    try {
+        const servers = await DiscoveryService.discover(2500);
+        for (const s of servers) {
+            if (s.mode === 'hub') {
+                const key = `${s.ip}:${s.port}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    hubs.push({ ...s, method: 'udp' });
+                }
+            }
+        }
+    } catch { /* UDP failed — continue to HTTP */ }
+
+    // 2. If no hubs found via UDP, probe the local subnet via HTTP
+    if (hubs.length === 0) {
+        const localIPs = DiscoveryService.getLocalIPs();
+        const subnets = new Set();
+        for (const ip of localIPs) {
+            const parts = ip.split('.');
+            if (parts.length === 4) {
+                subnets.add(parts.slice(0, 3).join('.'));
+            }
+        }
+        const myIpSet = new Set(localIPs);
+
+        // Probe all IPs on each /24 subnet concurrently (with timeout)
+        const http = require('http');
+        const probeIP = (ip) => new Promise((resolve) => {
+            const url = `http://${ip}:7700/api/servers/info`;
+            const timer = setTimeout(() => resolve(null), 1500);
+            const req = http.get(url, { timeout: 1500 }, (resp) => {
+                let body = '';
+                resp.on('data', d => body += d);
+                resp.on('end', () => {
+                    clearTimeout(timer);
+                    try {
+                        const info = JSON.parse(body);
+                        if (info.mode === 'hub') {
+                            resolve({
+                                name: info.name,
+                                hostname: info.hostname,
+                                platform: info.platform,
+                                version: info.version,
+                                ip: ip,
+                                port: info.port || 7700,
+                                url: `http://${ip}:${info.port || 7700}`,
+                                assets: info.assets,
+                                mode: 'hub',
+                                method: 'http',
+                            });
+                        } else resolve(null);
+                    } catch { resolve(null); }
+                });
+            });
+            req.on('error', () => { clearTimeout(timer); resolve(null); });
+            req.on('timeout', () => { req.destroy(); clearTimeout(timer); resolve(null); });
+        });
+
+        const probes = [];
+        for (const subnet of subnets) {
+            for (let i = 1; i <= 254; i++) {
+                const ip = `${subnet}.${i}`;
+                if (myIpSet.has(ip)) continue; // skip self
+                probes.push(probeIP(ip));
+            }
+        }
+
+        const results = await Promise.all(probes);
+        for (const r of results) {
+            if (r && !seen.has(`${r.ip}:${r.port}`)) {
+                seen.add(`${r.ip}:${r.port}`);
+                hubs.push(r);
+            }
+        }
+    }
+
+    res.json({ hubs, method: hubs.length > 0 ? hubs[0].method : 'none' });
+});
+
 module.exports = router;

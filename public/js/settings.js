@@ -1502,23 +1502,23 @@ async function scanForHub() {
     if (!resultsEl) return;
 
     resultsEl.style.display = 'block';
-    resultsEl.innerHTML = '<span style="color:var(--text-secondary);">Scanning network for hubs…</span>';
+    resultsEl.innerHTML = '<span style="color:var(--text-secondary);">Scanning network for hubs (UDP + HTTP subnet probe)…</span>';
 
     try {
-        const data = await api('/api/servers/discover?timeout=3000');
-        const servers = data.servers || [];
-        const hubs = servers.filter(s => s.mode === 'hub');
+        const data = await api('/api/servers/scan-hubs');
+        const hubs = data.hubs || [];
 
         if (hubs.length === 0) {
-            resultsEl.innerHTML = '<span style="color:var(--warning);">No hub found on this network. Make sure the hub is running.</span>';
+            resultsEl.innerHTML = '<span style="color:var(--warning);">No hub found on this network. Make sure the hub is running and set to Hub mode in Settings.</span>';
             return;
         }
 
         resultsEl.innerHTML = hubs.map(h => {
             const label = `${esc(h.name || h.hostname)} (${esc(h.ip)}:${h.port})`;
+            const badge = h.method === 'http' ? ' <span style="opacity:0.5;font-size:0.75rem;">[HTTP]</span>' : '';
             return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-                <span class="server-dot server-dot-active" style="width:8px;height:8px;border-radius:50;background:var(--success);display:inline-block;"></span>
-                <span>${label}</span>
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block;"></span>
+                <span>${label}${badge}</span>
                 <button onclick="selectHub('${esc(h.url)}')">Use This Hub</button>
             </div>`;
         }).join('');
