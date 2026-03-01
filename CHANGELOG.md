@@ -2,6 +2,17 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.6.7] - 2026-03-01
+
+### Added — Path Matching & Bulk Scan-and-Register
+- **PathMatchService** — New service that parses file paths against configurable token patterns (`{project}/{sequence}/{shot}`) to auto-assign assets to the correct project/sequence/shot. Matches by code or name (case-insensitive) against records synced from Flow.
+- **Configurable show root + path pattern** — Settings → Flow now has a "Path Matching & Bulk Scan" section. Set your show root (e.g., `/shows`) and a token pattern describing your directory structure. Saved as `flow_show_root` and `flow_path_pattern` settings.
+- **Scan & Register Tree** — New `POST /api/flow/scan-tree` endpoint recursively walks an entire show directory, registers all media files in-place (nothing moves), and auto-matches each file to project/sequence/shot using the path pattern. Includes dry-run preview mode.
+- **Auto-Match Existing** — New `POST /api/flow/auto-match` endpoint runs path matching on all unassigned assets in the database. Useful after a Flow sync populates the project/shot structure.
+- **Preview Match** — `POST /api/flow/preview-match` tests a single file path against the pattern without registering anything.
+- **Watcher auto-match hook** — When watched folders detect new files, the watcher now auto-matches them to project/sequence/shot if path matching is configured.
+- **Settings UI** — Show root, path pattern, Save Path Config, Auto-Match Existing, Preview scan, and Scan & Register buttons all in the Flow settings panel.
+
 ## [1.6.6] - 2026-03-01
 
 ### Added — Flow Production Tracking v2.0 (ShotGrid Integration)

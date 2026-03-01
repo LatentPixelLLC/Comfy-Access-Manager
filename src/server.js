@@ -209,6 +209,28 @@ async function start() {
 
         try {
             WatcherService.start();
+
+            // Auto-match watched files to Flow project/sequence/shot if configured
+            WatcherService.onFileDetected = ({ filePath, folderPath, projectId, watchId }) => {
+                try {
+                    const PathMatchService = require('../plugins/flow/services/PathMatchService');
+                    const database = require('./database');
+                    PathMatchService.setDatabase(database);
+
+                    const showRoot = PathMatchService.getShowRoot();
+                    if (!showRoot) return; // Path matching not configured
+
+                    const tokens = PathMatchService.parsePath(filePath);
+                    if (!tokens || !tokens.project) return;
+
+                    const resolved = PathMatchService.resolveTokens(tokens);
+                    if (resolved.projectId) {
+                        console.log(`[Watcher] Auto-matched: ${require('path').basename(filePath)} → project ${tokens.project}, seq ${tokens.sequence || '-'}, shot ${tokens.shot || '-'}`);
+                    }
+                } catch {
+                    // PathMatchService not available or not configured — skip silently
+                }
+            };
         } catch (err) {
             console.log('[Watcher] Starting watchers deferred:', err.message);
         }

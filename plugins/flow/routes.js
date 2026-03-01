@@ -13,6 +13,7 @@
 const express = require('express');
 const router = express.Router();
 const FlowService = require('./services/FlowService');
+const PathMatchService = require('./services/PathMatchService');
 
 /**
  * Initialize plugin with core API (dependency injection).
@@ -21,6 +22,7 @@ const FlowService = require('./services/FlowService');
  */
 function init(core) {
     FlowService.setDatabase(core.database);
+    PathMatchService.setDatabase(core.database);
 }
 
 // ─── Status / Config ───
@@ -258,6 +260,82 @@ router.get('/projects', async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+// ─── Path Matching + Bulk Scan ───
+
+// GET /api/flow/path-config — Get current path pattern and show root
+router.get('/path-config', (req, res) => {
+    res.json({
+        showRoot: PathMatchService.getShowRoot(),
+        pattern: PathMatchService.getPattern(),
+    });
+});
+
+// POST /api/flow/path-config — Save path pattern and show root
+// Body: { showRoot, pattern }
+router.post('/path-config', (req, res) => {
+    const { showRoot, pattern } = req.body;
+    const database = require('../../src/database');
+    if (showRoot !== undefined) database.setSetting('flow_show_root', showRoot);
+    if (pattern !== undefined)  database.setSetting('flow_path_pattern', pattern);
+    res.json({ success: true, showRoot: PathMatchService.getShowRoot(), pattern: PathMatchService.getPattern() });
+});
+
+// POST /api/flow/scan-tree — Recursively scan a directory, register in-place, auto-match
+// Body: { rootDir, dryRun?, maxFiles? }
+router.post('/scan-tree', (req, res) => {
+    const { rootDir, dryRun, maxFiles } = req.body;
+    if (!rootDir) return res.status(400).json({ error: 'rootDir required' });
+
+    const fs = require('fs');
+    if (!fs.existsSync(rootDir)) {
+        return res.status(400).json({ error: 'Directory does not exist: ' + rootDir });
+    }
+
+    try {
+        const result = PathMatchService.scanAndRegisterTree(rootDir, {
+            dryRun: !!dryRun,
+            maxFiles: maxFiles || 50000,
+        });
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/flow/auto-match — Run auto-match on all unassigned assets
+// Body: { projectId? }
+router.post('/auto-match', (req, res) => {
+    try {
+        const result = PathMatchService.matchAllUnassigned({
+            projectId: req.body.projectId || null,
+        });
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/flow/auto-match/:assetId — Auto-match a single asset
+router.post('/auto-match/:assetId', (req, res) => {
+    try {
+        const result = PathMatchService.matchAsset(parseInt(req.params.assetId));
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/flow/preview-match — Preview path matching without registering
+// Body: { filePath }
+router.post('/preview-match', (req, res) => {
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+
+    const tokens = PathMatchService.parsePath(filePath);
+    const resolved = tokens ? PathMatchService.resolveTokens(tokens) : null;
+    res.json({ tokens, resolved });
 });
 
 module.exports = router;
