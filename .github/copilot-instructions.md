@@ -1594,7 +1594,9 @@ Port 7700 must be open between hub and spokes. On Windows, the first server star
 | `f6788a5` | feat: RV cross-platform path swap via RV_OS_PATH env vars — reads path_mappings, injects via `open --env` on macOS |
 | `8eacba0` | fix: Duplicate sessions on spokes — broadcast auto-ended sessions to spokes via SSE update events |
 | `765b6e5` | fix: RV sync duplicate connection — `killExistingRVSync()` kills prior RV before reconnect; `RV_PATHSWAP_CAM_N` env vars |
-| — | **fix: OpenRV sync.mu `syncFrameChanged` bug — remove `c neq nil` guard to enable scrub sync (applied to installed sync.mu, not in git)** |
+| `9be2ff7` | fix: RV sync scrub — add `event.reject()` to mediavault_mode.py handlers so sync module receives frame-changed events |
+| — | **fix: OpenRV sync.mu `syncFrameChanged` bug — remove `c neq nil` guard to enable scrub sync (applied to installed sync.mu on both Mac and Windows, not in git)** |
+| — | **verified: RV Sync Review scrub sync working end-to-end on Windows ↔ Mac (March 2026)** |
 
 ---
 
