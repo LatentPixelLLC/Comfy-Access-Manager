@@ -56,7 +56,7 @@ Comfy-Asset-Manager/
 │   │   ├── serverRoutes.js       # Network discovery, multi-machine (160 lines)
 │   │   ├── transcodeRoutes.js    # Transcode queue management (109 lines)
 │   │   ├── roleRoutes.js        # Role CRUD (107 lines)
-│   │   ├── reviewRoutes.js     # RV Sync Review sessions, RV launch, cross-platform path swap (678 lines)
+│   │   ├── reviewRoutes.js     # RV Sync Review sessions, notes, annotations, RV launch, cross-platform path swap (1303 lines)
 │   │   └── syncRoutes.js       # Hub-spoke sync API: SSE events, DB snapshot, write proxy (180 lines)
 │   ├── middleware/
 │   │   └── spokeProxy.js       # Spoke write interceptor — forwards POST/PUT/DELETE to hub (85 lines)
@@ -88,7 +88,7 @@ Comfy-Asset-Manager/
 │       ├── export.js             # Export modal (357 lines)
 │       ├── main.js               # Entry point, tab switching, PIN prompt, server discovery (290 lines)
 │       ├── utils.js              # Shared utilities (82 lines)
-│       ├── syncReview.js         # RV Sync Review frontend — polling, session cards, join/end (256 lines)
+│       ├── syncReview.js         # RV Sync Review frontend — polling, session cards, notes, annotation viewer (853 lines)
 │       ├── state.js              # Global state singleton (40 lines)
 │       ├── api.js                # API client helper (26 lines)
 │       └── lib/mp4box.all.js     # MP4 parsing library (player dependency)
@@ -1239,6 +1239,9 @@ Certain POST endpoints must run on the **local machine** even in spoke mode, bec
 | `/api/review/start` | Launch RV as sync host (local process) |
 | `/api/review/join` | Launch RV as sync client (local process) |
 | `/api/review/end` | End review session (local) |
+| `/api/review/leave` | Leave review session (kills local RV) |
+| `/api/review/notes(/:noteId)?` | Review notes — saved locally + forwarded to hub in route handler (regex match) |
+| `/api/review/notes/annotated-frame` | Annotated frame from RV — saved locally + uploaded to hub (regex match) |
 | `/api/assets/:id/open-review` | FFmpeg render + open in RV (local, regex match) |
 | `/api/assets/:id/open-external` | Open in external player (local, regex match) |
 | `/api/settings(/.*)` | ALL settings writes (regex match) |
@@ -1326,7 +1329,7 @@ CAM orchestrates RV's built-in network sync so multiple users can review media t
 **Architecture:**
 - `src/routes/reviewRoutes.js` — all review session API endpoints
 - `public/js/syncReview.js` — frontend module (polling, UI rendering, global functions)
-- `review_sessions` DB table — tracks active sessions (host_ip, host_port, asset_ids, status)
+- `review_sessions` DB table — tracks active sessions (host_ip, host_port, asset_ids, status)\n- `review_notes` DB table — frame-accurate notes with annotation images (session_id, asset_id, frame_number, note_text, author, status, annotation_image)
 
 **Flow (Hub mode — session started on hub):**
 1. User clicks "Start Sync Review" on asset(s) → `POST /api/review/start`
@@ -1351,8 +1354,16 @@ CAM orchestrates RV's built-in network sync so multiple users can review media t
 | `POST` | `/api/review/join` | Launch RV as sync client (LOCAL_ONLY) |
 | `POST` | `/api/review/end` | End a review session — **host only** (403 if caller IP ≠ session host_ip) (LOCAL_ONLY) |
 | `POST` | `/api/review/leave` | Leave a session — kills local RV process, session stays active for others (LOCAL_ONLY) |
+| `GET` | `/api/review/notes/:sessionId` | Get all notes for a session (supports `?asset_id=N` filter). Returns enriched `asset_name`, `media_type` per note |
+| `POST` | `/api/review/notes` | Add a text note to a session. Auto-forwards to hub via `/hub-note`. Body: `{sessionId, assetId?, frameNumber?, timecode?, noteText}` |
+| `POST` | `/api/review/notes/annotated-frame` | Save RV annotated frame as a note. Copies PNG to `data/review-snapshots/{PROJECT}/{DATE}/`, base64-uploads to hub. Body: `{renderedFramePath, frameNumber, noteText?, sessionId?, sourcePath?}` |
+| `PUT` | `/api/review/notes/:noteId` | Update note text or status (`open`/`resolved`/`wontfix`) |
+| `DELETE` | `/api/review/notes/:noteId` | Delete a note |
+| `GET` | `/api/review/history` | List ended sessions with note counts. Supports `?project_id=N&limit=N` |
 | `POST` | `/api/review/hub-register` | Hub-side: register a spoke's review session (includes project_id) |
 | `POST` | `/api/review/hub-end` | Hub-side: end a spoke's review session |
+| `POST` | `/api/review/hub-note` | Hub-side: register a spoke's text note (supports `annotation_image` field) |
+| `POST` | `/api/review/hub-annotation` | Hub-side: receive base64-encoded annotated frame image from spoke, save to organized directory, create note |
 
 **RV Network Flags:**
 - Host: `rv -network -networkPort 45128 <files...>`
@@ -1375,6 +1386,46 @@ On macOS, these are injected via `open --env KEY=VALUE` flags. On Windows/Linux,
 Before launching a new RV sync session, `reviewRoutes.js` calls `killExistingRVSync()` to kill any existing RV processes launched with `-network` flags. Without this, the remote RV rejects the new connection with `"already connected"` because the old TCP session is still in its contact table.
 - macOS: `pkill -f 'MacOS/RV.*-network'` + 1.5s wait for TCP FIN propagation
 - Windows: `taskkill /F /FI "IMAGENAME eq RV.exe"` (kills all RV instances)
+
+### Review Notes & Annotated Frames
+Review notes allow users to leave frame-accurate text notes during a review session. Notes are tied to a session and optionally to an asset and frame number. They persist after the session ends and are accessible from the History tab.
+
+**Database:**
+- `review_notes` table: `id`, `session_id`, `asset_id`, `frame_number`, `timecode`, `note_text`, `author`, `status` (open/resolved/wontfix), `annotation_image`, `created_at`, `updated_at`
+- `annotation_image` stores a relative path like `COMFYUIT/2026-03-01/review_26_f1042_123456.png`
+
+**Annotated Frame Capture (RV plugin → spoke → hub):**
+1. User draws annotations in RV, presses **Alt+N** ("Save Annotated Frame as Note" menu item)
+2. RV plugin calls `rvc.exportCurrentFrame()` to render composited frame (with paint/annotations/LUTs) to a temp PNG
+3. Plugin shows a QInputDialog for optional note text
+4. Plugin POSTs `{renderedFramePath, frameNumber, noteText}` to spoke's `POST /api/review/notes/annotated-frame`
+5. Spoke copies PNG to `data/review-snapshots/{PROJECT_CODE}/{YYYY-MM-DD}/review_{sessionId}_f{frame}_{timestamp}.png`
+6. Spoke base64-encodes the image and uploads to hub via `POST /api/review/hub-annotation`
+7. Hub saves the same image in its own `data/review-snapshots/{PROJECT_CODE}/{YYYY-MM-DD}/` directory
+8. Note record created on both spoke and hub with `annotation_image` = relative path
+
+**Directory Organization:**
+```
+data/review-snapshots/
+  COMFYUIT/           ← project code
+    2026-03-01/       ← date (YYYY-MM-DD)
+      review_26_f1042_1772379769228.png
+    2026-03-02/
+      ...
+  EDITMAINV2/
+    ...
+  GENERAL/            ← fallback when session has no project
+```
+
+**Frontend (syncReview.js):**
+- Review panel has 3 tabs: Active | History | Notes
+- Notes tab: add notes at frame #, select asset, status cycling (open → resolved → wontfix)
+- Annotation images display as clickable thumbnails with "Annotated Frame" badge
+- Click opens fullscreen overlay viewer (Escape to close)
+- Images resolve locally first; if 404, `onerror` handler retries against hub URL (from `/api/settings/sync-config`)
+- `_hubUrl` is cached after first fetch for subsequent image loads
+
+**Static Serving:** `/review-snapshots/` → `data/review-snapshots/` (supports subdirectories). Respects `CAM_DATA_DIR` env var.
 
 ### WINDOWS AGENT: RV SYNC SCRUB FIX — ACTION REQUIRED (March 2026)
 
@@ -1618,6 +1669,10 @@ Port 7700 must be open between hub and spokes. On Windows, the first server star
 | — | **verified: RV Sync Review scrub sync working end-to-end on Windows ↔ Mac (March 2026)** |
 | `e25e6e4` | feat: Review session identification & project filtering — auto project_id, `?project_id` filter, asset summaries, project badges, grouped cards |
 | `e3e9337` | feat: Session ownership — only host can end (`/end` returns 403), new `/leave` endpoint, `is_owner` flag, End vs Leave UI |
+| `015fe5c` | docs: update agent instructions with session ownership + project filtering |
+| `02c17a6` | feat: Review notes — `review_notes` DB table, CRUD API, Notes tab in review panel, status cycling, session history with note counts |
+| `d6feb1e` | feat: RV annotation capture — `exportCurrentFrame()` in RV plugin (Alt+N), annotated-frame endpoint, fullscreen image viewer |
+| `cf3106b` | feat: Hub-centric annotation storage — organized by `{PROJECT_CODE}/{YYYY-MM-DD}/`, base64 upload to hub, frontend hub-fallback image resolution |
 
 ---
 
