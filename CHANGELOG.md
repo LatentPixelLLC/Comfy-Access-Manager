@@ -2,6 +2,47 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.6.5] - 2026-03-01
+
+### Fixed
+- **Voice chat hub routing** — In spoke mode, voice signaling (SSE + WebRTC signals) now routes directly to the hub server so all participants share the same voice room. Previously each machine had its own isolated in-memory room, resulting in 0 peers visible.
+
+## [1.6.4] - 2026-03-01
+
+### Fixed
+- **Spoke auto-update forwarding to hub** — `POST /api/update/apply` was being intercepted by the spoke proxy and forwarded to the hub. The hub would update itself while the spoke stayed on the old version. Added `/api/update/*` to the `LOCAL_ONLY` proxy bypass list so updates always execute on the local machine.
+
+## [1.6.3] - 2026-03-01
+
+### Added
+- **WebRTC Voice Chat** for review sessions — real-time peer-to-peer audio during synchronized reviews.
+  - Server-side SSE signaling endpoint (`GET /api/voice/signal/:sessionId`) with per-session voice rooms and automatic cleanup.
+  - Signal relay (`POST /api/voice/signal/:sessionId`) routes WebRTC offers, answers, and ICE candidates between peers.
+  - Peer list endpoint (`GET /api/voice/peers/:sessionId`).
+  - Frontend WebRTC module (`voiceChat.js`) with `getUserMedia`, echo cancellation, noise suppression, and auto gain control.
+  - Mesh topology peer connections — each peer connects directly to every other peer (supports 2–6 participants).
+  - Google STUN servers for NAT traversal (LAN works without STUN too).
+  - Mute/unmute toggle with visual feedback.
+  - Floating voice control bar at bottom of screen when connected (shows peer count, names, mute button, leave button).
+  - 🎙️ Voice button added to every active review session card (both host and participant views).
+
+## [1.6.2] - 2026-02-28
+
+### Fixed
+- Corrected version numbering (patch bumps only going forward).
+
+## [1.6.1] - 2026-02-28
+
+### Fixed
+- Version correction from erroneous 1.7.0 jump back to proper patch sequence.
+
+## [1.6.0] - 2026-02-28
+
+### Added
+- **HTTP Hub Discovery fallback** — When UDP broadcast (port 7701) is blocked by Windows Firewall, hub scan now probes all 254 IPs on the local /24 subnet via HTTP as a fallback.
+- **Auto-updater non-git bootstrap** — `updateRoutes.js` now initializes a `.git` directory on non-git installs (zip/copy) so `git pull` works for future updates.
+- **install.bat git init** — Windows installer now runs `git init` + `git remote add` + `git fetch` + `git reset --mixed` after extracting, giving zip installs a proper git repo for auto-updates.
+
 ## [1.5.9] - 2026-02-28
 
 ### Added
