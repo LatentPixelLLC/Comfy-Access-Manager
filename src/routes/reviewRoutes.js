@@ -415,29 +415,10 @@ router.post('/end', (req, res) => {
  * Uses `-networkPort` to open a sync server.
  */
 function launchRVAsHost(rvExe, filePaths, networkPort) {
-    const { execFile, spawn } = require('child_process');
+    const { spawn } = require('child_process');
 
-    if (process.platform === 'darwin') {
-        // macOS: use `open -a` with the .app bundle for proper window activation
-        let appBundle = null;
-        let dir = rvExe;
-        for (let i = 0; i < 5; i++) {
-            dir = path.dirname(dir);
-            if (dir.endsWith('.app')) { appBundle = dir; break; }
-        }
-        if (appBundle) {
-            const args = ['-a', appBundle, '--args',
-                '-network',
-                '-networkPort', String(networkPort),
-                ...filePaths
-            ];
-            execFile('/usr/bin/open', args, { cwd: path.dirname(rvExe) });
-            console.log(`[RV Sync] Host launched via 'open -a' (macOS), port ${networkPort}, ${filePaths.length} file(s)`);
-            return;
-        }
-    }
-
-    // Windows / Linux or fallback
+    // Launch RV directly (spawn) on all platforms.
+    // macOS `open -a --args` doesn't reliably forward args to the app.
     const args = ['-network', '-networkPort', String(networkPort), ...filePaths];
     const child = spawn(rvExe, args, {
         cwd: path.dirname(rvExe),
@@ -467,28 +448,10 @@ function launchRVAsHost(rvExe, filePaths, networkPort) {
  * Also loads the same media files locally (RV sync shares state, not pixels).
  */
 function launchRVAsClient(rvExe, hostIp, hostPort, filePaths) {
-    const { execFile, spawn } = require('child_process');
+    const { spawn } = require('child_process');
 
-    if (process.platform === 'darwin') {
-        let appBundle = null;
-        let dir = rvExe;
-        for (let i = 0; i < 5; i++) {
-            dir = path.dirname(dir);
-            if (dir.endsWith('.app')) { appBundle = dir; break; }
-        }
-        if (appBundle) {
-            const args = ['-a', appBundle, '--args',
-                '-network',
-                '-networkConnect', hostIp, String(hostPort),
-                ...filePaths
-            ];
-            execFile('/usr/bin/open', args, { cwd: path.dirname(rvExe) });
-            console.log(`[RV Sync] Client launched via 'open -a' (macOS), connecting to ${hostIp}:${hostPort}`);
-            return;
-        }
-    }
-
-    // Windows / Linux or fallback
+    // Launch RV directly (spawn) on all platforms.
+    // macOS `open -a --args` doesn't reliably forward args to the app.
     const args = ['-network', '-networkConnect', hostIp, String(hostPort), ...filePaths];
     const child = spawn(rvExe, args, {
         cwd: path.dirname(rvExe),
