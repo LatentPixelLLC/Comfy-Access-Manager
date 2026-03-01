@@ -451,6 +451,7 @@ function buildRVPathSwapEnv() {
             const winClean = winPath.replace(/\\/g, '/').replace(/\/$/, '');
             const macClean = macPath.replace(/\/$/, '');
 
+            // --- RV_OS_PATH: used by mapFromVar (receiving side) ---
             const winKey = `RV_OS_PATH_WINDOWS_${i}`;
             const osxKey = `RV_OS_PATH_OSX_${i}`;
             envVars[winKey] = winClean;
@@ -458,7 +459,16 @@ function buildRVPathSwapEnv() {
             fullEnv[winKey] = winClean;
             fullEnv[osxKey] = macClean;
 
-            console.log(`[RV Sync] Path swap env: ${winKey}=${winClean} ↔ ${osxKey}=${macClean}`);
+            // --- RV_PATHSWAP: used by mapToVar (sending side) ---
+            // Each machine sets the PATHSWAP var to its OWN local path.
+            // When sending: mapToVar("Z:/foo") → "${RV_PATHSWAP_CAM_0}/foo"
+            // When receiving: mapFromVar("${RV_PATHSWAP_CAM_0}/foo") → "/Volumes/.../foo"
+            const swapKey = `RV_PATHSWAP_CAM_${i}`;
+            const localRoot = process.platform === 'win32' ? winClean : macClean;
+            envVars[swapKey] = localRoot;
+            fullEnv[swapKey] = localRoot;
+
+            console.log(`[RV Sync] Path swap env: ${winKey}=${winClean} ↔ ${osxKey}=${macClean} | ${swapKey}=${localRoot}`);
         });
     } catch (err) {
         console.error('[RV Sync] Failed to build path swap env:', err.message);
@@ -467,10 +477,39 @@ function buildRVPathSwapEnv() {
 }
 
 /**
+ * Kill any existing RV sync processes before launching a new one.
+ * Prevents "already connected" errors when the remote host still has
+ * a stale connection from a previously killed RV instance.
+ * Sends SIGTERM so RV can gracefully close TCP sockets (sends FIN to peers).
+ */
+function killExistingRVSync() {
+    const { execSync } = require('child_process');
+    try {
+        if (process.platform === 'darwin') {
+            // Kill RV processes launched with -network args (sync sessions only)
+            execSync("pkill -f 'MacOS/RV.*-network' 2>/dev/null || true", { timeout: 5000 });
+        } else if (process.platform === 'win32') {
+            // On Windows, kill rv.exe instances with -network in command line
+            execSync('wmic process where "name=\'rv.exe\' and commandline like \'%-network%\'" call terminate 2>NUL || exit /b 0', { timeout: 5000 });
+        } else {
+            execSync("pkill -f 'rv.*-network' 2>/dev/null || true", { timeout: 5000 });
+        }
+        // Brief pause to let TCP FIN propagate to peers and ports release
+        const waitUntil = Date.now() + 1500;
+        while (Date.now() < waitUntil) { /* sync wait */ }
+        console.log('[RV Sync] Killed existing RV sync process(es)');
+    } catch (err) {
+        // Non-fatal: no existing RV to kill, or kill failed
+        console.log('[RV Sync] No existing RV sync processes to kill');
+    }
+}
+
+/**
  * Launch RV as the sync host (other RVs will connect to this one).
  * Uses `-networkPort` to open a sync server.
  */
 function launchRVAsHost(rvExe, filePaths, networkPort) {
+    killExistingRVSync();
     const { execFile, spawn } = require('child_process');
     const rvArgs = ['-network', '-networkPort', String(networkPort), ...filePaths];
     const { envVars, fullEnv } = buildRVPathSwapEnv();
@@ -532,6 +571,7 @@ function launchRVAsHost(rvExe, filePaths, networkPort) {
  * Also loads the same media files locally (RV sync shares state, not pixels).
  */
 function launchRVAsClient(rvExe, hostIp, hostPort, filePaths) {
+    killExistingRVSync();
     const { execFile, spawn } = require('child_process');
     const rvArgs = ['-network', '-networkConnect', hostIp, String(hostPort), ...filePaths];
     const { envVars, fullEnv } = buildRVPathSwapEnv();
