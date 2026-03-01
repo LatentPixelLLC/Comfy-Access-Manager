@@ -516,6 +516,18 @@ function renderNoteCard(note) {
     // Cycle through statuses: open → resolved → wontfix → open
     const nextStatus = note.status === 'open' ? 'resolved' : note.status === 'resolved' ? 'wontfix' : 'open';
 
+    // Annotation image (frame snapshot from RV with paint-overs)
+    const annotationHtml = note.annotation_image
+        ? `<div class="review-note-annotation">
+               <img src="/review-snapshots/${escHtml(note.annotation_image)}" 
+                    alt="Annotated frame ${note.frame_number || ''}" 
+                    class="review-note-annotation-img"
+                    onclick="openAnnotationFullscreen(this.src)"
+                    title="Click to view full size">
+               <span class="review-note-annotation-badge">\uD83C\uDFA8 Annotated Frame</span>
+           </div>`
+        : '';
+
     return `
     <div class="review-note-card review-note-${statusClass}" data-note-id="${note.id}">
         <div class="review-note-card-header">
@@ -529,6 +541,7 @@ function renderNoteCard(note) {
                 <button class="review-note-delete-btn" onclick="deleteReviewNote(${note.id})" title="Delete note">\uD83D\uDDD1</button>
             </div>
         </div>
+        ${annotationHtml}
         <div class="review-note-text">${escHtml(note.note_text)}</div>
     </div>`;
 }
@@ -664,6 +677,40 @@ function setReviewProjectFilter(projectId) {
 }
 
 
+// ─── Annotation Fullscreen Viewer ───
+
+/**
+ * Open an annotated frame snapshot in a fullscreen overlay.
+ */
+function openAnnotationFullscreen(imgSrc) {
+    // Remove existing overlay if any
+    const existing = document.getElementById('annotationOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'annotationOverlay';
+    overlay.className = 'annotation-overlay';
+    overlay.innerHTML = `
+        <div class="annotation-overlay-bg" onclick="closeAnnotationFullscreen()"></div>
+        <img src="${imgSrc}" class="annotation-overlay-img" alt="Annotated frame">
+        <button class="annotation-overlay-close" onclick="closeAnnotationFullscreen()">\u2715</button>
+    `;
+    document.body.appendChild(overlay);
+
+    // Close on Escape
+    overlay._keyHandler = (e) => { if (e.key === 'Escape') closeAnnotationFullscreen(); };
+    document.addEventListener('keydown', overlay._keyHandler);
+}
+
+function closeAnnotationFullscreen() {
+    const overlay = document.getElementById('annotationOverlay');
+    if (overlay) {
+        document.removeEventListener('keydown', overlay._keyHandler);
+        overlay.remove();
+    }
+}
+
+
 // ─── Polling ───
 
 /**
@@ -733,6 +780,8 @@ window.submitReviewNote = submitReviewNote;
 window.addReviewNote = addReviewNote;
 window.updateNoteStatus = updateNoteStatus;
 window.deleteReviewNote = deleteReviewNote;
+window.openAnnotationFullscreen = openAnnotationFullscreen;
+window.closeAnnotationFullscreen = closeAnnotationFullscreen;
 
 // ─── Init ───
 // Start polling when module loads

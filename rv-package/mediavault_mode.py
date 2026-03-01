@@ -925,6 +925,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 ]),
                 ("_", None),
                 ("Publish Frame", self.publishFrame, "alt+p", None),
+                ("Save Annotated Frame as Note", self.saveAnnotatedFrameAsNote, "alt+n", None),
                 ("Add to Crate ...", self.addToCrateMenu, "alt+c", None),
                 ("_", None),
                 ("Toggle Overlay", self._toggleOverlay, "shift+o",
@@ -2177,6 +2178,97 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     shutil.rmtree(tempDir, ignore_errors=True)
                 except Exception:
                     pass
+
+    # ── save annotated frame as review note ───────────────────
+
+    def saveAnnotatedFrameAsNote(self, event):
+        """MediaVault -> Save Annotated Frame as Note — capture the current frame
+        (with annotations/paint-overs baked in) and attach it to the active
+        review session as a note.
+
+        Uses RV's exportCurrentFrame() which renders the composited displayed
+        frame including any paint strokes, text annotations, and LUT settings.
+        The rendered PNG is sent to the CAM server for storage alongside the
+        review notes.
+        """
+        if urllib is None:
+            rve.displayFeedback("urllib not available", 4.0)
+            return
+
+        frame = rvc.frame()
+        rve.displayFeedback("Capturing annotated frame %d ..." % frame, 2.0)
+
+        filepath = self._getCurrentSourcePath()
+
+        renderedPath = None
+        try:
+            # Export the currently displayed frame (with all annotations)
+            tempDir = tempfile.mkdtemp(prefix="cam_rv_annot_")
+            renderedPath = os.path.join(
+                tempDir, "annotated_frame_%04d.png" % frame
+            )
+            try:
+                rvc.exportCurrentFrame(renderedPath)
+                if (not os.path.exists(renderedPath)
+                        or os.path.getsize(renderedPath) < 100):
+                    print("[MediaVault] exportCurrentFrame produced no/tiny file")
+                    rve.displayFeedback("Failed to export frame", 4.0)
+                    return
+            except Exception as e:
+                print("[MediaVault] exportCurrentFrame failed: %s" % e)
+                rve.displayFeedback("Export failed: %s" % e, 4.0)
+                return
+
+            # Prompt for a note (optional). Use a simple Qt dialog if available.
+            noteText = ""
+            if HAS_QT:
+                try:
+                    from PySide2.QtWidgets import QInputDialog
+                except ImportError:
+                    try:
+                        from PySide6.QtWidgets import QInputDialog
+                    except ImportError:
+                        QInputDialog = None
+
+                if QInputDialog:
+                    text, ok = QInputDialog.getText(
+                        None,
+                        "Review Note",
+                        "Note for frame %d (optional):" % frame,
+                    )
+                    if ok and text:
+                        noteText = text.strip()
+
+            if not noteText:
+                noteText = "Annotated frame %d" % frame
+
+            # Send to CAM server
+            payload = json.dumps({
+                "renderedFramePath": renderedPath,
+                "sourcePath": filepath or "",
+                "frameNumber": frame,
+                "noteText": noteText,
+            }).encode("utf-8")
+
+            url = "%s/api/review/notes/annotated-frame" % DMV_URL
+            req = urllib.request.Request(
+                url, data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+
+            if result.get("success"):
+                rve.displayFeedback(
+                    "Annotated frame saved to review notes (F%d)" % frame, 5.0
+                )
+            else:
+                rve.displayFeedback(
+                    "Save failed: %s" % result.get("error", "Unknown"), 5.0
+                )
+        except Exception as e:
+            print("[MediaVault] saveAnnotatedFrameAsNote error: %s" % e)
+            rve.displayFeedback("Save error: %s" % e, 5.0)
 
     # ── add to crate ──────────────────────────────────────────
 

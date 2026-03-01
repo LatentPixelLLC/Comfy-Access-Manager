@@ -826,6 +826,144 @@ router.post('/notes', (req, res) => {
 });
 
 /**
+ * POST /api/review/notes/annotated-frame — Save an annotated frame snapshot from RV.
+ *
+ * Called by the RV plugin when a user captures a frame with annotations/paint-overs.
+ * RV uses exportCurrentFrame() to render the composited frame to a temp file,
+ * then sends it here. We copy it into data/review-snapshots/ and create a note.
+ *
+ * Body: { sessionId?, sourcePath?, frameNumber, noteText?, renderedFramePath }
+ * - renderedFramePath: absolute path to the temp PNG exported by RV
+ * - sourcePath: original media path (used to find the asset_id)
+ * - sessionId: if omitted, attaches to the most recent active session
+ */
+router.post('/notes/annotated-frame', (req, res) => {
+    const { sessionId, sourcePath, frameNumber, noteText, renderedFramePath } = req.body || {};
+
+    if (!renderedFramePath) {
+        return res.status(400).json({ error: 'renderedFramePath is required' });
+    }
+    if (frameNumber == null) {
+        return res.status(400).json({ error: 'frameNumber is required' });
+    }
+
+    // Verify the rendered file exists
+    if (!fs.existsSync(renderedFramePath)) {
+        return res.status(400).json({ error: 'Rendered frame file not found: ' + renderedFramePath });
+    }
+
+    const db = getDb();
+    const author = req.headers['x-cam-user'] || 'Unknown';
+
+    // Find the session (explicit or most recent active)
+    let session;
+    if (sessionId) {
+        session = db.prepare('SELECT * FROM review_sessions WHERE id = ?').get(sessionId);
+    } else {
+        // Find the most recent active session on this machine
+        const localIp = getLocalIP();
+        session = db.prepare(
+            `SELECT * FROM review_sessions WHERE status = 'active' AND host_ip = ? ORDER BY started_at DESC LIMIT 1`
+        ).get(localIp);
+        if (!session) {
+            // Try any active session (user might be a client, not the host)
+            session = db.prepare(
+                `SELECT * FROM review_sessions WHERE status = 'active' ORDER BY started_at DESC LIMIT 1`
+            ).get();
+        }
+    }
+
+    if (!session) {
+        return res.status(404).json({ error: 'No active review session found. Start a review first.' });
+    }
+
+    // Try to find the asset from sourcePath
+    let assetId = null;
+    if (sourcePath) {
+        try {
+            // Normalize paths for cross-platform matching
+            const normalizedPath = sourcePath.replace(/\\/g, '/');
+            const asset = db.prepare(
+                `SELECT id FROM assets WHERE replace(file_path, '\\', '/') = ? LIMIT 1`
+            ).get(normalizedPath);
+            if (asset) assetId = asset.id;
+        } catch { /* non-critical */ }
+    }
+
+    // Copy the rendered frame to review-snapshots
+    const DATA_DIR = process.env.CAM_DATA_DIR || path.join(__dirname, '..', '..', 'data');
+    const snapshotsDir = path.join(DATA_DIR, 'review-snapshots');
+    if (!fs.existsSync(snapshotsDir)) fs.mkdirSync(snapshotsDir, { recursive: true });
+
+    const timestamp = Date.now();
+    const filename = `review_${session.id}_f${frameNumber}_${timestamp}.png`;
+    const destPath = path.join(snapshotsDir, filename);
+
+    try {
+        fs.copyFileSync(renderedFramePath, destPath);
+    } catch (err) {
+        console.error('[SyncReview] Failed to copy annotated frame:', err.message);
+        return res.status(500).json({ error: 'Failed to save annotated frame' });
+    }
+
+    // Create the note with the annotation image path
+    const text = (noteText && noteText.trim()) || `Annotated frame ${frameNumber}`;
+    const annotationImage = filename; // Relative to review-snapshots dir
+
+    const result = db.prepare(`
+        INSERT INTO review_notes (session_id, asset_id, frame_number, note_text, author, annotation_image)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(session.id, assetId, frameNumber, text, author, annotationImage);
+
+    const noteId = Number(result.lastInsertRowid);
+    const note = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(noteId);
+
+    // Enrich with asset name
+    if (note.asset_id) {
+        try {
+            const asset = db.prepare('SELECT vault_name FROM assets WHERE id = ?').get(note.asset_id);
+            note.asset_name = asset ? asset.vault_name : null;
+        } catch { /* non-critical */ }
+    }
+
+    logActivity('review_note_annotated', 'review_note', noteId,
+        `Annotated frame ${frameNumber} saved to review "${session.title}"`);
+
+    // Broadcast to participants
+    req.app.locals.broadcastChange?.('review_notes', 'insert', { record: note });
+
+    // Clean up temp file (RV created it in a temp dir)
+    try { fs.unlinkSync(renderedFramePath); } catch { /* already cleaned or still needed */ }
+
+    // In spoke mode, forward the note text to hub (not the image — hub can't access local files)
+    const spokeService = req.app.locals.spokeService;
+    if (spokeService) {
+        spokeService.forwardRequest('POST', '/api/sync/write', {
+            method: 'POST',
+            path: '/api/review/hub-note',
+            body: {
+                session_key: session.session_key,
+                asset_id: assetId,
+                frame_number: frameNumber,
+                note_text: text + ' [annotated frame attached on spoke]',
+                author,
+            },
+            spokeName: spokeService.localName,
+        }).catch(err => {
+            console.error('[SyncReview] Failed to forward annotated note to hub:', err.message);
+        });
+    }
+
+    console.log(`[SyncReview] Annotated frame saved: ${filename} (session ${session.id}, frame ${frameNumber})`);
+
+    res.json({
+        success: true,
+        note,
+        snapshotUrl: `/review-snapshots/${filename}`,
+    });
+});
+
+/**
  * PUT /api/review/notes/:noteId — Update a note (edit text or change status).
  * Body: { noteText?, status? }  (status: 'open', 'resolved', 'wontfix')
  */

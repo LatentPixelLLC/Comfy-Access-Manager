@@ -79,9 +79,15 @@ app.use('/thumbnails', (req, res, next) => {
     next();
 }, express.static(path.join(__dirname, '..', 'thumbnails')));
 
+// Serve review annotation snapshots
+app.use('/review-snapshots', (req, res, next) => {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    next();
+}, express.static(path.join(__dirname, '..', 'data', 'review-snapshots')));
+
 // Ensure key folders exist on startup
 const { getSetting } = require('./database');
-['data', 'thumbnails'].forEach(dir => {
+['data', 'thumbnails', path.join('data', 'review-snapshots')].forEach(dir => {
     const p = path.join(__dirname, '..', dir);
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 });

@@ -43,6 +43,7 @@ const LOCAL_ONLY_REGEX = [
     /^\/api\/settings(\/.*)?$/,             // ALL settings writes — vault_root, rv_path, ffmpeg_path, path_mappings, preferences are per-machine
     /^\/api\/export/,                       // FFmpeg transcode — runs locally
     /^\/api\/review\/notes(\/\d+)?$/,       // Review notes — saved locally + forwarded to hub in route handler
+    /^\/api\/review\/notes\/annotated-frame$/,  // Annotated frame from RV — saved locally
 ];
 
 /**

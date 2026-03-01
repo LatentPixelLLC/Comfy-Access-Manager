@@ -441,6 +441,7 @@ function runMigrations(wrapper) {
             note_text TEXT NOT NULL,
             author TEXT NOT NULL,
             status TEXT DEFAULT 'open',
+            annotation_image TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY(session_id) REFERENCES review_sessions(id),
@@ -449,6 +450,16 @@ function runMigrations(wrapper) {
         CREATE INDEX IF NOT EXISTS idx_review_notes_session ON review_notes(session_id);
         CREATE INDEX IF NOT EXISTS idx_review_notes_asset ON review_notes(asset_id);
     `);
+
+    // ─── Migrations: add columns to existing tables ───
+    // annotation_image column for review_notes (stores annotated frame snapshot path)
+    try {
+        const cols = wrapper.pragma('table_info(review_notes)');
+        if (!cols.find(c => c.name === 'annotation_image')) {
+            wrapper.exec(`ALTER TABLE review_notes ADD COLUMN annotation_image TEXT`);
+            console.log('[DB] Added annotation_image column to review_notes');
+        }
+    } catch (e) { /* table might not exist yet — schema above will create it */ }
 
     // Seed default Admin user if users table is empty
     const userCount = wrapper.prepare('SELECT COUNT(*) as count FROM users').get();
