@@ -1370,6 +1370,33 @@ When RV network sync shares a session between Windows and Mac, media paths use t
 ```
 On macOS, these are injected via `open --env KEY=VALUE` flags. On Windows/Linux, via `spawn({ env })`. This is transparent to the user — RV automatically remaps all synced paths.
 
+**Duplicate Connection Prevention (`killExistingRVSync()`):**
+Before launching a new RV sync session, `reviewRoutes.js` calls `killExistingRVSync()` to kill any existing RV processes launched with `-network` flags. Without this, the remote RV rejects the new connection with `"already connected"` because the old TCP session is still in its contact table.
+- macOS: `pkill -f 'MacOS/RV.*-network'` + 1.5s wait for TCP FIN propagation
+- Windows: `taskkill /F /FI "IMAGENAME eq RV.exe"` (kills all RV instances)
+
+**REQUIRED FIX — OpenRV sync.mu `syncFrameChanged` Bug (March 2026):**
+RV's built-in sync plugin (`sync.mu`) has a bug that prevents scrub/frame-step sync while allowing play/stop sync. The fix must be applied to the **installed** `sync.mu` on **every machine** participating in sync review.
+
+Root cause: `syncFrameChanged()` (the handler that receives frame-change events during scrub) gates on `c neq nil` — a contact lookup that silently fails due to session-name mismatch. Other handlers like `syncPlayStart()` and `syncPlayStop()` do NOT have this guard, which is why play/stop sync works but scrubbing doesn't.
+
+**The fix — in the installed `sync.mu`, find the `syncFrameChanged` method and change:**
+```mu
+// BEFORE (broken — drops all frame-change events when contact lookup returns nil):
+if (frame != frame() && c neq nil)
+
+// AFTER (fixed — matches behavior of syncPlayStart/syncPlayStop):
+if (frame != frame())
+```
+
+**File locations:**
+- macOS (OpenRV build): `~/OpenRV/_build/stage/app/RV.app/Contents/PlugIns/Mu/sync.mu`
+- Windows (OpenRV build): `C:\OpenRV\_build\stage\app\plugins\Mu\sync.mu`
+- Windows (installed RV): Check `C:\Program Files\RV\plugins\Mu\sync.mu` or similar
+- Source (reference only): `~/OpenRV/src/plugins/rv-packages/sync/sync.mu`
+
+Search for `c neq nil` in the `syncFrameChanged` method — it's the only sync handler with this unnecessary guard. The variable `c` (SyncContact) is never used in the method body after the check. Back up the file before editing (`cp sync.mu sync.mu.bak`). RV must be restarted after editing (sync.mu is interpreted on load).
+
 **Duplicate Session Prevention:**
 Both `/start` and `/hub-register` auto-end stale active sessions from the same `host_ip` before inserting a new one. After ending stale sessions, they broadcast SSE `update` events for each ended session so spokes remove them from the active list. Without this broadcast, spokes accumulate duplicate "active" sessions.
 
@@ -1524,6 +1551,8 @@ Port 7700 must be open between hub and spokes. On Windows, the first server star
 | `cd4df76` | fix: RV crash on macOS — reorder findRV() to check OpenRV builds before /Applications/RV.app; auto-end stale sessions; clearer UI |
 | `f6788a5` | feat: RV cross-platform path swap via RV_OS_PATH env vars — reads path_mappings, injects via `open --env` on macOS |
 | `8eacba0` | fix: Duplicate sessions on spokes — broadcast auto-ended sessions to spokes via SSE update events |
+| `765b6e5` | fix: RV sync duplicate connection — `killExistingRVSync()` kills prior RV before reconnect; `RV_PATHSWAP_CAM_N` env vars |
+| — | **fix: OpenRV sync.mu `syncFrameChanged` bug — remove `c neq nil` guard to enable scrub sync (applied to installed sync.mu, not in git)** |
 
 ---
 
