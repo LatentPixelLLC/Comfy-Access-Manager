@@ -2690,10 +2690,31 @@ router.post('/spoke-register', (req, res) => {
             a.thumbnail_path || null
         );
 
-        logActivity('spoke_register', 'asset', result.lastInsertRowid,
+        const newId = Number(result.lastInsertRowid);
+
+        logActivity('spoke_register', 'asset', newId,
             `Asset registered from spoke: ${a.vault_name}`);
 
-        res.json({ success: true, id: Number(result.lastInsertRowid) });
+        // Generate thumbnail on hub side — file should be accessible via NAS path mapping
+        if (a.file_path) {
+            const localPath = resolveFilePath(a.file_path);
+            if (localPath && fs.existsSync(localPath)) {
+                ThumbnailService.generate(localPath, newId)
+                    .then(thumbPath => {
+                        if (thumbPath) {
+                            const thumbName = path.basename(thumbPath);
+                            db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?')
+                                .run(thumbName, newId);
+                            console.log(`[spoke-register] Thumbnail generated for asset ${newId}`);
+                        }
+                    })
+                    .catch(err => console.error(`[spoke-register] Thumbnail error: ${err.message}`));
+            } else {
+                console.log(`[spoke-register] File not accessible locally, skipping thumbnail: ${a.file_path}`);
+            }
+        }
+
+        res.json({ success: true, id: newId });
     } catch (err) {
         console.error('[spoke-register] Error:', err.message);
         res.status(500).json({ error: err.message });
