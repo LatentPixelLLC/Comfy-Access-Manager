@@ -3411,6 +3411,29 @@ label:has(input[type="checkbox"]) {
     border-radius: 4px;
 }
 .review-panel-close:hover { background: rgba(255,255,255,0.1); }
+.review-filter-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border-color, #333);
+    font-size: 0.75rem;
+    color: var(--text-muted, #888);
+    background: rgba(255,255,255,0.02);
+}
+.review-filter-label { white-space: nowrap; }
+.review-filter-btn {
+    background: rgba(33, 150, 243, 0.15);
+    color: #64b5f6;
+    border: 1px solid rgba(33, 150, 243, 0.3);
+    border-radius: 4px;
+    padding: 2px 10px;
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 600;
+    transition: background 0.2s;
+}
+.review-filter-btn:hover { background: rgba(33, 150, 243, 0.25); }
 .review-panel-body {
     overflow-y: auto;
     padding: 8px;
@@ -3470,6 +3493,37 @@ label:has(input[type="checkbox"]) {
 }
 .review-session-meta strong {
     color: var(--text-color, #ccc);
+}
+.review-project-group {
+    margin-bottom: 4px;
+}
+.review-project-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #64b5f6;
+    padding: 6px 4px 2px;
+    margin-bottom: 2px;
+}
+.review-project-badge {
+    display: inline-block;
+    background: rgba(33, 150, 243, 0.15);
+    color: #64b5f6;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    border: 1px solid rgba(33, 150, 243, 0.25);
+}
+.review-session-assets {
+    font-size: 0.75rem;
+    color: var(--text-muted, #999);
+    padding: 3px 0 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .review-session-info {
     display: flex;

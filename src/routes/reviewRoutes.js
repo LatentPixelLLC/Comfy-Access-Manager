@@ -167,16 +167,47 @@ function resolveAssetPaths(assetIds) {
 // ═══════════════════════════════════════════
 router.get('/sessions', (req, res) => {
     const db = getDb();
-    const sessions = db.prepare(
-        `SELECT * FROM review_sessions WHERE status = 'active' ORDER BY started_at DESC`
-    ).all();
+    const projectFilter = req.query.project_id ? parseInt(req.query.project_id, 10) : null;
 
-    // Parse asset_ids JSON (guard against scalars from malformed DB entries)
+    let sessions;
+    if (projectFilter) {
+        sessions = db.prepare(
+            `SELECT * FROM review_sessions WHERE status = 'active' AND project_id = ? ORDER BY started_at DESC`
+        ).all(projectFilter);
+    } else {
+        sessions = db.prepare(
+            `SELECT * FROM review_sessions WHERE status = 'active' ORDER BY started_at DESC`
+        ).all();
+    }
+
+    // Enrich sessions with project name and asset details
     for (const s of sessions) {
+        // Parse asset_ids JSON (guard against scalars from malformed DB entries)
         try {
             const parsed = JSON.parse(s.asset_ids || '[]');
             s.asset_ids = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
         } catch { s.asset_ids = []; }
+
+        // Add project name
+        if (s.project_id) {
+            try {
+                const proj = db.prepare('SELECT name, code FROM projects WHERE id = ?').get(s.project_id);
+                s.project_name = proj ? proj.name : null;
+                s.project_code = proj ? proj.code : null;
+            } catch { /* non-critical */ }
+        }
+
+        // Add asset summaries (name + type) for display
+        if (s.asset_ids.length > 0) {
+            try {
+                const placeholders = s.asset_ids.map(() => '?').join(',');
+                s.assets = db.prepare(
+                    `SELECT id, vault_name, media_type FROM assets WHERE id IN (${placeholders})`
+                ).all(...s.asset_ids);
+            } catch { s.assets = []; }
+        } else {
+            s.assets = [];
+        }
     }
 
     res.json({ sessions });
@@ -255,6 +286,18 @@ router.post('/start', (req, res) => {
     // Get user info
     const userName = req.headers['x-cam-user'] || 'Unknown';
 
+    // Determine project context from the assets being reviewed
+    let projectId = null;
+    let projectName = null;
+    try {
+        const firstAsset = db.prepare('SELECT project_id FROM assets WHERE id = ?').get(assetIds[0]);
+        if (firstAsset && firstAsset.project_id) {
+            projectId = firstAsset.project_id;
+            const proj = db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId);
+            if (proj) projectName = proj.name;
+        }
+    } catch (e) { /* non-critical */ }
+
     // Launch RV with network sync enabled (as host)
     try {
         launchRVAsHost(rvExe, filePaths, networkPort);
@@ -265,9 +308,9 @@ router.post('/start', (req, res) => {
     // Register session in DB
     const sessionTitle = title || `Review by ${userName}`;
     const result = db.prepare(`
-        INSERT INTO review_sessions (session_key, host_name, host_ip, host_port, status, asset_ids, title, started_by)
-        VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
-    `).run(sessionKey, hostName, hostIp, networkPort, JSON.stringify(assetIds), sessionTitle, userName);
+        INSERT INTO review_sessions (session_key, host_name, host_ip, host_port, status, asset_ids, title, started_by, project_id)
+        VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
+    `).run(sessionKey, hostName, hostIp, networkPort, JSON.stringify(assetIds), sessionTitle, userName, projectId);
 
     const sessionId = Number(result.lastInsertRowid);
 
@@ -294,6 +337,7 @@ router.post('/start', (req, res) => {
                 asset_ids: assetIds,
                 title: sessionTitle,
                 started_by: userName,
+                project_id: projectId,
             },
             spokeName: spokeService.localName,
         }).then(() => {
@@ -638,7 +682,7 @@ function launchRVAsClient(rvExe, hostIp, hostPort, filePaths) {
  * Called by the spoke's /start handler via forwardRequest.
  */
 router.post('/hub-register', (req, res) => {
-    const { session_key, host_name, host_ip, host_port, asset_ids, title, started_by } = req.body || {};
+    const { session_key, host_name, host_ip, host_port, asset_ids, title, started_by, project_id } = req.body || {};
 
     if (!session_key || !host_ip) {
         return res.status(400).json({ error: 'Missing session_key or host_ip' });
@@ -660,10 +704,10 @@ router.post('/hub-register', (req, res) => {
     }
 
     const result = db.prepare(`
-        INSERT OR REPLACE INTO review_sessions (session_key, host_name, host_ip, host_port, status, asset_ids, title, started_by)
-        VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+        INSERT OR REPLACE INTO review_sessions (session_key, host_name, host_ip, host_port, status, asset_ids, title, started_by, project_id)
+        VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
     `).run(session_key, host_name || 'unknown', host_ip, host_port || 45128,
-           JSON.stringify(asset_ids || []), title || 'Sync Review', started_by || 'Unknown');
+           JSON.stringify(asset_ids || []), title || 'Sync Review', started_by || 'Unknown', project_id || null);
 
     const sessionId = Number(result.lastInsertRowid);
 

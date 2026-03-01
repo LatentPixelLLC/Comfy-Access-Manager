@@ -12,6 +12,7 @@ import { showToast } from './utils.js';
 // ─── State ───
 let activeReviews = [];
 let pollTimer = null;
+let filterProjectId = null;  // null = show all, number = filter to project
 const POLL_INTERVAL = 10000; // 10 seconds
 
 // ─── API ───
@@ -21,7 +22,8 @@ const POLL_INTERVAL = 10000; // 10 seconds
  */
 async function fetchReviews() {
     try {
-        const data = await api('/api/review/sessions');
+        const params = filterProjectId ? `?project_id=${filterProjectId}` : '';
+        const data = await api(`/api/review/sessions${params}`);
         activeReviews = data.sessions || [];
         renderReviewPanel();
         updateBadge();
@@ -114,37 +116,95 @@ function renderReviewPanel() {
     if (!container) return;
 
     if (activeReviews.length === 0) {
-        container.innerHTML = '<div class="review-empty">No active review sessions</div>';
+        container.innerHTML = `<div class="review-empty">No active review sessions${filterProjectId ? ' for this project' : ''}</div>`;
         return;
     }
 
-    let html = '';
+    // Group sessions by project
+    const grouped = {};
+    const noProject = [];
     for (const session of activeReviews) {
-        const assetCount = Array.isArray(session.asset_ids) ? session.asset_ids.length : 0;
-        const startedAgo = formatTimeAgo(session.started_at);
-        const isLocalHost = (session.host_name === location.hostname);
+        if (session.project_name) {
+            if (!grouped[session.project_name]) grouped[session.project_name] = [];
+            grouped[session.project_name].push(session);
+        } else {
+            noProject.push(session);
+        }
+    }
 
-        html += `
-        <div class="review-session-card" data-session-id="${session.id}">
-            <div class="review-session-header">
-                <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
-                <span class="review-session-status">● LIVE</span>
-            </div>
-            <div class="review-session-meta">
-                <span>Host: <strong>${escHtml(session.host_name)}</strong></span>
-                <span>${assetCount} asset${assetCount !== 1 ? 's' : ''}</span>
-                <span>${startedAgo}</span>
-            </div>
-            <div class="review-session-actions">
-                <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Opens RV on your machine and connects to the host's synced session">
-                    ▶ Join &amp; Launch RV
-                </button>
-                <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session for all participants">✕ End</button>
-            </div>
-        </div>`;
+    let html = '';
+
+    // Render grouped by project
+    for (const [projectName, sessions] of Object.entries(grouped)) {
+        html += `<div class="review-project-group">`;
+        html += `<div class="review-project-label">${escHtml(projectName)}</div>`;
+        for (const session of sessions) {
+            html += renderSessionCard(session);
+        }
+        html += `</div>`;
+    }
+
+    // Render ungrouped sessions
+    if (noProject.length > 0 && Object.keys(grouped).length > 0) {
+        html += `<div class="review-project-group">`;
+        html += `<div class="review-project-label" style="opacity:0.5">Other</div>`;
+        for (const session of noProject) {
+            html += renderSessionCard(session);
+        }
+        html += `</div>`;
+    } else {
+        for (const session of noProject) {
+            html += renderSessionCard(session);
+        }
     }
 
     container.innerHTML = html;
+}
+
+/**
+ * Render a single review session card with asset details.
+ */
+function renderSessionCard(session) {
+    const assetCount = Array.isArray(session.asset_ids) ? session.asset_ids.length : 0;
+    const startedAgo = formatTimeAgo(session.started_at);
+
+    // Build asset name list (show up to 3 names, then "+N more")
+    let assetNames = '';
+    if (session.assets && session.assets.length > 0) {
+        const maxShow = 3;
+        const shown = session.assets.slice(0, maxShow);
+        const names = shown.map(a => escHtml(a.vault_name || `Asset #${a.id}`)).join(', ');
+        const remaining = session.assets.length - maxShow;
+        assetNames = remaining > 0 ? `${names} +${remaining} more` : names;
+    } else if (assetCount > 0) {
+        assetNames = `${assetCount} asset${assetCount !== 1 ? 's' : ''}`;
+    }
+
+    // Project badge
+    const projectBadge = session.project_name
+        ? `<span class="review-project-badge">${escHtml(session.project_code || session.project_name)}</span>`
+        : '';
+
+    return `
+    <div class="review-session-card" data-session-id="${session.id}">
+        <div class="review-session-header">
+            <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
+            <span class="review-session-status">\u25CF LIVE</span>
+        </div>
+        <div class="review-session-meta">
+            ${projectBadge}
+            <span>Host: <strong>${escHtml(session.host_name)}</strong></span>
+            <span>by <strong>${escHtml(session.started_by || 'Unknown')}</strong></span>
+            <span>${startedAgo}</span>
+        </div>
+        ${assetNames ? `<div class="review-session-assets" title="${escHtml(assetNames)}">\uD83C\uDFAC ${assetNames}</div>` : ''}
+        <div class="review-session-actions">
+            <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Opens RV on your machine and connects to the host's synced session">
+                \u25B6 Join &amp; Launch RV
+            </button>
+            <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session for all participants">\u2715 End</button>
+        </div>
+    </div>`;
 }
 
 /**
@@ -177,7 +237,67 @@ function toggleReviewPanel() {
     if (!panel) return;
     const isVisible = panel.style.display !== 'none';
     panel.style.display = isVisible ? 'none' : '';
-    if (!isVisible) fetchReviews();
+    if (!isVisible) {
+        // Auto-set filter to current project if user is in a project view
+        autoSetProjectFilter();
+        fetchReviews();
+    }
+}
+
+/**
+ * Auto-set the project filter based on the user's current project context.
+ * If they're browsing a project, default to filtering that project's sessions.
+ */
+async function autoSetProjectFilter() {
+    try {
+        const { state } = await import('./state.js');
+        if (state.currentProject && state.currentProject.id) {
+            filterProjectId = state.currentProject.id;
+        } else {
+            filterProjectId = null;
+        }
+        renderFilterBar();
+    } catch {
+        filterProjectId = null;
+        renderFilterBar();
+    }
+}
+
+/**
+ * Render the filter bar inside the review panel header area.
+ */
+function renderFilterBar() {
+    const bar = document.getElementById('reviewFilterBar');
+    if (!bar) return;
+
+    if (filterProjectId) {
+        bar.innerHTML = `
+            <span class="review-filter-label">Filtered to current project</span>
+            <button class="review-filter-btn" onclick="clearReviewFilter()" title="Show all reviews across all projects">Show All</button>
+        `;
+        bar.style.display = '';
+    } else {
+        bar.innerHTML = `<span class="review-filter-label" style="opacity:0.5">Showing all projects</span>`;
+        bar.style.display = '';
+    }
+}
+
+/**
+ * Clear the project filter — show all reviews.
+ */
+function clearReviewFilter() {
+    filterProjectId = null;
+    renderFilterBar();
+    fetchReviews();
+}
+
+/**
+ * Set the filter to a specific project.
+ */
+function setReviewProjectFilter(projectId) {
+    filterProjectId = projectId || null;
+    renderFilterBar();
+    fetchReviews();
 }
 
 
@@ -241,6 +361,8 @@ window.joinReview = joinReview;
 window.endReview = endReview;
 window.toggleReviewPanel = toggleReviewPanel;
 window.startSyncReviewFromSelection = startSyncReviewFromSelection;
+window.clearReviewFilter = clearReviewFilter;
+window.setReviewProjectFilter = setReviewProjectFilter;
 
 // ─── Init ───
 // Start polling when module loads
