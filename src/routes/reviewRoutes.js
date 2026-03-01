@@ -181,6 +181,7 @@ router.get('/sessions', (req, res) => {
     }
 
     // Enrich sessions with project name and asset details
+    const localIp = getLocalIP();
     for (const s of sessions) {
         // Parse asset_ids JSON (guard against scalars from malformed DB entries)
         try {
@@ -208,6 +209,9 @@ router.get('/sessions', (req, res) => {
         } else {
             s.assets = [];
         }
+
+        // Mark whether this machine is the session host (for End vs Leave UI)
+        s.is_owner = (s.host_ip === localIp);
     }
 
     res.json({ sessions });
@@ -415,8 +419,44 @@ router.post('/join', (req, res) => {
 
 
 // ═══════════════════════════════════════════
-//  POST /api/review/end — End a review session (host side)
+//  POST /api/review/leave — Leave a review session (client side)
+//  Kills the local RV sync process without ending the session.
 //  Body: { sessionId: number }
+// ═══════════════════════════════════════════
+router.post('/leave', (req, res) => {
+    const { sessionId } = req.body || {};
+
+    if (!sessionId) {
+        return res.status(400).json({ error: 'Provide a sessionId' });
+    }
+
+    const db = getDb();
+    const session = db.prepare(
+        `SELECT * FROM review_sessions WHERE id = ? AND status = 'active'`
+    ).get(sessionId);
+
+    if (!session) {
+        return res.status(404).json({ error: 'Session not found or no longer active' });
+    }
+
+    // Kill local RV process (client mode) — the session stays active for others
+    killExistingRVSync();
+
+    const userName = req.headers['x-cam-user'] || 'Unknown';
+    logActivity('review_leave', 'review_session', session.id,
+        `${userName} left sync review: ${session.title}`);
+
+    res.json({
+        success: true,
+        message: `Left review "${session.title}" — your RV has been disconnected`,
+    });
+});
+
+
+// ═══════════════════════════════════════════
+//  POST /api/review/end — End a review session (host only)
+//  Body: { sessionId: number }
+//  Only the machine that started the session can end it.
 // ═══════════════════════════════════════════
 router.post('/end', (req, res) => {
     const { sessionId } = req.body || {};
@@ -432,6 +472,14 @@ router.post('/end', (req, res) => {
 
     if (!session) {
         return res.status(404).json({ error: 'Session not found or already ended' });
+    }
+
+    // Only the originating machine can end the session
+    const localIp = getLocalIP();
+    if (session.host_ip !== localIp) {
+        return res.status(403).json({
+            error: 'Only the session host can end this review. Use "Leave" to disconnect.',
+        });
     }
 
     db.prepare(`UPDATE review_sessions SET status = 'ended', ended_at = datetime('now') WHERE id = ?`)

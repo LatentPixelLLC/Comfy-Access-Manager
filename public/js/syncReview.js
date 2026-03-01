@@ -101,7 +101,27 @@ async function endReview(sessionId) {
             showToast(res.error || 'Failed to end review', 5000);
         }
     } catch (err) {
-        showToast('Failed to end review: ' + err.message, 5000);
+        showToast(err.message || 'Failed to end review', 5000);
+    }
+}
+
+/**
+ * Leave a review session (non-host). Kills local RV but keeps the session alive for others.
+ */
+async function leaveReview(sessionId) {
+    try {
+        const res = await api('/api/review/leave', {
+            method: 'POST',
+            body: { sessionId }
+        });
+
+        if (res.success) {
+            showToast(res.message || 'Left review session', 3000);
+        } else {
+            showToast(res.error || 'Failed to leave review', 5000);
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to leave review', 5000);
     }
 }
 
@@ -185,10 +205,26 @@ function renderSessionCard(session) {
         ? `<span class="review-project-badge">${escHtml(session.project_code || session.project_name)}</span>`
         : '';
 
+    // Action buttons: host sees "End", others see "Leave"
+    let actionButtons;
+    if (session.is_owner) {
+        actionButtons = `
+            <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session for all participants">\u2715 End Session</button>
+        `;
+    } else {
+        actionButtons = `
+            <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Opens RV on your machine and connects to the host's synced session">
+                \u25B6 Join &amp; Launch RV
+            </button>
+            <button class="btn-small btn-leave" onclick="leaveReview(${session.id})" title="Disconnect your RV — the session stays active for others">\u21A9 Leave</button>
+        `;
+    }
+
     return `
-    <div class="review-session-card" data-session-id="${session.id}">
+    <div class="review-session-card${session.is_owner ? ' review-session-owned' : ''}" data-session-id="${session.id}">
         <div class="review-session-header">
             <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
+            ${session.is_owner ? '<span class="review-session-owner-badge">YOUR SESSION</span>' : ''}
             <span class="review-session-status">\u25CF LIVE</span>
         </div>
         <div class="review-session-meta">
@@ -199,10 +235,7 @@ function renderSessionCard(session) {
         </div>
         ${assetNames ? `<div class="review-session-assets" title="${escHtml(assetNames)}">\uD83C\uDFAC ${assetNames}</div>` : ''}
         <div class="review-session-actions">
-            <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Opens RV on your machine and connects to the host's synced session">
-                \u25B6 Join &amp; Launch RV
-            </button>
-            <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session for all participants">\u2715 End</button>
+            ${actionButtons}
         </div>
     </div>`;
 }
@@ -359,6 +392,7 @@ async function startSyncReviewFromSelection() {
 window.startSyncReview = startSyncReview;
 window.joinReview = joinReview;
 window.endReview = endReview;
+window.leaveReview = leaveReview;
 window.toggleReviewPanel = toggleReviewPanel;
 window.startSyncReviewFromSelection = startSyncReviewFromSelection;
 window.clearReviewFilter = clearReviewFilter;
