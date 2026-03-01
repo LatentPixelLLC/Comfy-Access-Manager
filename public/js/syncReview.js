@@ -122,25 +122,24 @@ function renderReviewPanel() {
     for (const session of activeReviews) {
         const assetCount = Array.isArray(session.asset_ids) ? session.asset_ids.length : 0;
         const startedAgo = formatTimeAgo(session.started_at);
+        const isLocalHost = (session.host_name === location.hostname);
 
         html += `
         <div class="review-session-card" data-session-id="${session.id}">
             <div class="review-session-header">
                 <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
-                <span class="review-session-status">LIVE</span>
+                <span class="review-session-status">● LIVE</span>
             </div>
             <div class="review-session-meta">
                 <span>Host: <strong>${escHtml(session.host_name)}</strong></span>
                 <span>${assetCount} asset${assetCount !== 1 ? 's' : ''}</span>
-                <span>Started ${startedAgo}</span>
-            </div>
-            <div class="review-session-info">
-                <span class="review-session-endpoint">${session.host_ip}:${session.host_port}</span>
-                <span class="review-session-by">by ${escHtml(session.started_by || 'Unknown')}</span>
+                <span>${startedAgo}</span>
             </div>
             <div class="review-session-actions">
-                <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Launch your local RV and connect to this review session">Join Review</button>
-                <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session">End</button>
+                <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Opens RV on your machine and connects to the host's synced session">
+                    ▶ Join &amp; Launch RV
+                </button>
+                <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session for all participants">✕ End</button>
             </div>
         </div>`;
     }

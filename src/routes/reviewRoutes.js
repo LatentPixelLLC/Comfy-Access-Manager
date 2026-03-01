@@ -103,6 +103,14 @@ function findRV() {
         const openrvBuild = 'C:\\OpenRV\\_build\\stage\\app\\bin\\rv.exe';
         if (fs.existsSync(openrvBuild)) return openrvBuild;
     } else if (isMac) {
+        // Check OpenRV local builds FIRST (they tend to be newer/working)
+        const homedir = os.homedir();
+        const macBuilds = [
+            path.join(homedir, 'OpenRV', '_build', 'stage', 'app', 'RV.app', 'Contents', 'MacOS', 'RV'),
+            path.join(homedir, 'OpenRV', '_install', 'RV.app', 'Contents', 'MacOS', 'RV'),
+        ];
+        for (const p of macBuilds) { if (fs.existsSync(p)) return p; }
+        // Standard install locations
         const candidates = [
             '/Applications/RV.app/Contents/MacOS/RV',
             '/Applications/Autodesk/RV.app/Contents/MacOS/RV',
@@ -114,12 +122,6 @@ function findRV() {
                 if (fs.existsSync(exe)) return exe;
             }
         } catch (e) { /* ignore */ }
-        const homedir = os.homedir();
-        const macBuilds = [
-            path.join(homedir, 'OpenRV', '_build', 'stage', 'app', 'RV.app', 'Contents', 'MacOS', 'RV'),
-            path.join(homedir, 'OpenRV', '_install', 'RV.app', 'Contents', 'MacOS', 'RV'),
-        ];
-        for (const p of macBuilds) { if (fs.existsSync(p)) return p; }
     } else {
         const candidates = ['/usr/local/rv/bin/rv', '/opt/rv/bin/rv', '/usr/local/bin/rv', '/usr/bin/rv'];
         for (const c of candidates) { if (fs.existsSync(c)) return c; }
@@ -230,6 +232,10 @@ router.post('/start', (req, res) => {
     const sessionKey = crypto.randomUUID();
     const hostName = os.hostname();
     const db = getDb();
+
+    // Auto-end any existing active sessions from this host (prevents duplicates)
+    db.prepare(`UPDATE review_sessions SET status = 'ended', ended_at = datetime('now') WHERE status = 'active' AND host_ip = ?`)
+        .run(hostIp);
 
     // Resolve asset file paths for RV
     const filePaths = resolveAssetPaths(assetIds);
@@ -415,12 +421,31 @@ router.post('/end', (req, res) => {
  * Uses `-networkPort` to open a sync server.
  */
 function launchRVAsHost(rvExe, filePaths, networkPort) {
-    const { spawn } = require('child_process');
+    const { execFile, spawn } = require('child_process');
+    const rvArgs = ['-network', '-networkPort', String(networkPort), ...filePaths];
 
-    // Launch RV directly (spawn) on all platforms.
-    // macOS `open -a --args` doesn't reliably forward args to the app.
-    const args = ['-network', '-networkPort', String(networkPort), ...filePaths];
-    const child = spawn(rvExe, args, {
+    if (process.platform === 'darwin') {
+        // macOS: RV needs app-bundle context to run properly.
+        // Use `open -n -a <bundle> --args ...` — the -n flag forces a new instance
+        // and reliably passes all arguments (unlike plain `open -a`).
+        let appBundle = null;
+        let dir = rvExe;
+        for (let i = 0; i < 5; i++) {
+            dir = path.dirname(dir);
+            if (dir.endsWith('.app')) { appBundle = dir; break; }
+        }
+        if (appBundle) {
+            const args = ['-n', '-a', appBundle, '--args', ...rvArgs];
+            execFile('/usr/bin/open', args, (err) => {
+                if (err) console.error(`[RV Sync Host] open error:`, err.message);
+            });
+            console.log(`[RV Sync] Host launched via 'open -n -a' (macOS), port ${networkPort}, ${filePaths.length} file(s)`);
+            return;
+        }
+    }
+
+    // Windows / Linux or fallback
+    const child = spawn(rvExe, rvArgs, {
         cwd: path.dirname(rvExe),
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -448,12 +473,31 @@ function launchRVAsHost(rvExe, filePaths, networkPort) {
  * Also loads the same media files locally (RV sync shares state, not pixels).
  */
 function launchRVAsClient(rvExe, hostIp, hostPort, filePaths) {
-    const { spawn } = require('child_process');
+    const { execFile, spawn } = require('child_process');
+    const rvArgs = ['-network', '-networkConnect', hostIp, String(hostPort), ...filePaths];
 
-    // Launch RV directly (spawn) on all platforms.
-    // macOS `open -a --args` doesn't reliably forward args to the app.
-    const args = ['-network', '-networkConnect', hostIp, String(hostPort), ...filePaths];
-    const child = spawn(rvExe, args, {
+    if (process.platform === 'darwin') {
+        // macOS: RV needs app-bundle context to run properly.
+        // Use `open -n -a <bundle> --args ...` — the -n flag forces a new instance
+        // and reliably passes all arguments (unlike plain `open -a`).
+        let appBundle = null;
+        let dir = rvExe;
+        for (let i = 0; i < 5; i++) {
+            dir = path.dirname(dir);
+            if (dir.endsWith('.app')) { appBundle = dir; break; }
+        }
+        if (appBundle) {
+            const args = ['-n', '-a', appBundle, '--args', ...rvArgs];
+            execFile('/usr/bin/open', args, (err) => {
+                if (err) console.error(`[RV Sync Client] open error:`, err.message);
+            });
+            console.log(`[RV Sync] Client launched via 'open -n -a' (macOS), connecting to ${hostIp}:${hostPort}`);
+            return;
+        }
+    }
+
+    // Windows / Linux or fallback
+    const child = spawn(rvExe, rvArgs, {
         cwd: path.dirname(rvExe),
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -493,6 +537,10 @@ router.post('/hub-register', (req, res) => {
     }
 
     const db = getDb();
+
+    // Auto-end any existing active sessions from this host (prevents duplicates)
+    db.prepare(`UPDATE review_sessions SET status = 'ended', ended_at = datetime('now') WHERE status = 'active' AND host_ip = ?`)
+        .run(host_ip);
 
     const result = db.prepare(`
         INSERT OR REPLACE INTO review_sessions (session_key, host_name, host_ip, host_port, status, asset_ids, title, started_by)
