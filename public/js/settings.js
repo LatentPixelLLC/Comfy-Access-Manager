@@ -1494,6 +1494,50 @@ async function saveSyncConfig() {
 }
 
 // ===========================================
+//  SCAN FOR HUB (spoke auto-discovery)
+// ===========================================
+
+async function scanForHub() {
+    const resultsEl = document.getElementById('syncHubScanResults');
+    if (!resultsEl) return;
+
+    resultsEl.style.display = 'block';
+    resultsEl.innerHTML = '<span style="color:var(--text-secondary);">Scanning network for hubs…</span>';
+
+    try {
+        const data = await api('/api/servers/discover?timeout=3000');
+        const servers = data.servers || [];
+        const hubs = servers.filter(s => s.mode === 'hub');
+
+        if (hubs.length === 0) {
+            resultsEl.innerHTML = '<span style="color:var(--warning);">No hub found on this network. Make sure the hub is running.</span>';
+            return;
+        }
+
+        resultsEl.innerHTML = hubs.map(h => {
+            const label = `${esc(h.name || h.hostname)} (${esc(h.ip)}:${h.port})`;
+            return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <span class="server-dot server-dot-active" style="width:8px;height:8px;border-radius:50;background:var(--success);display:inline-block;"></span>
+                <span>${label}</span>
+                <button onclick="selectHub('${esc(h.url)}')">Use This Hub</button>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        resultsEl.innerHTML = `<span style="color:var(--danger);">Scan failed: ${esc(err.message)}</span>`;
+    }
+}
+
+function selectHub(url) {
+    const urlEl = document.getElementById('syncHubUrl');
+    if (urlEl) urlEl.value = url;
+    const resultsEl = document.getElementById('syncHubScanResults');
+    if (resultsEl) {
+        resultsEl.innerHTML = '<span style="color:var(--success);">Hub selected ✓</span>';
+        setTimeout(() => { resultsEl.style.display = 'none'; }, 2000);
+    }
+}
+
+// ===========================================
 //  EXPOSE ON WINDOW (for HTML onclick handlers)
 // ===========================================
 
@@ -1546,6 +1590,8 @@ window.saveUserPin = saveUserPin;
 window.removeUserPin = removeUserPin;
 window.onSyncModeChange = onSyncModeChange;
 window.saveSyncConfig = saveSyncConfig;
+window.scanForHub = scanForHub;
+window.selectHub = selectHub;
 
 
 

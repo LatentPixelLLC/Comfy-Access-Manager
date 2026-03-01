@@ -227,6 +227,7 @@ async function start() {
                 version,
                 port: PORT,
                 assetCount,
+                mode: APP_MODE,
             });
         } catch (err) {
             console.log('[Discovery] Deferred:', err.message);

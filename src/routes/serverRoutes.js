@@ -24,6 +24,9 @@ router.get('/info', (req, res) => {
     const projectCount = db.prepare('SELECT COUNT(*) as count FROM projects').get().count;
     const vaultRoot = getSetting('vault_root');
 
+    const { loadConfig } = require('../database');
+    const config = loadConfig();
+
     res.json({
         name: getSetting('server_name') || os.hostname(),
         hostname: os.hostname(),
@@ -34,6 +37,7 @@ router.get('/info', (req, res) => {
         assets: assetCount,
         projects: projectCount,
         vaultRoot: vaultRoot || null,
+        mode: config.mode || 'standalone',
     });
 });
 

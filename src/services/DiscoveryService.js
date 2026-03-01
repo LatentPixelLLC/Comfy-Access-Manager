@@ -90,6 +90,7 @@ function start(info) {
                         port: serverInfo.port,
                         assets: serverInfo.assetCount || 0,
                         ip: getLocalIPs(),
+                        mode: serverInfo.mode || 'standalone',
                     });
                     const buf = Buffer.from(response);
                     server.send(buf, 0, buf.length, rinfo.port, rinfo.address);
@@ -149,6 +150,7 @@ function discover(timeoutMs = 2000) {
                         port: data.port,
                         url: `http://${remoteIP}:${data.port}`,
                         assets: data.assets,
+                        mode: data.mode || 'standalone',
                     });
                 }
             } catch { /* ignore */ }
