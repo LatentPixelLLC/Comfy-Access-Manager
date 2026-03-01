@@ -133,7 +133,9 @@ function findRV() {
 function resolveAssetPaths(assetIds) {
     const db = getDb();
     const filePaths = [];
-    for (const id of assetIds) {
+    // Ensure assetIds is always an array (guard against JSON parse returning a scalar)
+    const ids = Array.isArray(assetIds) ? assetIds : (assetIds ? [assetIds] : []);
+    for (const id of ids) {
         const asset = db.prepare(
             'SELECT file_path, is_sequence, frame_pattern, frame_start, frame_end FROM assets WHERE id = ?'
         ).get(id);
@@ -167,9 +169,12 @@ router.get('/sessions', (req, res) => {
         `SELECT * FROM review_sessions WHERE status = 'active' ORDER BY started_at DESC`
     ).all();
 
-    // Parse asset_ids JSON
+    // Parse asset_ids JSON (guard against scalars from malformed DB entries)
     for (const s of sessions) {
-        try { s.asset_ids = JSON.parse(s.asset_ids || '[]'); } catch { s.asset_ids = []; }
+        try {
+            const parsed = JSON.parse(s.asset_ids || '[]');
+            s.asset_ids = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+        } catch { s.asset_ids = []; }
     }
 
     res.json({ sessions });
@@ -255,8 +260,8 @@ router.post('/start', (req, res) => {
         `Sync review started: ${sessionTitle} (${assetIds.length} assets)`);
 
     // Broadcast to spokes via SSE (hub mode)
+    // Keep asset_ids as a JSON string so spoke's _applyChange stores it correctly in SQLite
     const session = db.prepare('SELECT * FROM review_sessions WHERE id = ?').get(sessionId);
-    try { session.asset_ids = JSON.parse(session.asset_ids || '[]'); } catch { session.asset_ids = []; }
 
     req.app.locals.broadcastChange?.('review_sessions', 'insert', { record: session });
 
@@ -326,7 +331,10 @@ router.post('/join', (req, res) => {
 
     // Resolve files locally (may differ from host due to path mappings)
     let assetIds = [];
-    try { assetIds = JSON.parse(session.asset_ids || '[]'); } catch { /* empty */ }
+    try {
+        const parsed = JSON.parse(session.asset_ids || '[]');
+        assetIds = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+    } catch { /* empty */ }
     const filePaths = resolveAssetPaths(assetIds);
 
     // Launch RV as sync client — it will connect to the host's session
@@ -374,8 +382,8 @@ router.post('/end', (req, res) => {
         `Sync review ended: ${session.title}`);
 
     // Broadcast session end to all spokes
+    // Keep asset_ids as a JSON string so spoke's _applyChange stores it correctly in SQLite
     const updated = db.prepare('SELECT * FROM review_sessions WHERE id = ?').get(sessionId);
-    try { updated.asset_ids = JSON.parse(updated.asset_ids || '[]'); } catch { updated.asset_ids = []; }
 
     req.app.locals.broadcastChange?.('review_sessions', 'update', { record: updated });
 
@@ -535,8 +543,8 @@ router.post('/hub-register', (req, res) => {
         `Spoke review registered: ${title} from ${host_name}`);
 
     // Broadcast to all connected spokes so they see the review
+    // Keep asset_ids as a JSON string so spoke's _applyChange stores it correctly in SQLite
     const session = db.prepare('SELECT * FROM review_sessions WHERE id = ?').get(sessionId);
-    try { session.asset_ids = JSON.parse(session.asset_ids || '[]'); } catch { session.asset_ids = []; }
     req.app.locals.broadcastChange?.('review_sessions', 'insert', { record: session });
 
     console.log(`[SyncReview] Hub registered spoke review: "${title}" at ${host_ip}:${host_port}`);
