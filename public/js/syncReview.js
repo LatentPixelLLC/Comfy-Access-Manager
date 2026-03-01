@@ -13,6 +13,11 @@ import { showToast } from './utils.js';
 let activeReviews = [];
 let pollTimer = null;
 let filterProjectId = null;  // null = show all, number = filter to project
+let currentTab = 'active';   // 'active' | 'history' | 'notes'
+let historyLoaded = false;
+let historySessions = [];
+let currentNotesSessionId = null;  // which session's notes are being viewed
+let currentNotes = [];
 const POLL_INTERVAL = 10000; // 10 seconds
 
 // ─── API ───
@@ -125,6 +130,135 @@ async function leaveReview(sessionId) {
     }
 }
 
+// ─── Notes API ───
+
+/**
+ * Fetch notes for a specific review session.
+ */
+async function fetchNotes(sessionId) {
+    try {
+        const data = await api(`/api/review/notes/${sessionId}`);
+        currentNotes = data.notes || [];
+        currentNotesSessionId = sessionId;
+        renderNotesView(data.session_title, data.session_status);
+    } catch (err) {
+        console.error('[SyncReview] Failed to fetch notes:', err.message);
+        showToast('Failed to load notes', 4000);
+    }
+}
+
+/**
+ * Add a note to the current review session.
+ */
+async function addReviewNote(sessionId, noteText, assetId, frameNumber) {
+    if (!noteText || !noteText.trim()) {
+        showToast('Enter a note', 3000);
+        return;
+    }
+
+    try {
+        const res = await api('/api/review/notes', {
+            method: 'POST',
+            body: {
+                sessionId,
+                assetId: assetId || undefined,
+                frameNumber: frameNumber || undefined,
+                noteText: noteText.trim(),
+            }
+        });
+
+        if (res.success) {
+            showToast('Note added', 2000);
+            await fetchNotes(sessionId);
+        } else {
+            showToast(res.error || 'Failed to add note', 5000);
+        }
+    } catch (err) {
+        showToast('Failed to add note: ' + err.message, 5000);
+    }
+}
+
+/**
+ * Update a note's status (open → resolved → wontfix).
+ */
+async function updateNoteStatus(noteId, newStatus) {
+    try {
+        const res = await api(`/api/review/notes/${noteId}`, {
+            method: 'PUT',
+            body: { status: newStatus }
+        });
+
+        if (res.success && currentNotesSessionId) {
+            await fetchNotes(currentNotesSessionId);
+        }
+    } catch (err) {
+        showToast('Failed to update note', 4000);
+    }
+}
+
+/**
+ * Delete a note.
+ */
+async function deleteReviewNote(noteId) {
+    if (!confirm('Delete this note?')) return;
+    try {
+        const res = await api(`/api/review/notes/${noteId}`, {
+            method: 'DELETE'
+        });
+
+        if (res.success && currentNotesSessionId) {
+            showToast('Note deleted', 2000);
+            await fetchNotes(currentNotesSessionId);
+        }
+    } catch (err) {
+        showToast('Failed to delete note', 4000);
+    }
+}
+
+/**
+ * Fetch session history (ended sessions).
+ */
+async function fetchHistory() {
+    try {
+        const params = filterProjectId ? `?project_id=${filterProjectId}` : '';
+        const data = await api(`/api/review/history${params}`);
+        historySessions = data.sessions || [];
+        historyLoaded = true;
+        renderHistoryPanel();
+    } catch (err) {
+        console.error('[SyncReview] Failed to fetch history:', err.message);
+    }
+}
+
+/**
+ * Switch tabs in the review panel.
+ */
+function switchReviewTab(tab) {
+    currentTab = tab;
+
+    // Update tab buttons
+    document.querySelectorAll('.review-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+
+    // Show/hide tab content
+    const tabActive = document.getElementById('reviewTabActive');
+    const tabHistory = document.getElementById('reviewTabHistory');
+    const tabNotes = document.getElementById('reviewTabNotes');
+    if (tabActive) tabActive.style.display = tab === 'active' ? '' : 'none';
+    if (tabHistory) tabHistory.style.display = tab === 'history' ? '' : 'none';
+    if (tabNotes) tabNotes.style.display = tab === 'notes' ? '' : 'none';
+
+    // Load data for the tab
+    if (tab === 'history' && !historyLoaded) {
+        fetchHistory();
+    }
+
+    // Show filter bar only on active tab
+    const filterBar = document.getElementById('reviewFilterBar');
+    if (filterBar) filterBar.style.display = tab === 'active' ? '' : 'none';
+}
+
 
 // ─── UI Rendering ───
 
@@ -209,6 +343,7 @@ function renderSessionCard(session) {
     let actionButtons;
     if (session.is_owner) {
         actionButtons = `
+            <button class="btn-small btn-notes" onclick="viewSessionNotes(${session.id})" title="Add or view notes for this session">\uD83D\uDCDD Notes</button>
             <button class="btn-small btn-end" onclick="endReview(${session.id})" title="End this review session for all participants">\u2715 End Session</button>
         `;
     } else {
@@ -216,6 +351,7 @@ function renderSessionCard(session) {
             <button class="btn-small btn-join" onclick="joinReview(${session.id})" title="Opens RV on your machine and connects to the host's synced session">
                 \u25B6 Join &amp; Launch RV
             </button>
+            <button class="btn-small btn-notes" onclick="viewSessionNotes(${session.id})" title="Add or view notes for this session">\uD83D\uDCDD Notes</button>
             <button class="btn-small btn-leave" onclick="leaveReview(${session.id})" title="Disconnect your RV — the session stays active for others">\u21A9 Leave</button>
         `;
     }
@@ -238,6 +374,200 @@ function renderSessionCard(session) {
             ${actionButtons}
         </div>
     </div>`;
+}
+
+/**
+ * Render the session history list (ended sessions).
+ */
+function renderHistoryPanel() {
+    const container = document.getElementById('reviewHistoryList');
+    if (!container) return;
+
+    if (historySessions.length === 0) {
+        container.innerHTML = `<div class="review-empty">No past review sessions</div>`;
+        return;
+    }
+
+    let html = '';
+    for (const session of historySessions) {
+        const endedAgo = formatTimeAgo(session.ended_at);
+        const startedAgo = formatTimeAgo(session.started_at);
+        const projectBadge = session.project_name
+            ? `<span class="review-project-badge">${escHtml(session.project_code || session.project_name)}</span>`
+            : '';
+        const notesBadge = session.note_count > 0
+            ? `<span class="review-notes-badge">${session.note_count} note${session.note_count !== 1 ? 's' : ''}</span>`
+            : '<span class="review-notes-badge review-notes-badge-empty">no notes</span>';
+
+        html += `
+        <div class="review-session-card review-session-ended" data-session-id="${session.id}">
+            <div class="review-session-header">
+                <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
+                <span class="review-session-status review-session-status-ended">\u2713 ENDED</span>
+            </div>
+            <div class="review-session-meta">
+                ${projectBadge}
+                <span>by <strong>${escHtml(session.started_by || 'Unknown')}</strong></span>
+                <span>${startedAgo} \u2192 ${endedAgo}</span>
+            </div>
+            <div class="review-session-actions">
+                <button class="btn-small btn-notes" onclick="viewSessionNotes(${session.id})" title="View notes from this review session">
+                    \uD83D\uDCDD ${notesBadge}
+                </button>
+            </div>
+        </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+/**
+ * View notes for a specific session (switches to Notes tab).
+ */
+function viewSessionNotes(sessionId) {
+    switchReviewTab('notes');
+    fetchNotes(sessionId);
+}
+
+/**
+ * Render the notes view for a session.
+ */
+function renderNotesView(sessionTitle, sessionStatus) {
+    const container = document.getElementById('reviewNotesList');
+    if (!container) return;
+
+    // Note input form (only for active sessions)
+    const isActive = sessionStatus === 'active';
+    let html = `
+    <div class="review-notes-header">
+        <button class="review-notes-back" onclick="switchReviewTab('${isActive ? 'active' : 'history'}')" title="Back">\u2190</button>
+        <span class="review-notes-title">${escHtml(sessionTitle || 'Review Notes')}</span>
+        <span class="review-notes-count">${currentNotes.length} note${currentNotes.length !== 1 ? 's' : ''}</span>
+    </div>`;
+
+    if (isActive) {
+        html += `
+    <div class="review-note-form">
+        <div class="review-note-form-row">
+            <input type="number" id="reviewNoteFrame" class="review-note-frame-input" placeholder="Frame #" min="0" title="Frame number (optional)">
+            <input type="text" id="reviewNoteText" class="review-note-text-input" placeholder="Add a note..." onkeydown="if(event.key==='Enter')submitReviewNote(${currentNotesSessionId})">
+            <button class="btn-small btn-add-note" onclick="submitReviewNote(${currentNotesSessionId})" title="Add note">\u2795</button>
+        </div>
+        <div class="review-note-form-row">
+            <select id="reviewNoteAsset" class="review-note-asset-select" title="Asset (optional)">
+                <option value="">Any asset</option>
+            </select>
+        </div>
+    </div>`;
+    }
+
+    if (currentNotes.length === 0) {
+        html += `<div class="review-empty">No notes yet${isActive ? ' \u2014 add one above' : ''}</div>`;
+    } else {
+        // Group notes by asset
+        const byAsset = {};
+        const general = [];
+        for (const note of currentNotes) {
+            if (note.asset_id && note.asset_name) {
+                if (!byAsset[note.asset_name]) byAsset[note.asset_name] = [];
+                byAsset[note.asset_name].push(note);
+            } else {
+                general.push(note);
+            }
+        }
+
+        // Render general notes first
+        if (general.length > 0) {
+            for (const note of general) {
+                html += renderNoteCard(note);
+            }
+        }
+
+        // Render by asset group
+        for (const [assetName, notes] of Object.entries(byAsset)) {
+            html += `<div class="review-notes-asset-group">`;
+            html += `<div class="review-notes-asset-label">\uD83C\uDFAC ${escHtml(assetName)}</div>`;
+            for (const note of notes) {
+                html += renderNoteCard(note);
+            }
+            html += `</div>`;
+        }
+    }
+
+    container.innerHTML = html;
+
+    // Populate asset select dropdown if active session
+    if (isActive) {
+        populateNoteAssetSelect();
+    }
+}
+
+/**
+ * Render a single note card.
+ */
+function renderNoteCard(note) {
+    const timeAgo = formatTimeAgo(note.created_at);
+    const frameLabel = note.frame_number != null ? `<span class="review-note-frame">F${note.frame_number}</span>` : '';
+    const timecodeLabel = note.timecode ? `<span class="review-note-timecode">${escHtml(note.timecode)}</span>` : '';
+
+    const statusClass = note.status === 'resolved' ? 'resolved' : note.status === 'wontfix' ? 'wontfix' : 'open';
+    const statusIcon = note.status === 'resolved' ? '\u2705' : note.status === 'wontfix' ? '\u274C' : '\u2B55';
+
+    // Cycle through statuses: open → resolved → wontfix → open
+    const nextStatus = note.status === 'open' ? 'resolved' : note.status === 'resolved' ? 'wontfix' : 'open';
+
+    return `
+    <div class="review-note-card review-note-${statusClass}" data-note-id="${note.id}">
+        <div class="review-note-card-header">
+            <div class="review-note-card-meta">
+                ${frameLabel}${timecodeLabel}
+                <span class="review-note-author">${escHtml(note.author)}</span>
+                <span class="review-note-time">${timeAgo}</span>
+            </div>
+            <div class="review-note-card-actions">
+                <button class="review-note-status-btn" onclick="updateNoteStatus(${note.id}, '${nextStatus}')" title="Status: ${note.status} (click to change)">${statusIcon}</button>
+                <button class="review-note-delete-btn" onclick="deleteReviewNote(${note.id})" title="Delete note">\uD83D\uDDD1</button>
+            </div>
+        </div>
+        <div class="review-note-text">${escHtml(note.note_text)}</div>
+    </div>`;
+}
+
+/**
+ * Populate the asset dropdown in the note form from the active session's assets.
+ */
+function populateNoteAssetSelect() {
+    const select = document.getElementById('reviewNoteAsset');
+    if (!select || !currentNotesSessionId) return;
+
+    // Find the session in active reviews
+    const session = activeReviews.find(s => s.id === currentNotesSessionId);
+    if (!session || !session.assets) return;
+
+    for (const asset of session.assets) {
+        const opt = document.createElement('option');
+        opt.value = asset.id;
+        opt.textContent = asset.vault_name || `Asset #${asset.id}`;
+        select.appendChild(opt);
+    }
+}
+
+/**
+ * Submit a note from the form.
+ */
+async function submitReviewNote(sessionId) {
+    const textEl = document.getElementById('reviewNoteText');
+    const frameEl = document.getElementById('reviewNoteFrame');
+    const assetEl = document.getElementById('reviewNoteAsset');
+    if (!textEl) return;
+
+    const noteText = textEl.value.trim();
+    const frameNumber = frameEl && frameEl.value ? parseInt(frameEl.value, 10) : null;
+    const assetId = assetEl && assetEl.value ? parseInt(assetEl.value, 10) : null;
+
+    await addReviewNote(sessionId, noteText, assetId, frameNumber);
+    textEl.value = '';
+    if (frameEl) frameEl.value = '';
 }
 
 /**
@@ -397,6 +727,12 @@ window.toggleReviewPanel = toggleReviewPanel;
 window.startSyncReviewFromSelection = startSyncReviewFromSelection;
 window.clearReviewFilter = clearReviewFilter;
 window.setReviewProjectFilter = setReviewProjectFilter;
+window.switchReviewTab = switchReviewTab;
+window.viewSessionNotes = viewSessionNotes;
+window.submitReviewNote = submitReviewNote;
+window.addReviewNote = addReviewNote;
+window.updateNoteStatus = updateNoteStatus;
+window.deleteReviewNote = deleteReviewNote;
 
 // ─── Init ───
 // Start polling when module loads

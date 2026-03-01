@@ -34,6 +34,7 @@ const LOCAL_ONLY_PATTERNS = [
     '/api/review/start',           // Launch RV sync host (local process)
     '/api/review/join',            // Launch RV sync client (local process)
     '/api/review/end',             // End review session (local)
+    '/api/review/leave',           // Leave review session (kills local RV)
 ];
 // Regex patterns for parameterised routes that must run locally
 const LOCAL_ONLY_REGEX = [
@@ -41,6 +42,7 @@ const LOCAL_ONLY_REGEX = [
     /^\/api\/assets\/\d+\/open-external$/,  // Open in external player (local)
     /^\/api\/settings(\/.*)?$/,             // ALL settings writes — vault_root, rv_path, ffmpeg_path, path_mappings, preferences are per-machine
     /^\/api\/export/,                       // FFmpeg transcode — runs locally
+    /^\/api\/review\/notes(\/\d+)?$/,       // Review notes — saved locally + forwarded to hub in route handler
 ];
 
 /**

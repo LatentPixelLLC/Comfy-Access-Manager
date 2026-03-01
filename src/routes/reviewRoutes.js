@@ -721,6 +721,218 @@ function launchRVAsClient(rvExe, hostIp, hostPort, filePaths) {
 
 
 // ═══════════════════════════════════════════
+//  REVIEW NOTES — Frame-accurate annotations
+// ═══════════════════════════════════════════
+
+/**
+ * GET /api/review/notes/:sessionId — Get all notes for a review session.
+ * Works for both active and ended sessions (enables later review).
+ * Query params: ?asset_id=N (optional filter to specific asset)
+ */
+router.get('/notes/:sessionId', (req, res) => {
+    const db = getDb();
+    const sessionId = parseInt(req.params.sessionId, 10);
+
+    const session = db.prepare('SELECT * FROM review_sessions WHERE id = ?').get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    const assetFilter = req.query.asset_id ? parseInt(req.query.asset_id, 10) : null;
+
+    let notes;
+    if (assetFilter) {
+        notes = db.prepare(
+            `SELECT * FROM review_notes WHERE session_id = ? AND asset_id = ? ORDER BY frame_number ASC, created_at ASC`
+        ).all(sessionId, assetFilter);
+    } else {
+        notes = db.prepare(
+            `SELECT * FROM review_notes WHERE session_id = ? ORDER BY asset_id, frame_number ASC, created_at ASC`
+        ).all(sessionId);
+    }
+
+    // Enrich notes with asset name
+    for (const note of notes) {
+        if (note.asset_id) {
+            try {
+                const asset = db.prepare('SELECT vault_name, media_type FROM assets WHERE id = ?').get(note.asset_id);
+                note.asset_name = asset ? asset.vault_name : null;
+                note.media_type = asset ? asset.media_type : null;
+            } catch { /* non-critical */ }
+        }
+    }
+
+    res.json({ notes, session_title: session.title, session_status: session.status });
+});
+
+/**
+ * POST /api/review/notes — Add a note to a review session.
+ * Body: { sessionId, assetId?, frameNumber?, timecode?, noteText }
+ */
+router.post('/notes', (req, res) => {
+    const { sessionId, assetId, frameNumber, timecode, noteText } = req.body || {};
+
+    if (!sessionId || !noteText || !noteText.trim()) {
+        return res.status(400).json({ error: 'Provide sessionId and noteText' });
+    }
+
+    const db = getDb();
+    const session = db.prepare('SELECT * FROM review_sessions WHERE id = ?').get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    const author = req.headers['x-cam-user'] || 'Unknown';
+
+    const result = db.prepare(`
+        INSERT INTO review_notes (session_id, asset_id, frame_number, timecode, note_text, author)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sessionId, assetId || null, frameNumber || null, timecode || null, noteText.trim(), author);
+
+    const noteId = Number(result.lastInsertRowid);
+    const note = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(noteId);
+
+    // Enrich with asset name
+    if (note.asset_id) {
+        try {
+            const asset = db.prepare('SELECT vault_name FROM assets WHERE id = ?').get(note.asset_id);
+            note.asset_name = asset ? asset.vault_name : null;
+        } catch { /* non-critical */ }
+    }
+
+    logActivity('review_note_add', 'review_note', noteId,
+        `Note added to review "${session.title}": ${noteText.trim().substring(0, 80)}`);
+
+    // Broadcast note to other participants via SSE
+    req.app.locals.broadcastChange?.('review_notes', 'insert', { record: note });
+
+    // In spoke mode, also forward to hub
+    const spokeService = req.app.locals.spokeService;
+    if (spokeService) {
+        spokeService.forwardRequest('POST', '/api/sync/write', {
+            method: 'POST',
+            path: '/api/review/hub-note',
+            body: {
+                session_key: session.session_key,
+                asset_id: assetId || null,
+                frame_number: frameNumber || null,
+                timecode: timecode || null,
+                note_text: noteText.trim(),
+                author,
+            },
+            spokeName: spokeService.localName,
+        }).catch(err => {
+            console.error('[SyncReview] Failed to forward note to hub:', err.message);
+        });
+    }
+
+    res.json({ success: true, note });
+});
+
+/**
+ * PUT /api/review/notes/:noteId — Update a note (edit text or change status).
+ * Body: { noteText?, status? }  (status: 'open', 'resolved', 'wontfix')
+ */
+router.put('/notes/:noteId', (req, res) => {
+    const db = getDb();
+    const noteId = parseInt(req.params.noteId, 10);
+    const { noteText, status } = req.body || {};
+
+    const note = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(noteId);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+
+    const updates = [];
+    const params = [];
+
+    if (noteText && noteText.trim()) {
+        updates.push('note_text = ?');
+        params.push(noteText.trim());
+    }
+    if (status && ['open', 'resolved', 'wontfix'].includes(status)) {
+        updates.push('status = ?');
+        params.push(status);
+    }
+
+    if (updates.length === 0) {
+        return res.status(400).json({ error: 'Provide noteText and/or status to update' });
+    }
+
+    updates.push("updated_at = datetime('now')");
+    params.push(noteId);
+
+    db.prepare(`UPDATE review_notes SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+    const updated = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(noteId);
+    req.app.locals.broadcastChange?.('review_notes', 'update', { record: updated });
+
+    res.json({ success: true, note: updated });
+});
+
+/**
+ * DELETE /api/review/notes/:noteId — Delete a note.
+ */
+router.delete('/notes/:noteId', (req, res) => {
+    const db = getDb();
+    const noteId = parseInt(req.params.noteId, 10);
+
+    const note = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(noteId);
+    if (!note) return res.status(404).json({ error: 'Note not found' });
+
+    db.prepare('DELETE FROM review_notes WHERE id = ?').run(noteId);
+
+    logActivity('review_note_delete', 'review_note', noteId,
+        `Note deleted from review session ${note.session_id}`);
+
+    req.app.locals.broadcastChange?.('review_notes', 'delete', { record: note });
+
+    res.json({ success: true });
+});
+
+/**
+ * GET /api/review/history — List past (ended) review sessions with note counts.
+ * Query: ?project_id=N (optional), ?limit=20 (default 20)
+ */
+router.get('/history', (req, res) => {
+    const db = getDb();
+    const projectFilter = req.query.project_id ? parseInt(req.query.project_id, 10) : null;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+
+    let sessions;
+    if (projectFilter) {
+        sessions = db.prepare(`
+            SELECT rs.*, COUNT(rn.id) as note_count
+            FROM review_sessions rs
+            LEFT JOIN review_notes rn ON rn.session_id = rs.id
+            WHERE rs.status = 'ended' AND rs.project_id = ?
+            GROUP BY rs.id
+            ORDER BY rs.ended_at DESC
+            LIMIT ?
+        `).all(projectFilter, limit);
+    } else {
+        sessions = db.prepare(`
+            SELECT rs.*, COUNT(rn.id) as note_count
+            FROM review_sessions rs
+            LEFT JOIN review_notes rn ON rn.session_id = rs.id
+            WHERE rs.status = 'ended'
+            GROUP BY rs.id
+            ORDER BY rs.ended_at DESC
+            LIMIT ?
+        `).all(limit);
+    }
+
+    // Enrich with project info
+    for (const s of sessions) {
+        try { s.asset_ids = JSON.parse(s.asset_ids || '[]'); } catch { s.asset_ids = []; }
+        if (s.project_id) {
+            try {
+                const proj = db.prepare('SELECT name, code FROM projects WHERE id = ?').get(s.project_id);
+                s.project_name = proj ? proj.name : null;
+                s.project_code = proj ? proj.code : null;
+            } catch { /* non-critical */ }
+        }
+    }
+
+    res.json({ sessions });
+});
+
+
+// ═══════════════════════════════════════════
 //  HUB-SIDE ENDPOINTS (called via spoke write-proxy)
 //  These run ONLY on the hub to persist review sessions in the hub DB.
 // ═══════════════════════════════════════════
@@ -804,6 +1016,41 @@ router.post('/hub-end', (req, res) => {
 
     console.log(`[SyncReview] Hub ended spoke review: "${session.title}"`);
     res.json({ success: true });
+});
+
+/**
+ * POST /api/review/hub-note — Register a spoke's review note on the hub DB.
+ * Called by the spoke's /notes handler via forwardRequest.
+ */
+router.post('/hub-note', (req, res) => {
+    const { session_key, asset_id, frame_number, timecode, note_text, author } = req.body || {};
+
+    if (!session_key || !note_text) {
+        return res.status(400).json({ error: 'Missing session_key or note_text' });
+    }
+
+    const db = getDb();
+    const session = db.prepare(
+        `SELECT * FROM review_sessions WHERE session_key = ?`
+    ).get(session_key);
+
+    if (!session) {
+        return res.status(404).json({ error: 'Session not found on hub' });
+    }
+
+    const result = db.prepare(`
+        INSERT INTO review_notes (session_id, asset_id, frame_number, timecode, note_text, author)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(session.id, asset_id || null, frame_number || null, timecode || null, note_text, author || 'Unknown');
+
+    const noteId = Number(result.lastInsertRowid);
+    const note = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(noteId);
+
+    // Broadcast to all spokes
+    req.app.locals.broadcastChange?.('review_notes', 'insert', { record: note });
+
+    console.log(`[SyncReview] Hub stored spoke note for "${session.title}" by ${author}`);
+    res.json({ success: true, id: noteId });
 });
 
 

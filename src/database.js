@@ -430,6 +430,26 @@ function runMigrations(wrapper) {
         CREATE INDEX IF NOT EXISTS idx_review_sessions_key ON review_sessions(session_key);
     `);
 
+    // ─── Review Notes (frame-accurate annotations on review sessions) ───
+    wrapper.exec(`
+        CREATE TABLE IF NOT EXISTS review_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            asset_id INTEGER,
+            frame_number INTEGER,
+            timecode TEXT,
+            note_text TEXT NOT NULL,
+            author TEXT NOT NULL,
+            status TEXT DEFAULT 'open',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(session_id) REFERENCES review_sessions(id),
+            FOREIGN KEY(asset_id) REFERENCES assets(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_notes_session ON review_notes(session_id);
+        CREATE INDEX IF NOT EXISTS idx_review_notes_asset ON review_notes(asset_id);
+    `);
+
     // Seed default Admin user if users table is empty
     const userCount = wrapper.prepare('SELECT COUNT(*) as count FROM users').get();
     if (userCount.count === 0) {

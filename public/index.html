@@ -92,13 +92,33 @@
     <!-- === ACTIVE REVIEWS PANEL (RV sync review sessions) === -->
     <div id="reviewPanel" class="review-panel" style="display:none">
         <div class="review-panel-header">
-            <span> Active Reviews</span>
+            <span>Reviews</span>
             <button onclick="toggleReviewPanel()" class="review-panel-close">x</button>
+        </div>
+        <div class="review-tabs">
+            <button class="review-tab active" data-tab="active" onclick="switchReviewTab('active')">Active</button>
+            <button class="review-tab" data-tab="history" onclick="switchReviewTab('history')">History</button>
+            <button class="review-tab" data-tab="notes" onclick="switchReviewTab('notes')">Notes</button>
         </div>
         <div id="reviewFilterBar" class="review-filter-bar"></div>
         <div class="review-panel-body">
-            <div id="reviewSessionsList" class="review-sessions-list">
-                <div class="review-empty">No active review sessions</div>
+            <!-- Active sessions tab -->
+            <div id="reviewTabActive" class="review-tab-content">
+                <div id="reviewSessionsList" class="review-sessions-list">
+                    <div class="review-empty">No active review sessions</div>
+                </div>
+            </div>
+            <!-- Session history tab -->
+            <div id="reviewTabHistory" class="review-tab-content" style="display:none">
+                <div id="reviewHistoryList" class="review-sessions-list">
+                    <div class="review-empty">Loading history...</div>
+                </div>
+            </div>
+            <!-- Notes tab (view all notes across sessions) -->
+            <div id="reviewTabNotes" class="review-tab-content" style="display:none">
+                <div id="reviewNotesList" class="review-notes-list">
+                    <div class="review-empty">Select a session to view notes</div>
+                </div>
             </div>
         </div>
     </div>
