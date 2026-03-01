@@ -31,6 +31,9 @@ const LOCAL_ONLY_PATTERNS = [
     '/api/assets/publish-frame',   // RV frame publish — reads local temp files, runs FFmpeg
     '/api/settings',               // Settings (vault_root, rv_path etc.) are per-machine
     '/api/settings/sync-rv-plugin', // Deploy RV plugin locally
+    '/api/review/start',           // Launch RV sync host (local process)
+    '/api/review/join',            // Launch RV sync client (local process)
+    '/api/review/end',             // End review session (local)
 ];
 // Regex patterns for parameterised routes that must run locally
 const LOCAL_ONLY_REGEX = [

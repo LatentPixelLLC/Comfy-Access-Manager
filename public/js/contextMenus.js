@@ -138,6 +138,7 @@ async function showContextMenu(event, assetIdx) {
         html += `<div class="ctx-item" data-action="send-rv-set"> Send to RV (${count})</div>`;
         html += `<div class="ctx-item" data-action="send-rv-merge">+ Add to RV (${count})</div>`;
     }
+    html += `<div class="ctx-item" data-action="sync-review"> Start Sync Review${!isSingle ? ` (${count})` : ''}</div>`;
 
     html += `<div class="ctx-separator"></div>`;
     html += `<div class="ctx-item" data-action="selectAll">[x] Select All</div>`;
@@ -204,6 +205,11 @@ async function showContextMenu(event, assetIdx) {
             case 'play-all': window.playSelectedAssets?.(); break;
             case 'send-rv-set': window.sendSelectedToRV?.('set'); break;
             case 'send-rv-merge': window.sendSelectedToRV?.('merge'); break;
+            case 'sync-review': {
+                const ids = state.selectedAssets.length > 0 ? [...state.selectedAssets] : [asset.id];
+                window.startSyncReview?.(ids);
+                break;
+            }
             case 'selectAll': window.selectAllAssets?.(); break;
             case 'deselectAll': window.clearAssetSelection?.(); break;
             case 'showPath':

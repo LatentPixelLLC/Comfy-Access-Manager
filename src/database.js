@@ -409,6 +409,27 @@ function runMigrations(wrapper) {
         );
     `);
 
+    // ─── Review Sessions (RV sync review across hub/spoke) ───
+    wrapper.exec(`
+        CREATE TABLE IF NOT EXISTS review_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_key TEXT NOT NULL UNIQUE,
+            host_name TEXT NOT NULL,
+            host_ip TEXT NOT NULL,
+            host_port INTEGER NOT NULL DEFAULT 45128,
+            status TEXT NOT NULL DEFAULT 'active',
+            asset_ids TEXT DEFAULT '[]',
+            project_id INTEGER,
+            title TEXT,
+            started_by TEXT,
+            started_at TEXT DEFAULT (datetime('now')),
+            ended_at TEXT,
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_sessions_status ON review_sessions(status);
+        CREATE INDEX IF NOT EXISTS idx_review_sessions_key ON review_sessions(session_key);
+    `);
+
     // Seed default Admin user if users table is empty
     const userCount = wrapper.prepare('SELECT COUNT(*) as count FROM users').get();
     if (userCount.count === 0) {

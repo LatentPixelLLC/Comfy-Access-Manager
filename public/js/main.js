@@ -18,6 +18,7 @@ import { loadSettings, loadRoles, openFolderPicker, autoCheckForUpdates } from '
 import pluginRegistry from './pluginRegistry.js';
 import './export.js';
 import './overlayEditor.js';
+import './syncReview.js';
 
 // ===========================================
 //  INIT

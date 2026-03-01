@@ -80,11 +80,27 @@
             <button id="networkBtn" class="topbar-icon-btn" onclick="toggleServerPanel()" title="Network - find other MediaVault instances">
                 
             </button>
+            <button id="reviewBtn" class="topbar-icon-btn review-btn-indicator" onclick="toggleReviewPanel()" title="Active sync reviews" style="display:none">
+                RV <span class="review-badge" id="reviewBadge">0</span>
+            </button>
             <span id="statusIndicator" class="status-dot" title="Green = vault configured and running. Yellow = needs setup."></span>
             <span id="assetCount" class="stat" title="Total assets across all projects">0 assets</span>
             <span id="appVersion" class="stat" style="opacity:0.5; font-size:0.75em;" title="Comfy Asset Manager version"></span>
         </div>
     </header>
+
+    <!-- === ACTIVE REVIEWS PANEL (RV sync review sessions) === -->
+    <div id="reviewPanel" class="review-panel" style="display:none">
+        <div class="review-panel-header">
+            <span> Active Reviews</span>
+            <button onclick="toggleReviewPanel()" class="review-panel-close">x</button>
+        </div>
+        <div class="review-panel-body">
+            <div id="reviewSessionsList" class="review-sessions-list">
+                <div class="review-empty">No active review sessions</div>
+            </div>
+        </div>
+    </div>
 
     <!-- === SERVER PANEL (network discovery dropdown) === -->
     <div id="serverPanel" class="server-panel" style="display:none">
@@ -231,6 +247,7 @@ Import from Resolve</button>
                     <button class="btn-small btn-export" onclick="showExportModal()" title="Transcode/export selected assets via FFmpeg (GPU-accelerated)">Export</button>
                     <button class="btn-small" onclick="sendSelectedToRV('set')" title="Send selected clips to RV (replaces current media). If RV is running, clips load instantly without restarting." style="background:#334">Send to RV</button>
                     <button class="btn-small" onclick="sendSelectedToRV('merge')" title="Add selected clips to the running RV session (keeps existing sources)" style="background:#334">Add to RV</button>
+                    <button class="btn-small" onclick="startSyncReviewFromSelection()" title="Start a synchronized RV review session that others can join" style="background:#2a4a3e"> Sync Review</button>
                     <button class="btn-small btn-danger" onclick="bulkDeleteAssets()" title="Delete selected assets from the database AND remove files from disk">Delete Selected</button>
                     <button class="btn-small" onclick="bulkDeleteAssets(true)" title="Remove from database only - files stay on disk">DB Only (keep files)</button>
                 </div>
