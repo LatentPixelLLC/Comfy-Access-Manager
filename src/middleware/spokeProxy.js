@@ -29,6 +29,7 @@ const LOCAL_ONLY_PATTERNS = [
     '/api/settings/sync-config',   // Per-machine hub/spoke config (local config.json)
     '/api/settings/db-config',     // Per-machine shared DB path (local config.json)
     '/api/assets/publish-frame',   // RV frame publish — reads local temp files, runs FFmpeg
+    '/api/settings',               // Settings (vault_root, rv_path etc.) are per-machine
 ];
 // Regex patterns for parameterised routes that must run locally
 const LOCAL_ONLY_REGEX = [
