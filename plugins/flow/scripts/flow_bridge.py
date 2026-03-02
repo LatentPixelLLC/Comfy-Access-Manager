@@ -198,6 +198,95 @@ def cmd_sync_steps(sg, args):
     except Exception as e:
         error(f"Failed to fetch pipeline steps: {str(e)}")
 
+def cmd_sync_tasks(sg, args):
+    """Fetch tasks for a given project, including assignment and status."""
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    try:
+        filters = [["project", "is", {"type": "Project", "id": int(project_id)}]]
+
+        # Optionally filter by entity type (Shot, Asset, etc.)
+        entity_type = params.get("entity_type")
+        if entity_type:
+            filters.append(["entity", "type_is", entity_type])
+
+        tasks = sg.find("Task",
+            filters=filters,
+            fields=["content", "sg_status_list", "task_assignees", "step",
+                    "entity", "start_date", "due_date", "sg_description",
+                    "est_in_mins", "time_logs_sum", "id"],
+            order=[{"field_name": "content", "direction": "asc"}]
+        )
+
+        result = []
+        for task in tasks:
+            step = task.get("step")
+            entity = task.get("entity")
+            assignees = task.get("task_assignees") or []
+
+            result.append({
+                "flow_id": task["id"],
+                "content": task.get("content", ""),
+                "status": task.get("sg_status_list", ""),
+                "description": task.get("sg_description", "") or "",
+                "step_id": step["id"] if step else None,
+                "step_name": step.get("name", "") if step else None,
+                "entity_type": entity["type"] if entity else None,
+                "entity_id": entity["id"] if entity else None,
+                "entity_name": entity.get("name", "") if entity else None,
+                "assignees": [{"id": a["id"], "name": a.get("name", ""), "type": a["type"]} for a in assignees],
+                "start_date": task.get("start_date"),
+                "due_date": task.get("due_date"),
+                "est_minutes": task.get("est_in_mins"),
+                "logged_minutes": task.get("time_logs_sum"),
+            })
+
+        output({"success": True, "tasks": result, "count": len(result)})
+    except Exception as e:
+        error(f"Failed to fetch tasks: {str(e)}")
+
+def cmd_update_task_status(sg, args):
+    """Update a Task's status in Flow."""
+    params = json.loads(args.json) if args.json else {}
+    task_id = params.get("task_id")
+    status = params.get("status")
+    if not task_id or not status:
+        error("'task_id' and 'status' required in --json")
+
+    try:
+        sg.update("Task", int(task_id), {"sg_status_list": status})
+        output({
+            "success": True,
+            "message": f"Task {task_id} status updated to '{status}'"
+        })
+    except Exception as e:
+        error(f"Failed to update task status: {str(e)}")
+
+def cmd_upload_media(sg, args):
+    """Upload a movie or image to a Version for Screening Room playback."""
+    params = json.loads(args.json) if args.json else {}
+    version_id = params.get("version_id")
+    media_path = params.get("path")
+    field_name = params.get("field", "sg_uploaded_movie")
+
+    if not version_id or not media_path:
+        error("'version_id' and 'path' required in --json")
+
+    if not os.path.exists(media_path):
+        error(f"Media file not found: {media_path}")
+
+    try:
+        sg.upload("Version", int(version_id), media_path, field_name=field_name)
+        output({
+            "success": True,
+            "message": f"Media uploaded to Version {version_id} (field: {field_name})"
+        })
+    except Exception as e:
+        error(f"Failed to upload media: {str(e)}")
+
 def cmd_publish_version(sg, args):
     """Create a Version entity in Flow linked to a Shot."""
     params = json.loads(args.json) if args.json else {}
@@ -248,6 +337,66 @@ def cmd_publish_version(sg, args):
     except Exception as e:
         error(f"Failed to create version: {str(e)}")
 
+def cmd_create_note(sg, args):
+    """Create a Note entity in Flow, optionally with an image attachment."""
+    params = json.loads(args.json) if args.json else {}
+
+    project_id = params.get("project_id")
+    subject = params.get("subject")
+    body = params.get("body", "")
+
+    if not project_id or not subject:
+        error("'project_id' and 'subject' required in --json")
+
+    try:
+        data = {
+            "project": {"type": "Project", "id": int(project_id)},
+            "subject": subject,
+            "content": body,
+        }
+
+        # Link to Shot if provided
+        if params.get("shot_id"):
+            data["note_links"] = [{"type": "Shot", "id": int(params["shot_id"])}]
+
+        # Link to Version if provided (adds to note_links)
+        if params.get("version_id"):
+            links = data.get("note_links", [])
+            links.append({"type": "Version", "id": int(params["version_id"])})
+            data["note_links"] = links
+
+        # Addressees (list of user IDs) — people who should see it
+        if params.get("addressee_ids"):
+            data["addressings_to"] = [
+                {"type": "HumanUser", "id": int(uid)} for uid in params["addressee_ids"]
+            ]
+
+        note = sg.create("Note", data)
+        note_id = note["id"]
+
+        # Upload attachment image if provided
+        attachment_id = None
+        if params.get("attachment_path"):
+            att_path = params["attachment_path"]
+            if os.path.exists(att_path):
+                attachment_id = sg.upload("Note", note_id, att_path, field_name="attachments")
+            else:
+                # Non-fatal — note still created
+                pass
+
+        output({
+            "success": True,
+            "note": {
+                "flow_id": note_id,
+                "subject": subject,
+                "type": "Note",
+            },
+            "attachment_id": attachment_id,
+            "message": f"Note '{subject}' created (ID: {note_id})" + (f" with attachment" if attachment_id else "")
+        })
+    except Exception as e:
+        error(f"Failed to create note: {str(e)}")
+
 def cmd_upload_thumbnail(sg, args):
     """Upload a thumbnail image to a Version."""
     params = json.loads(args.json) if args.json else {}
@@ -280,8 +429,12 @@ COMMANDS = {
     "sync_sequences": cmd_sync_sequences,
     "sync_shots": cmd_sync_shots,
     "sync_steps": cmd_sync_steps,
+    "sync_tasks": cmd_sync_tasks,
+    "update_task_status": cmd_update_task_status,
     "publish_version": cmd_publish_version,
     "upload_thumbnail": cmd_upload_thumbnail,
+    "upload_media": cmd_upload_media,
+    "create_note": cmd_create_note,
 }
 
 def main():

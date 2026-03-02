@@ -269,6 +269,95 @@ async function deleteReviewNote(noteId) {
 }
 
 /**
+ * Export a review note (with annotation image) to ShotGrid/Flow as a Note entity.
+ */
+async function exportNoteToFlow(noteId) {
+    try {
+        // Check if Flow is configured
+        const flowStatus = await api('/api/flow/status').catch(() => null);
+        if (!flowStatus || !flowStatus.configured) {
+            showToast('Flow is not configured. Go to Settings → Flow.', 5000);
+            return;
+        }
+
+        // Get Flow-linked projects
+        const mappings = await api('/api/flow/mappings/projects');
+        if (!mappings || mappings.length === 0) {
+            showToast('No projects linked to Flow. Sync a project first.', 5000);
+            return;
+        }
+
+        // Build a quick project picker modal
+        const projectOptions = mappings.map(p =>
+            `<option value="${p.flow_id}" data-local-id="${p.id}">${p.code || p.name} (Flow #${p.flow_id})</option>`
+        ).join('');
+
+        const modalHtml = `
+            <h3>🔀 Export Note to Flow</h3>
+            <p style="font-size:0.85em; color:#aaa; margin-bottom:12px;">
+                Creates a Note in ShotGrid with the annotation image attached.
+            </p>
+            <label>Flow Project</label>
+            <select id="flowNoteProject" style="width:100%; padding:8px; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; margin-bottom:10px;">
+                ${projectOptions}
+            </select>
+            <label>Subject (optional)</label>
+            <input type="text" id="flowNoteSubject" placeholder="Auto-generated if blank" style="width:100%; padding:8px; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; margin-bottom:10px;">
+            <label>Additional Comments</label>
+            <textarea id="flowNoteBody" rows="3" placeholder="Optional description..." style="width:100%; padding:8px; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:4px; margin-bottom:12px;"></textarea>
+            <div class="form-actions">
+                <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" onclick="submitNoteToFlow(${noteId})">Export to Flow</button>
+            </div>
+        `;
+
+        document.getElementById('modalContent').innerHTML = modalHtml;
+        document.getElementById('modal').style.display = 'flex';
+    } catch (err) {
+        showToast('Failed to open Flow export: ' + err.message, 5000);
+    }
+}
+
+/**
+ * Submit the note export after the user picks a project.
+ */
+async function submitNoteToFlow(noteId) {
+    const projectSelect = document.getElementById('flowNoteProject');
+    const flowProjectId = parseInt(projectSelect.value);
+    const subject = document.getElementById('flowNoteSubject').value.trim() || undefined;
+    const body = document.getElementById('flowNoteBody').value.trim() || undefined;
+
+    // Close modal immediately
+    document.getElementById('modal').style.display = 'none';
+
+    showToast('Exporting note to Flow...', 3000);
+
+    try {
+        const result = await api('/api/flow/publish/note', {
+            method: 'POST',
+            body: {
+                reviewNoteId: noteId,
+                flowProjectId,
+                subject,
+                body,
+            },
+        });
+
+        if (result.success) {
+            showToast(`✅ Note exported to Flow (ID: ${result.note?.flow_id || '?'})`, 5000);
+            // Refresh notes to show the disabled export button
+            if (currentNotesSessionId) {
+                await fetchNotes(currentNotesSessionId);
+            }
+        } else {
+            showToast('Flow export failed: ' + (result.error || 'Unknown error'), 5000);
+        }
+    } catch (err) {
+        showToast('Flow export failed: ' + err.message, 5000);
+    }
+}
+
+/**
  * Fetch session history (ended sessions).
  */
 async function fetchHistory() {
@@ -597,6 +686,7 @@ function renderNoteCard(note) {
                 <span class="review-note-time">${timeAgo}</span>
             </div>
             <div class="review-note-card-actions">
+                <button class="review-note-flow-btn" onclick="exportNoteToFlow(${note.id})" title="Export to ShotGrid/Flow"${note.flow_note_id ? ' disabled style="opacity:0.4"' : ''}>\uD83D\uDD00</button>
                 <button class="review-note-status-btn" onclick="updateNoteStatus(${note.id}, '${nextStatus}')" title="Status: ${note.status} (click to change)">${statusIcon}</button>
                 <button class="review-note-delete-btn" onclick="deleteReviewNote(${note.id})" title="Delete note">\uD83D\uDDD1</button>
             </div>

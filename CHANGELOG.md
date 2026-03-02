@@ -2,6 +2,53 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.7.0] - 2026-03-01
+
+### Added — Direct RV-to-ShotGrid Annotation Export
+- **"Send Annotation to ShotGrid" RV menu item** — New `MediaVault → Send Annotation to ShotGrid` action (`Alt+Shift+N`) captures the current frame with all paint-overs and annotations, resolves the asset's project/shot/sequence Flow IDs automatically from the source path, and publishes a ShotGrid Note with the annotated PNG attached — all in one step, no manual export needed.
+- **`POST /api/flow/publish/annotated-frame`** — New server route receives the rendered frame from RV, resolves Flow mappings from the asset's source path, saves the PNG locally for review history, creates a local review note, and publishes to ShotGrid in a single call.
+- **Auto-resolved Flow context** — The route queries the asset's linked project, shot, and sequence `flow_id` columns so the artist doesn't need to manually pick a ShotGrid project or shot. If the asset is already synced with Flow, everything is automatic.
+
+## [1.6.9] - 2026-03-01
+
+### Added — Export Annotated Frames to ShotGrid/Flow
+- **`create_note` bridge command** — New Python bridge command creates a Note entity in ShotGrid, optionally linked to a Shot and/or Version, with the annotated frame PNG uploaded as an attachment. Supports addressee lists for notification routing.
+- **`POST /api/flow/publish/note`** — New API route takes a `reviewNoteId` + `flowProjectId`, resolves the annotation image from disk, and exports everything to Flow as a Note with attachment.
+- **`FlowService.createNote()`** — New service method orchestrates the bridge call and writes `flow_note_id` back to the local `review_notes` row to track export state.
+- **Export to Flow button on note cards** — Each review note card now has a 🔀 button that opens a modal to pick the Flow project + optional subject/comments, then publishes the note. Button disables after successful export to prevent duplicates.
+- **`flow_note_id` column** — Auto-migration adds `flow_note_id INTEGER` to `review_notes` table, storing the ShotGrid Note ID for exported notes.
+
+## [1.6.8] - 2026-03-01
+
+### Changed — Safety Guardrails for Facility Deployment
+- **Default import mode is now "Register in Place"** — Files stay exactly where they are by default. Move and Copy are still available but require explicit selection. Register is now the first option in the import panel.
+- **Delete defaults to DB-only** — `DELETE /api/assets/:id` and `POST /api/assets/bulk-delete` now default to removing database records only. Physical file deletion requires an explicit `delete_file=true` parameter. Previously both defaulted to deleting files from disk.
+- **Rename-to-hierarchy skips linked assets** — The bulk rename operation now automatically skips any asset with `is_linked = 1` (registered in place). Externally managed files are never renamed.
+- **Context menu reordered** — "Remove from DB" is now the top (non-destructive) action. "Delete files from disk" is the secondary red/danger action, making accidental file deletion less likely.
+- **Selection toolbar reordered** — The safe "Remove from DB" button now appears before the destructive "Delete from Disk" button, with clearer labels on both.
+
+## [1.6.7] - 2026-03-01
+
+### Added — Path Matching & Bulk Scan-and-Register
+- **PathMatchService** — New service that parses file paths against configurable token patterns (`{project}/{sequence}/{shot}`) to auto-assign assets to the correct project/sequence/shot. Matches by code or name (case-insensitive) against records synced from Flow.
+- **Configurable show root + path pattern** — Settings → Flow now has a "Path Matching & Bulk Scan" section. Set your show root (e.g., `/shows`) and a token pattern describing your directory structure. Saved as `flow_show_root` and `flow_path_pattern` settings.
+- **Scan & Register Tree** — New `POST /api/flow/scan-tree` endpoint recursively walks an entire show directory, registers all media files in-place (nothing moves), and auto-matches each file to project/sequence/shot using the path pattern. Includes dry-run preview mode.
+- **Auto-Match Existing** — New `POST /api/flow/auto-match` endpoint runs path matching on all unassigned assets in the database. Useful after a Flow sync populates the project/shot structure.
+- **Preview Match** — `POST /api/flow/preview-match` tests a single file path against the pattern without registering anything.
+- **Watcher auto-match hook** — When watched folders detect new files, the watcher now auto-matches them to project/sequence/shot if path matching is configured.
+- **Settings UI** — Show root, path pattern, Save Path Config, Auto-Match Existing, Preview scan, and Scan & Register buttons all in the Flow settings panel.
+
+## [1.6.6] - 2026-03-01
+
+### Added — Flow Production Tracking v2.0 (ShotGrid Integration)
+- **Task sync** — New `sync_tasks` bridge command + `flow_tasks` database table. Full sync now pulls Tasks from Flow including assignments, statuses, dates, and pipeline step links. "Sync Tasks Only" button added to settings.
+- **Task status writeback** — `update_task_status` bridge command + `/api/flow/tasks/:id/status` route. Publishing a Version can auto-update the linked Task status to "Pending Review" in Flow.
+- **Media upload for Screening Room** — `upload_media` bridge command + `/api/flow/publish/media` route. Upload MOV/MP4 review media directly to Flow Versions for remote review in Screening Room.
+- **Publish to Flow context menu** — Right-click any asset(s) → "🔀 Publish to Flow" opens a modal to select the Flow project, add a description, and publish. Auto-uploads thumbnails. Works with single or multi-select.
+- **Flow status indicator in topbar** — 🔀 icon appears when Flow is configured. Green dot = connected, amber = configured but can't reach server, hidden = not configured. Clicking opens Settings.
+- **Enhanced publish pipeline** — `publishVersion` now supports auto-thumbnail upload, media upload for Screening Room, task linking, and task status writeback in a single publish action.
+- **Plugin context menu system** — `contextMenus.js` now queries `pluginRegistry.getContextMenuItems()` for plugin-contributed right-click menu items. Other plugins can now add context menu actions via `plugin.json` declarations.
+
 ## [1.6.5] - 2026-03-01
 
 ### Fixed

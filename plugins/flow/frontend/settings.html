@@ -25,7 +25,33 @@
                 <select id="flowProjectSelect" class="setting-select"></select>
                 <button id="flowFullSyncBtn">🔄 Full Sync</button>
             </div>
+            <button id="flowSyncTasksBtn" style="margin-top:4px;">📋 Sync Tasks Only</button>
         </div>
     </div>
     <div id="flowSyncLog" style="margin-top:8px;font-size:0.82rem;color:var(--text-dim);max-height:150px;overflow-y:auto;"></div>
+</div>
+
+<div id="flowPathMatchPanel" style="margin-top:14px; padding:10px; background:rgba(255,255,255,0.03); border-radius:6px;">
+    <h4 style="margin:0 0 6px 0;font-size:0.9rem;">📂 Path Matching &amp; Bulk Scan</h4>
+    <p class="hint" style="margin:0 0 8px 0;">Auto-assign assets to projects/sequences/shots by parsing file paths. Set your show root and a pattern that matches your directory structure.</p>
+    <label>Show Root <span class="help-icon" data-tip="The top-level directory that contains all your shows/projects. Path pattern matching is relative to this root. Example: /shows or Z:\Projects">?</span></label>
+    <input type="text" id="flowShowRoot" placeholder="/shows  or  Z:\Projects">
+    <label>Path Pattern <span class="help-icon" data-tip="Token-based pattern describing your folder structure. Tokens: {project}, {sequence}, {shot}, {role}. Matched left-to-right from the show root. Example: {project}/{sequence}/{shot} matches /shows/HERO/SQ010/SH020/comp/render.exr">?</span></label>
+    <input type="text" id="flowPathPattern" placeholder="{project}/{sequence}/{shot}">
+    <div style="font-size:0.78rem;color:var(--text-dim);margin:4px 0 8px;">
+        Example: <code>{project}/{sequence}/{shot}</code> → /shows/<strong>HERO</strong>/<strong>SQ010</strong>/<strong>SH020</strong>/comp/render.exr
+    </div>
+    <div class="input-row" style="gap:6px;">
+        <button id="flowSavePathBtn">💾 Save Path Config</button>
+        <button id="flowAutoMatchBtn">🔗 Auto-Match Existing</button>
+    </div>
+    <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.06); padding-top:10px;">
+        <label>Scan &amp; Register Tree <span class="help-icon" data-tip="Recursively scan a directory, register all media files in-place (nothing moves), and auto-match them to projects/sequences/shots using the pattern above.">?</span></label>
+        <div class="input-row" style="gap:6px;">
+            <input type="text" id="flowScanRoot" placeholder="/shows/HERO  or  Z:\Projects\HERO">
+            <button id="flowScanDryRunBtn">👁️ Preview</button>
+            <button id="flowScanTreeBtn">🚀 Scan &amp; Register</button>
+        </div>
+    </div>
+    <div id="flowPathLog" style="margin-top:8px;font-size:0.82rem;color:var(--text-dim);max-height:200px;overflow-y:auto;"></div>
 </div>
