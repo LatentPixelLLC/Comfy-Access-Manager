@@ -20,7 +20,7 @@ const os = require('os');
 const ROOT = path.join(__dirname, '..', '..');
 const TOOLS_RV = path.join(ROOT, 'tools', 'rv');
 const RV_BUILD_FILE = path.join(TOOLS_RV, '.rv_build');
-const GITHUB_REPO = 'gregtee2/Comfy-Access-Manager';
+const GITHUB_REPO = 'LatentPixelLLC/Comfy-Access-Manager';
 const GITHUB_RAW = `https://raw.githubusercontent.com/${GITHUB_REPO}/stable`;
 const CHECK_CACHE_MS = 5 * 60 * 1000; // 5-minute cache
 

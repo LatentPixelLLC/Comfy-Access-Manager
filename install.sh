@@ -180,7 +180,7 @@ fi
 # ─── Download OpenRV if requested ───
 if [[ "$INSTALL_RV" == "y" ]]; then
     mkdir -p tools
-    RV_URL="https://github.com/gregtee2/Comfy-Access-Manager/releases/download/rv-3.1.0/OpenRV-3.1.0-macos-arm64-mediavault.zip"
+    RV_URL="https://github.com/LatentPixelLLC/Comfy-Access-Manager/releases/download/rv-3.1.0/OpenRV-3.1.0-macos-arm64-mediavault.zip"
     echo ""
     echo "         Downloading OpenRV 3.1.0..."
     echo "         (this is a large file — it may take a few minutes)"

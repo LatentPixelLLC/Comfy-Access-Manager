@@ -174,7 +174,7 @@ The one-click installer automatically downloads and installs **everything** you 
 
 ```bash
 # 1. Download the ZIP from GitHub and extract it (or clone if you already have Git)
-git clone https://github.com/gregtee2/Comfy-Access-Manager.git
+git clone https://github.com/LatentPixelLLC/Comfy-Access-Manager.git
 cd Comfy-Access-Manager
 
 # 2. Run the one-click installer (handles Node.js, Git, FFmpeg, npm packages)
@@ -189,7 +189,7 @@ start.bat
 Open **Terminal** (press ⌘ Space, type "Terminal", hit Enter) and paste this one line:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/gregtee2/Comfy-Access-Manager/main/scripts/mac-install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/LatentPixelLLC/Comfy-Access-Manager/main/scripts/mac-install.sh)"
 ```
 
 That's it. The installer handles everything — Homebrew, Node.js, FFmpeg, and the app itself.
@@ -202,7 +202,7 @@ When it finishes, it will ask if you want to launch the app. Your browser will o
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/gregtee2/Comfy-Access-Manager.git
+git clone https://github.com/LatentPixelLLC/Comfy-Access-Manager.git
 cd Comfy-Access-Manager
 
 # 2. Run the installer (handles Node.js, Git, FFmpeg, npm packages)
@@ -213,7 +213,7 @@ chmod +x install.sh start.sh
 ./start.sh
 ```
 
-> **No Git?** You can also download the [ZIP from GitHub](https://github.com/gregtee2/Comfy-Access-Manager/archive/refs/heads/main.zip), extract it, and run the installer — it will install Git for you too.
+> **No Git?** You can also download the [ZIP from GitHub](https://github.com/LatentPixelLLC/Comfy-Access-Manager/archive/refs/heads/main.zip), extract it, and run the installer — it will install Git for you too.
 
 ---
 

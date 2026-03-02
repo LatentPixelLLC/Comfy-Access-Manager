@@ -6,7 +6,7 @@
 
 **Version**: 1.6.0
 **Port**: 7700
-**Repo**: `github.com/gregtee2/Comfy-Access-Manager` (branches: `main`, `stable`)
+**Repo**: `github.com/LatentPixelLLC/Comfy-Access-Manager` (branches: `main`, `stable`)
 **Status**: Active development (February 2026)
 **Platforms**: macOS (primary dev), Windows (production users), Linux (supported)
 
@@ -232,7 +232,7 @@ The GitHub repo is **private**. The auto-update system uses a GitHub **Personal 
 
 **Generating a PAT:**
 1. GitHub → Settings → Developer Settings → Fine-grained Personal Access Tokens
-2. "Generate new token" → select repo `gregtee2/Comfy-Access-Manager`
+2. "Generate new token" → select repo `LatentPixelLLC/Comfy-Access-Manager`
 3. Permissions: **Contents → Read-only** (that's all you need)
 4. Copy token → paste into Settings UI
 

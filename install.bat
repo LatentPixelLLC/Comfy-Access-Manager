@@ -246,7 +246,7 @@ if not exist "tools" mkdir tools
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$ProgressPreference = 'SilentlyContinue'; " ^
     "try { " ^
-    "  $url = 'https://github.com/gregtee2/Comfy-Access-Manager/releases/download/rv-3.1.0/OpenRV-3.1.0-win64-mediavault.zip'; " ^
+    "  $url = 'https://github.com/LatentPixelLLC/Comfy-Access-Manager/releases/download/rv-3.1.0/OpenRV-3.1.0-win64-mediavault.zip'; " ^
     "  Write-Host '         Downloading (this may take a few minutes)...'; " ^
     "  Invoke-WebRequest -Uri $url -OutFile 'tools\rv.zip'; " ^
     "  Write-Host '         Extracting...'; " ^
@@ -295,7 +295,7 @@ if not exist ".git" (
         echo.
         echo  [Setup] Initializing git repo for auto-updates...
         git init >nul 2>&1
-        git remote add origin https://github.com/gregtee2/Comfy-Access-Manager.git >nul 2>&1
+        git remote add origin https://github.com/LatentPixelLLC/Comfy-Access-Manager.git >nul 2>&1
         git fetch origin stable >nul 2>&1
         git reset --mixed origin/stable >nul 2>&1
         echo         Git repo initialized — auto-updater will work.
