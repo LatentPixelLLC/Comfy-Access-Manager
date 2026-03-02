@@ -374,6 +374,37 @@ class FlowService {
         return result;
     }
 
+    /**
+     * Create a Note in Flow with an optional image attachment.
+     * Used for exporting annotated review frames to ShotGrid.
+     */
+    static async createNote(params) {
+        const noteParams = {
+            project_id: params.flowProjectId,
+            subject: params.subject,
+            body: params.body || '',
+        };
+
+        if (params.flowShotId) noteParams.shot_id = params.flowShotId;
+        if (params.flowVersionId) noteParams.version_id = params.flowVersionId;
+        if (params.addresseeIds) noteParams.addressee_ids = params.addresseeIds;
+        if (params.attachmentPath) noteParams.attachment_path = params.attachmentPath;
+
+        const result = await this.execute('create_note', noteParams);
+
+        // Store the flow_note_id back on the review_note if provided
+        if (result.note && result.note.flow_id && params.reviewNoteId) {
+            const db = this._getDb();
+            try {
+                db.prepare(
+                    `UPDATE review_notes SET flow_note_id = ? WHERE id = ?`
+                ).run(result.note.flow_id, params.reviewNoteId);
+            } catch { /* column may not exist yet — migration will add it */ }
+        }
+
+        return result;
+    }
+
     static async uploadThumbnail(flowVersionId, thumbnailPath) {
         return this.execute('upload_thumbnail', {
             version_id: flowVersionId,

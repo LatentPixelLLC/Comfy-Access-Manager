@@ -2,6 +2,15 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.6.9] - 2026-03-01
+
+### Added — Export Annotated Frames to ShotGrid/Flow
+- **`create_note` bridge command** — New Python bridge command creates a Note entity in ShotGrid, optionally linked to a Shot and/or Version, with the annotated frame PNG uploaded as an attachment. Supports addressee lists for notification routing.
+- **`POST /api/flow/publish/note`** — New API route takes a `reviewNoteId` + `flowProjectId`, resolves the annotation image from disk, and exports everything to Flow as a Note with attachment.
+- **`FlowService.createNote()`** — New service method orchestrates the bridge call and writes `flow_note_id` back to the local `review_notes` row to track export state.
+- **Export to Flow button on note cards** — Each review note card now has a 🔀 button that opens a modal to pick the Flow project + optional subject/comments, then publishes the note. Button disables after successful export to prevent duplicates.
+- **`flow_note_id` column** — Auto-migration adds `flow_note_id INTEGER` to `review_notes` table, storing the ShotGrid Note ID for exported notes.
+
 ## [1.6.8] - 2026-03-01
 
 ### Changed — Safety Guardrails for Facility Deployment

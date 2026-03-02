@@ -240,6 +240,67 @@ router.post('/publish/media', async (req, res) => {
     }
 });
 
+// POST /api/flow/publish/note — Export a CAM review note as a ShotGrid Note with attachment
+// Body: { reviewNoteId, flowProjectId, flowShotId?, flowVersionId?, subject?, body? }
+router.post('/publish/note', async (req, res) => {
+    const { reviewNoteId, flowProjectId } = req.body;
+    if (!reviewNoteId || !flowProjectId) {
+        return res.status(400).json({ error: 'reviewNoteId and flowProjectId required' });
+    }
+
+    const database = require('../../src/database');
+    const db = database.getDb();
+    const path = require('path');
+
+    // Load the review note
+    const note = db.prepare('SELECT * FROM review_notes WHERE id = ?').get(reviewNoteId);
+    if (!note) {
+        return res.status(404).json({ error: 'Review note not found' });
+    }
+
+    // Build subject line
+    let subject = req.body.subject;
+    if (!subject) {
+        let assetName = '';
+        if (note.asset_id) {
+            const asset = db.prepare('SELECT vault_name FROM assets WHERE id = ?').get(note.asset_id);
+            assetName = asset ? asset.vault_name : '';
+        }
+        const frameStr = note.frame_number != null ? ` F${note.frame_number}` : '';
+        subject = `Review Note: ${assetName}${frameStr}`.trim();
+    }
+
+    // Build body
+    const body = req.body.body || note.note_text || '';
+
+    // Resolve annotation image path on disk
+    let attachmentPath = null;
+    if (note.annotation_image) {
+        const DATA_DIR = process.env.CAM_DATA_DIR || path.join(__dirname, '..', '..', 'data');
+        const fullPath = path.join(DATA_DIR, 'review-snapshots', note.annotation_image);
+        const fs = require('fs');
+        if (fs.existsSync(fullPath)) {
+            attachmentPath = fullPath;
+        }
+    }
+
+    try {
+        const result = await FlowService.createNote({
+            flowProjectId,
+            subject,
+            body,
+            flowShotId: req.body.flowShotId || null,
+            flowVersionId: req.body.flowVersionId || null,
+            addresseeIds: req.body.addresseeIds || null,
+            attachmentPath,
+            reviewNoteId: note.id,
+        });
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // ─── Mappings ───
 
 // GET /api/flow/mappings/projects — Get local projects linked to Flow

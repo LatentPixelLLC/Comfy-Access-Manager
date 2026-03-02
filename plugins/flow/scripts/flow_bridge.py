@@ -337,6 +337,66 @@ def cmd_publish_version(sg, args):
     except Exception as e:
         error(f"Failed to create version: {str(e)}")
 
+def cmd_create_note(sg, args):
+    """Create a Note entity in Flow, optionally with an image attachment."""
+    params = json.loads(args.json) if args.json else {}
+
+    project_id = params.get("project_id")
+    subject = params.get("subject")
+    body = params.get("body", "")
+
+    if not project_id or not subject:
+        error("'project_id' and 'subject' required in --json")
+
+    try:
+        data = {
+            "project": {"type": "Project", "id": int(project_id)},
+            "subject": subject,
+            "content": body,
+        }
+
+        # Link to Shot if provided
+        if params.get("shot_id"):
+            data["note_links"] = [{"type": "Shot", "id": int(params["shot_id"])}]
+
+        # Link to Version if provided (adds to note_links)
+        if params.get("version_id"):
+            links = data.get("note_links", [])
+            links.append({"type": "Version", "id": int(params["version_id"])})
+            data["note_links"] = links
+
+        # Addressees (list of user IDs) — people who should see it
+        if params.get("addressee_ids"):
+            data["addressings_to"] = [
+                {"type": "HumanUser", "id": int(uid)} for uid in params["addressee_ids"]
+            ]
+
+        note = sg.create("Note", data)
+        note_id = note["id"]
+
+        # Upload attachment image if provided
+        attachment_id = None
+        if params.get("attachment_path"):
+            att_path = params["attachment_path"]
+            if os.path.exists(att_path):
+                attachment_id = sg.upload("Note", note_id, att_path, field_name="attachments")
+            else:
+                # Non-fatal — note still created
+                pass
+
+        output({
+            "success": True,
+            "note": {
+                "flow_id": note_id,
+                "subject": subject,
+                "type": "Note",
+            },
+            "attachment_id": attachment_id,
+            "message": f"Note '{subject}' created (ID: {note_id})" + (f" with attachment" if attachment_id else "")
+        })
+    except Exception as e:
+        error(f"Failed to create note: {str(e)}")
+
 def cmd_upload_thumbnail(sg, args):
     """Upload a thumbnail image to a Version."""
     params = json.loads(args.json) if args.json else {}
@@ -374,6 +434,7 @@ COMMANDS = {
     "publish_version": cmd_publish_version,
     "upload_thumbnail": cmd_upload_thumbnail,
     "upload_media": cmd_upload_media,
+    "create_note": cmd_create_note,
 }
 
 def main():

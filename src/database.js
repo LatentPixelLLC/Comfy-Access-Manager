@@ -487,6 +487,15 @@ function runMigrations(wrapper) {
         }
     } catch (e) { /* table might not exist yet — schema above will create it */ }
 
+    // flow_note_id column for review_notes (tracks exported ShotGrid Note ID)
+    try {
+        const cols = wrapper.pragma('table_info(review_notes)');
+        if (!cols.find(c => c.name === 'flow_note_id')) {
+            wrapper.exec(`ALTER TABLE review_notes ADD COLUMN flow_note_id INTEGER`);
+            console.log('[DB] Added flow_note_id column to review_notes');
+        }
+    } catch (e) { /* table might not exist yet */ }
+
     // Seed default Admin user if users table is empty
     const userCount = wrapper.prepare('SELECT COUNT(*) as count FROM users').get();
     if (userCount.count === 0) {
