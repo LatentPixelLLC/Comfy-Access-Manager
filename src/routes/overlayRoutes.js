@@ -18,9 +18,10 @@ const { getDb, logActivity } = require('../database');
 const ThumbnailService = require('../services/ThumbnailService');
 const MediaInfoService = require('../services/MediaInfoService');
 const { resolveFilePath, getAllPathVariants } = require('../utils/pathResolver');
+const { findFFmpeg, findFFprobe, findFontFile } = require('../utils/ffmpegUtils');
 
-const resolvedFFmpeg = ThumbnailService.findFFmpeg() || 'ffmpeg';
-const resolvedFFprobe = MediaInfoService.findFFprobe() || 'ffprobe';
+const resolvedFFmpeg = findFFmpeg() || 'ffmpeg';
+const resolvedFFprobe = findFFprobe() || 'ffprobe';
 
 // ═══════════════════════════════════════════
 //  GET /api/overlay/presets -- List all overlay presets
@@ -244,26 +245,7 @@ function extractFrameWithFFmpeg(filePath, maxWidth, res) {
     res.on('close', () => ff.kill('SIGTERM'));
 }
 
-/**
- * Find a usable font file for FFmpeg drawtext (same logic as assetRoutes).
- */
-function findFontFile() {
-    const isWin = process.platform === 'win32';
-    const candidates = isWin ? [
-        'C:/Windows/Fonts/arial.ttf',
-        'C:/Windows/Fonts/segoeui.ttf',
-        'C:/Windows/Fonts/calibri.ttf',
-    ] : [
-        '/System/Library/Fonts/Helvetica.ttc',
-        '/System/Library/Fonts/SFNSText.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/TTF/DejaVuSans.ttf',
-    ];
-    for (const f of candidates) {
-        if (fs.existsSync(f)) return f.replace(/\\/g, '/').replace(/:/g, '\\:');
-    }
-    return null;
-}
+// findFontFile imported from ../utils/ffmpegUtils
 
 /**
  * Build FFmpeg drawtext filter chain from an overlay preset config.

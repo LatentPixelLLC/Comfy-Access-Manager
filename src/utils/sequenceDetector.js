@@ -15,6 +15,7 @@
  */
 
 const path = require('path');
+const { VIDEO_EXTS } = require('./mediaTypes');
 
 // Frame number detection patterns (ordered by priority)
 const FRAME_PATTERNS = [
@@ -27,10 +28,8 @@ const FRAME_PATTERNS = [
 // Video container formats are NEVER frame sequences — each file is already a
 // complete video with frames inside.  Only image/EXR/DPX-like formats can
 // legitimately form numbered frame sequences.
-const VIDEO_CONTAINER_EXTS = new Set([
-    'mov', 'mp4', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v',
-    'mpg', 'mpeg', '3gp', 'ts', 'mts', 'm2ts', 'prores',
-]);
+// Derived from MEDIA_TYPES.video.extensions in mediaTypes.js (single source of truth).
+const VIDEO_CONTAINER_EXTS = VIDEO_EXTS;
 
 /**
  * Detect frame sequences from an array of file paths.

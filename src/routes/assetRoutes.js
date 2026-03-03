@@ -21,6 +21,9 @@ const MediaInfoService = require('../services/MediaInfoService');
 const { detectMediaType, isMediaFile } = require('../utils/mediaTypes');
 const { generateVaultName, getVaultDirectory, generateFromConvention, getNextVersion } = require('../utils/naming');
 const { resolveFilePath, getAllPathVariants } = require('../utils/pathResolver');
+const { findRV, findRvPush, isRvRunning, rvPush, resolveAssetRvPath } = require('../utils/rvFinder');
+const { findFontFile } = require('../utils/ffmpegUtils');
+const { resolveUserAccess } = require('../utils/userAccess');
 
 // Multer for file uploads (temp storage)
 const upload = multer({
@@ -58,6 +61,10 @@ router.get('/', (req, res) => {
     const { project_id, sequence_id, shot_id, media_type, search, starred, unassigned, unassigned_shot, role_id, limit = 10000, offset = 0 } = req.query;
     const db = getDb();
 
+    // Access control: filter out assets from projects hidden from this user
+    const { hiddenIds } = resolveUserAccess(req);
+    if (hiddenIds === null) return res.json([]);
+
     let query = `
         SELECT a.*, 
             p.name as project_name, p.code as project_code,
@@ -72,6 +79,13 @@ router.get('/', (req, res) => {
         WHERE 1=1
     `;
     const params = [];
+
+    // Exclude assets belonging to hidden projects (non-admin users)
+    if (hiddenIds !== 'all' && hiddenIds.size > 0) {
+        const placeholders = [...hiddenIds].map(() => '?').join(',');
+        query += ` AND (a.project_id IS NULL OR a.project_id NOT IN (${placeholders}))`;
+        params.push(...hiddenIds);
+    }
 
     if (project_id) { query += ' AND a.project_id = ?'; params.push(project_id); }
     if (unassigned === '1') { query += ' AND a.sequence_id IS NULL'; }
@@ -1676,228 +1690,6 @@ function getMimeType(filename) {
 // ═══════════════════════════════════════════
 
 /**
- * Find RV (Autodesk/ShotGrid media viewer) executable on this machine.
- * Checks standard install locations per platform.
- */
-function findRV() {
-    const isWin = process.platform === 'win32';
-    const isMac = process.platform === 'darwin';
-
-    // 1. Check user-configured RV path in settings (highest priority)
-    try {
-        const customPath = getSetting('rv_path');
-        if (customPath && fs.existsSync(customPath)) return customPath;
-    } catch (e) { /* settings not ready yet */ }
-
-    // 2. Check MediaVault bundled RV (tools/rv/ — installed by install.bat / install.sh)
-    if (isMac) {
-        const bundledRvMac = path.join(__dirname, '..', '..', 'tools', 'rv', 'RV.app', 'Contents', 'MacOS', 'RV');
-        if (fs.existsSync(bundledRvMac)) return bundledRvMac;
-    }
-    const bundledRv = path.join(__dirname, '..', '..', 'tools', 'rv', 'bin', isWin ? 'rv.exe' : 'rv');
-    if (fs.existsSync(bundledRv)) return bundledRv;
-
-    // 3. Check OpenRV local build (common for self-compiled OpenRV)
-    if (isWin) {
-        const openrvBuild = 'C:\\OpenRV\\_build\\stage\\app\\bin\\rv.exe';
-        if (fs.existsSync(openrvBuild)) return openrvBuild;
-    } else if (isMac) {
-        const homedir = require('os').homedir();
-        const macBuilds = [
-            path.join(homedir, 'OpenRV', '_build', 'stage', 'app', 'RV.app', 'Contents', 'MacOS', 'RV'),
-            path.join(homedir, 'OpenRV', '_install', 'RV.app', 'Contents', 'MacOS', 'RV'),
-        ];
-        for (const p of macBuilds) {
-            if (fs.existsSync(p)) return p;
-        }
-    }
-
-    if (isWin) {
-        // Windows: check Program Files for RV installations
-        const searchDirs = ['C:\\Program Files', 'C:\\Program Files (x86)'];
-        const folderPrefixes = ['Autodesk\\RV', 'Shotgun\\RV', 'ShotGrid\\RV', 'Shotgun RV', 'RV'];
-        for (const base of searchDirs) {
-            for (const prefix of folderPrefixes) {
-                const dir = path.join(base, prefix);
-                // Exact match
-                const exe = path.join(dir, 'bin', 'rv.exe');
-                if (fs.existsSync(exe)) return exe;
-            }
-            // Scan for versioned folders like "Autodesk/RV-2024.0.1"
-            try {
-                const autodesk = path.join(base, 'Autodesk');
-                if (fs.existsSync(autodesk)) {
-                    const dirs = fs.readdirSync(autodesk).filter(d => d.startsWith('RV'));
-                    for (const d of dirs) {
-                        const exe = path.join(autodesk, d, 'bin', 'rv.exe');
-                        if (fs.existsSync(exe)) return exe;
-                    }
-                }
-            } catch (e) { /* ignore */ }
-            try {
-                const shotgun = path.join(base, 'Shotgun');
-                if (fs.existsSync(shotgun)) {
-                    const dirs = fs.readdirSync(shotgun).filter(d => d.startsWith('RV'));
-                    for (const d of dirs) {
-                        const exe = path.join(shotgun, d, 'bin', 'rv.exe');
-                        if (fs.existsSync(exe)) return exe;
-                    }
-                }
-            } catch (e) { /* ignore */ }
-        }
-    } else if (isMac) {
-        // macOS: check /Applications for RV.app bundles
-        const candidates = [
-            '/Applications/RV.app/Contents/MacOS/RV',
-            '/Applications/Autodesk/RV.app/Contents/MacOS/RV',
-        ];
-        for (const c of candidates) {
-            if (fs.existsSync(c)) return c;
-        }
-        try {
-            const dirs = fs.readdirSync('/Applications').filter(d =>
-                d.startsWith('RV') && d.endsWith('.app')
-            );
-            for (const d of dirs) {
-                const exe = path.join('/Applications', d, 'Contents', 'MacOS', 'RV');
-                if (fs.existsSync(exe)) return exe;
-            }
-        } catch (e) { /* ignore */ }
-    } else {
-        // Linux: check common install locations
-        const candidates = [
-            '/usr/local/rv/bin/rv',
-            '/opt/rv/bin/rv',
-            '/usr/local/bin/rv',
-            '/usr/bin/rv',
-        ];
-        for (const c of candidates) {
-            if (fs.existsSync(c)) return c;
-        }
-        // Scan /opt for versioned RV installs (e.g. /opt/rv-2024.0.1/)
-        try {
-            const dirs = fs.readdirSync('/opt').filter(d => d.startsWith('rv'));
-            for (const d of dirs) {
-                const exe = path.join('/opt', d, 'bin', 'rv');
-                if (fs.existsSync(exe)) return exe;
-            }
-        } catch (e) { /* ignore */ }
-    }
-    return null;
-}
-
-/**
- * Find rvpush.exe companion tool (lives next to rv.exe in same bin/ dir).
- * rvpush sends commands to a running RV session over network.
- */
-function findRvPush() {
-    const rvExe = findRV();
-    if (!rvExe) return null;
-    const rvDir = path.dirname(rvExe);
-    const pushExe = path.join(rvDir, process.platform === 'win32' ? 'rvpush.exe' : 'rvpush');
-    if (fs.existsSync(pushExe)) return pushExe;
-    return null;
-}
-
-/**
- * Resolve an asset DB row to the path RV should receive.
- * - For regular files: returns the resolved file path.
- * - For image sequences: returns RV sequence notation, e.g.
- *   /path/to/render.1001-1100#.exr  (one # per padding digit)
- * @param {Object} asset - Asset row with file_path, is_sequence, frame_pattern,
- *                         frame_start, frame_end, frame_count
- * @returns {string|null} RV-compatible path, or null if file doesn't exist
- */
-function resolveAssetRvPath(asset) {
-    if (!asset || !asset.file_path) return null;
-
-    const resolved = resolveFilePath(asset.file_path);
-
-    if (asset.is_sequence && asset.frame_pattern && asset.frame_start != null && asset.frame_end != null) {
-        // Build RV sequence notation from the frame_pattern (printf-style)
-        // frame_pattern looks like: "render.%04d.exr" or "render_%04d.exr"
-        // RV wants: "/dir/render.1001-1100####.exr"
-        const dir = path.dirname(resolved);
-        const pattern = asset.frame_pattern; // e.g. "render.%04d.exr"
-
-        // Extract padding width from %0Nd pattern
-        const padMatch = pattern.match(/%0(\d+)d/);
-        const digits = padMatch ? parseInt(padMatch[1], 10) : 4;
-        const hashes = '#'.repeat(digits);
-
-        // Replace %0Nd with frameStart-frameEnd followed by # padding
-        const rvPattern = pattern.replace(/%0\d+d/, `${asset.frame_start}-${asset.frame_end}${hashes}`);
-        const rvPath = path.join(dir, rvPattern);
-
-        // Verify at least the first frame exists
-        const firstFrame = pattern.replace(/%0\d+d/, String(asset.frame_start).padStart(digits, '0'));
-        const firstFramePath = path.join(dir, firstFrame);
-        if (fs.existsSync(firstFramePath)) return rvPath;
-
-        // Fallback: try resolved file_path directly
-        if (fs.existsSync(resolved)) return resolved;
-        return null;
-    }
-
-    // Regular file
-    if (fs.existsSync(resolved)) return resolved;
-    return null;
-}
-
-/**
- * Check if an RV process is currently running.
- * Returns true/false.
- */
-function isRvRunning() {
-    const { execSync } = require('child_process');
-    try {
-        if (process.platform === 'win32') {
-            const out = execSync('tasklist /FI "IMAGENAME eq rv.exe" /NH', { windowsHide: true, encoding: 'utf8' });
-            return out.includes('rv.exe');
-        } else {
-            execSync('pgrep -x rv', { stdio: 'ignore' });
-            return true;
-        }
-    } catch { return false; }
-}
-
-/**
- * Try to push files to a running RV session via rvpush.
- * @param {string} pushExe - Path to rvpush.exe
- * @param {string[]} filePaths - Files to load
- * @param {string} mode - 'set' (replace) or 'merge' (add)
- * @returns {{ success: boolean, started: boolean }} - started=true if we had to launch a new RV
- */
-function rvPush(pushExe, filePaths, mode = 'set') {
-    const { spawnSync } = require('child_process');
-    const cwd = path.dirname(pushExe);
-
-    // Build rvpush arguments
-    // Note: rvpush doesn't support compare flags (-wipe, -tile, etc.)
-    // Those are only valid for the rv executable itself
-    const args = [mode, ...filePaths];
-
-    // Set RVPUSH_RV_EXECUTABLE_PATH=none so rvpush never auto-launches RV
-    // (we handle launching ourselves with -network to ensure future pushes work)
-    const env = { ...process.env, RVPUSH_RV_EXECUTABLE_PATH: 'none' };
-
-    const result = spawnSync(pushExe, args, { cwd, windowsHide: true, timeout: 5000, encoding: 'utf8', env });
-
-    // Exit 0 = success (pushed to running RV)
-    // Exit 15 = no running RV found, rvpush started a new one
-    // Exit 4 = connection failed (RV not running and couldn't auto-start)
-    if (result.status === 0) {
-        console.log(`[RV] rvpush ${mode}: ${filePaths.length} file(s) → running session`);
-        return { success: true, started: false };
-    }
-    if (result.status === 15) {
-        console.log(`[RV] rvpush ${mode}: started new RV with ${filePaths.length} file(s)`);
-        return { success: true, started: true };
-    }
-    return { success: false, started: false };
-}
-
-/**
  * Launch file(s) in RV with persistent session support.
  * 1. If RV is running → use rvpush to replace/merge media (no restart)
  * 2. If RV is not running → launch rv.exe with -network flag (enables rvpush)
@@ -2045,30 +1837,7 @@ router.post('/rv-push', (req, res) => {
  * Build FFmpeg drawtext/drawbox filter string for review overlays.
  * Returns a complex filter string with burn-in, watermark, safe areas, frame counter.
  */
-/**
- * Find a usable font file for FFmpeg drawtext.
- * Returns the fontfile= parameter string (with escaped path for FFmpeg).
- */
-function findFontFile() {
-    const isWin = process.platform === 'win32';
-    const candidates = isWin ? [
-        'C:/Windows/Fonts/arial.ttf',
-        'C:/Windows/Fonts/segoeui.ttf',
-        'C:/Windows/Fonts/calibri.ttf',
-    ] : [
-        '/System/Library/Fonts/Helvetica.ttc',        // macOS
-        '/System/Library/Fonts/SFNSText.ttf',         // macOS
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  // Linux
-        '/usr/share/fonts/TTF/DejaVuSans.ttf',        // Linux alt
-    ];
-    for (const f of candidates) {
-        if (fs.existsSync(f)) {
-            // FFmpeg needs forward slashes and escaped colons
-            return f.replace(/\\/g, '/').replace(/:/g, '\\:');
-        }
-    }
-    return null; // Will fall back to font=Arial and hope fontconfig works
-}
+// findFontFile imported from ../utils/ffmpegUtils
 
 function buildReviewFilters(opts) {
     const {

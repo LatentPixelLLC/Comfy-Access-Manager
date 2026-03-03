@@ -573,6 +573,23 @@ Import from Resolve</button>
                     <label><input type="checkbox" id="settingAutoThumb" checked> Auto-generate thumbnails on import</label>
                 </div>
 
+                <div class="settings-section">
+                    <h3>Local AI Tools</h3>
+                    <p class="hint">Configure connections to local LLM runners (like Ollama or LM Studio) for Magic Translation and other AI features.</p>
+
+                    <label style="margin-top:10px;">LLM Endpoint URL <span class="help-icon" data-tip="The REST API endpoint for your local model runner. For Ollama, this is usually http://localhost:11434/api/generate.">?</span></label>
+                    <div class="input-row" style="margin-top:4px;">
+                        <input type="text" id="settingLlmUrl" placeholder="http://127.0.0.1:11434/api/generate">
+                        <button onclick="saveSettings()">Save</button>
+                    </div>
+
+                    <label style="margin-top:10px;">Model Name <span class="help-icon" data-tip="The identifier of the active model.">?</span></label>
+                    <div class="input-row" style="margin-top:4px;">
+                        <input type="text" id="settingLlmModel" placeholder="deepseek-r1:32b">
+                        <button onclick="saveSettings()">Save</button>
+                    </div>
+                </div>
+
                 <!-- ComfyUI settings injected by plugin -->
                 <div id="plugin-settings-comfyui"></div>
 

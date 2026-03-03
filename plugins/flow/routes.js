@@ -490,6 +490,84 @@ router.post('/path-config', (req, res) => {
     res.json({ success: true, showRoot: PathMatchService.getShowRoot(), pattern: PathMatchService.getPattern() });
 });
 
+// POST /api/flow/sync/versions — Fetch Versions + PublishedFiles from Flow and register in-place
+// Body: { flowProjectId, localProjectId, source?: 'versions'|'published_files'|'both' }
+router.post('/sync/versions', async (req, res) => {
+    const { flowProjectId, localProjectId, source } = req.body;
+    if (!flowProjectId || !localProjectId) {
+        return res.status(400).json({ error: 'flowProjectId and localProjectId required' });
+    }
+
+    try {
+        const result = await FlowService.syncVersions(
+            Number(flowProjectId),
+            Number(localProjectId),
+            { source: source || 'both' }
+        );
+        res.json(result);
+    } catch (err) {
+        console.error('[Flow] sync/versions error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/flow/sync/thumbnails — Pull thumbnails from ShotGrid for already-imported assets + shot thumbnails
+router.post('/sync/thumbnails', async (req, res) => {
+    const { flowProjectId, localProjectId, source, overwrite } = req.body;
+    if (!flowProjectId || !localProjectId) {
+        return res.status(400).json({ error: 'flowProjectId and localProjectId required' });
+    }
+
+    try {
+        // Pull asset thumbnails (from Versions + PublishedFiles)
+        const assetResult = await FlowService.syncThumbnails(
+            Number(flowProjectId),
+            Number(localProjectId),
+            { source: source || 'both', overwrite: !!overwrite }
+        );
+
+        // Also pull shot thumbnails
+        let shotResult = { downloaded: 0, skipped: 0, noThumb: 0, errors: 0, total: 0 };
+        try {
+            shotResult = await FlowService.syncShotThumbnails(
+                Number(flowProjectId),
+                Number(localProjectId),
+                { overwrite: !!overwrite }
+            );
+        } catch (err) {
+            console.warn('[Flow] Shot thumbnail sync failed:', err.message);
+        }
+
+        // Also pull role-level thumbnails (latest Version thumb per shot+step)
+        let roleResult = { downloaded: 0, skipped: 0, noThumb: 0, errors: 0, total: 0 };
+        try {
+            roleResult = await FlowService.syncRoleThumbnails(
+                Number(flowProjectId),
+                Number(localProjectId),
+                { overwrite: !!overwrite }
+            );
+        } catch (err) {
+            console.warn('[Flow] Role thumbnail sync failed:', err.message);
+        }
+
+        res.json({
+            success: true,
+            assets: assetResult,
+            shots: shotResult,
+            roles: roleResult,
+            downloaded: assetResult.downloaded + shotResult.downloaded + roleResult.downloaded,
+            skipped: assetResult.skipped + shotResult.skipped + roleResult.skipped,
+            noThumb: assetResult.noThumb + shotResult.noThumb + roleResult.noThumb,
+            errors: assetResult.errors + shotResult.errors + roleResult.errors,
+            total: assetResult.total + shotResult.total + roleResult.total,
+            message: `Assets: ${assetResult.message} | Shots: ${shotResult.message} | Roles: ${roleResult.message}`
+        });
+    } catch (err) {
+        console.error('[Flow] sync/thumbnails error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // POST /api/flow/scan-tree — Recursively scan a directory, register in-place, auto-match
 // Body: { rootDir, dryRun?, maxFiles? }
 router.post('/scan-tree', (req, res) => {

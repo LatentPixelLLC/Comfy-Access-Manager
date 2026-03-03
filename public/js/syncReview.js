@@ -7,7 +7,7 @@
  */
 
 import { api } from './api.js';
-import { showToast } from './utils.js';
+import { showToast, esc } from './utils.js';
 
 // ─── State ───
 let activeReviews = [];
@@ -433,7 +433,7 @@ function renderReviewPanel() {
     // Render grouped by project
     for (const [projectName, sessions] of Object.entries(grouped)) {
         html += `<div class="review-project-group">`;
-        html += `<div class="review-project-label">${escHtml(projectName)}</div>`;
+        html += `<div class="review-project-label">${esc(projectName)}</div>`;
         for (const session of sessions) {
             html += renderSessionCard(session);
         }
@@ -469,7 +469,7 @@ function renderSessionCard(session) {
     if (session.assets && session.assets.length > 0) {
         const maxShow = 3;
         const shown = session.assets.slice(0, maxShow);
-        const names = shown.map(a => escHtml(a.vault_name || `Asset #${a.id}`)).join(', ');
+        const names = shown.map(a => esc(a.vault_name || `Asset #${a.id}`)).join(', ');
         const remaining = session.assets.length - maxShow;
         assetNames = remaining > 0 ? `${names} +${remaining} more` : names;
     } else if (assetCount > 0) {
@@ -478,7 +478,7 @@ function renderSessionCard(session) {
 
     // Project badge
     const projectBadge = session.project_name
-        ? `<span class="review-project-badge">${escHtml(session.project_code || session.project_name)}</span>`
+        ? `<span class="review-project-badge">${esc(session.project_code || session.project_name)}</span>`
         : '';
 
     // Action buttons: host sees "End", others see "Leave"
@@ -506,17 +506,17 @@ function renderSessionCard(session) {
     return `
     <div class="review-session-card${session.is_owner ? ' review-session-owned' : ''}" data-session-id="${session.id}">
         <div class="review-session-header">
-            <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
+            <span class="review-session-title">${esc(session.title || 'Untitled Review')}</span>
             ${session.is_owner ? '<span class="review-session-owner-badge">YOUR SESSION</span>' : ''}
             <span class="review-session-status">\u25CF LIVE</span>
         </div>
         <div class="review-session-meta">
             ${projectBadge}
-            <span>Host: <strong>${escHtml(session.host_name)}</strong></span>
-            <span>by <strong>${escHtml(session.started_by || 'Unknown')}</strong></span>
+            <span>Host: <strong>${esc(session.host_name)}</strong></span>
+            <span>by <strong>${esc(session.started_by || 'Unknown')}</strong></span>
             <span>${startedAgo}</span>
         </div>
-        ${assetNames ? `<div class="review-session-assets" title="${escHtml(assetNames)}">\uD83C\uDFAC ${assetNames}</div>` : ''}
+        ${assetNames ? `<div class="review-session-assets" title="${esc(assetNames)}">\uD83C\uDFAC ${assetNames}</div>` : ''}
         <div class="review-session-actions">
             ${actionButtons}
         </div>
@@ -540,7 +540,7 @@ function renderHistoryPanel() {
         const endedAgo = formatTimeAgo(session.ended_at);
         const startedAgo = formatTimeAgo(session.started_at);
         const projectBadge = session.project_name
-            ? `<span class="review-project-badge">${escHtml(session.project_code || session.project_name)}</span>`
+            ? `<span class="review-project-badge">${esc(session.project_code || session.project_name)}</span>`
             : '';
         const notesBadge = session.note_count > 0
             ? `<span class="review-notes-badge">${session.note_count} note${session.note_count !== 1 ? 's' : ''}</span>`
@@ -549,12 +549,12 @@ function renderHistoryPanel() {
         html += `
         <div class="review-session-card review-session-ended" data-session-id="${session.id}">
             <div class="review-session-header">
-                <span class="review-session-title">${escHtml(session.title || 'Untitled Review')}</span>
+                <span class="review-session-title">${esc(session.title || 'Untitled Review')}</span>
                 <span class="review-session-status review-session-status-ended">\u2713 ENDED</span>
             </div>
             <div class="review-session-meta">
                 ${projectBadge}
-                <span>by <strong>${escHtml(session.started_by || 'Unknown')}</strong></span>
+                <span>by <strong>${esc(session.started_by || 'Unknown')}</strong></span>
                 <span>${startedAgo} \u2192 ${endedAgo}</span>
             </div>
             <div class="review-session-actions">
@@ -588,7 +588,7 @@ function renderNotesView(sessionTitle, sessionStatus) {
     let html = `
     <div class="review-notes-header">
         <button class="review-notes-back" onclick="switchReviewTab('${isActive ? 'active' : 'history'}')" title="Back">\u2190</button>
-        <span class="review-notes-title">${escHtml(sessionTitle || 'Review Notes')}</span>
+        <span class="review-notes-title">${esc(sessionTitle || 'Review Notes')}</span>
         <span class="review-notes-count">${currentNotes.length} note${currentNotes.length !== 1 ? 's' : ''}</span>
     </div>`;
 
@@ -633,7 +633,7 @@ function renderNotesView(sessionTitle, sessionStatus) {
         // Render by asset group
         for (const [assetName, notes] of Object.entries(byAsset)) {
             html += `<div class="review-notes-asset-group">`;
-            html += `<div class="review-notes-asset-label">\uD83C\uDFAC ${escHtml(assetName)}</div>`;
+            html += `<div class="review-notes-asset-label">\uD83C\uDFAC ${esc(assetName)}</div>`;
             for (const note of notes) {
                 html += renderNoteCard(note);
             }
@@ -655,7 +655,7 @@ function renderNotesView(sessionTitle, sessionStatus) {
 function renderNoteCard(note) {
     const timeAgo = formatTimeAgo(note.created_at);
     const frameLabel = note.frame_number != null ? `<span class="review-note-frame">F${note.frame_number}</span>` : '';
-    const timecodeLabel = note.timecode ? `<span class="review-note-timecode">${escHtml(note.timecode)}</span>` : '';
+    const timecodeLabel = note.timecode ? `<span class="review-note-timecode">${esc(note.timecode)}</span>` : '';
 
     const statusClass = note.status === 'resolved' ? 'resolved' : note.status === 'wontfix' ? 'wontfix' : 'open';
     const statusIcon = note.status === 'resolved' ? '\u2705' : note.status === 'wontfix' ? '\u274C' : '\u2B55';
@@ -666,10 +666,10 @@ function renderNoteCard(note) {
     // Annotation image (frame snapshot from RV with paint-overs)
     const annotationHtml = note.annotation_image
         ? `<div class="review-note-annotation">
-               <img src="/review-snapshots/${escHtml(note.annotation_image)}" 
+               <img src="/review-snapshots/${esc(note.annotation_image)}" 
                     alt="Annotated frame ${note.frame_number || ''}" 
                     class="review-note-annotation-img"
-                    data-annotation-path="${escHtml(note.annotation_image)}"
+                    data-annotation-path="${esc(note.annotation_image)}"
                     onclick="openAnnotationFullscreen(this.src)"
                     onerror="annotationHubFallback(this)"
                     title="Click to view full size">
@@ -682,7 +682,7 @@ function renderNoteCard(note) {
         <div class="review-note-card-header">
             <div class="review-note-card-meta">
                 ${frameLabel}${timecodeLabel}
-                <span class="review-note-author">${escHtml(note.author)}</span>
+                <span class="review-note-author">${esc(note.author)}</span>
                 <span class="review-note-time">${timeAgo}</span>
             </div>
             <div class="review-note-card-actions">
@@ -692,7 +692,7 @@ function renderNoteCard(note) {
             </div>
         </div>
         ${annotationHtml}
-        <div class="review-note-text">${escHtml(note.note_text)}</div>
+        <div class="review-note-text">${esc(note.note_text)}</div>
     </div>`;
 }
 
@@ -883,12 +883,7 @@ function stopPolling() {
 
 
 // ─── Helpers ───
-
-function escHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
+// escHtml replaced by esc() imported from utils.js
 
 function formatTimeAgo(isoDate) {
     if (!isoDate) return '';

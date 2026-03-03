@@ -133,7 +133,7 @@ router.get('/probe/:id', (req, res) => {
                 height: videoStream.height,
                 codec: videoStream.codec_name,
                 codec_long: videoStream.codec_long_name,
-                fps: eval(videoStream.r_frame_rate) || null,  // e.g. "24000/1001"
+                fps: (() => { const parts = (videoStream.r_frame_rate || '').split('/'); return parts[1] ? parseFloat(parts[0]) / parseFloat(parts[1]) : parseFloat(parts[0]) || null; })(),
                 duration: parseFloat(info.format?.duration) || null,
                 bitrate: parseInt(info.format?.bit_rate) || null,
                 pixel_format: videoStream.pix_fmt,

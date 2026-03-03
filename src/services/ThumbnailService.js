@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { getSetting } = require('../database');
+const { findFFmpeg: _sharedFindFFmpeg } = require('../utils/ffmpegUtils');
+const { VIDEO_EXTS_DOT, IMAGE_EXTS_DOT } = require('../utils/mediaTypes');
 
 // Try to use sharp for images, gracefully degrade if unavailable
 let sharp = null;
@@ -23,9 +25,6 @@ try {
 }
 
 const THUMB_DIR = path.join(__dirname, '..', '..', 'thumbnails');
-
-// Cached FFmpeg path — resolved once, reused forever
-let _cachedFFmpegPath = undefined; // undefined = not yet looked up, null = not found
 
 class ThumbnailService {
 
@@ -60,8 +59,8 @@ class ThumbnailService {
         const thumbSize = parseInt(getSetting('thumbnail_size') || '320');
 
         try {
-            const videoExts = ['.mov', '.mp4', '.avi', '.mkv', '.wmv', '.webm', '.m4v', '.mpg', '.mpeg', '.ts', '.mts'];
-            const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp', '.heic', '.exr'];
+            const videoExts = VIDEO_EXTS_DOT;
+            const imageExts = IMAGE_EXTS_DOT;
 
             if (videoExts.includes(ext)) {
                 await this.generateVideoThumb(filePath, thumbPath, thumbSize);
@@ -173,41 +172,7 @@ class ThumbnailService {
      * Find FFmpeg in common locations
      */
     static findFFmpeg() {
-        // Return cached result if we've already looked
-        if (_cachedFFmpegPath !== undefined) return _cachedFFmpegPath;
-
-        const isWin = process.platform === 'win32';
-        const localTools = path.join(__dirname, '..', '..', 'tools', 'ffmpeg', 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg');
-        const candidates = [
-            'ffmpeg',  // Works if on PATH (brew install ffmpeg, apt install ffmpeg, or Windows PATH)
-            localTools, // Local tools/ directory (installed by install.bat)
-            ...(isWin ? [
-                'C:\\ffmpeg\\bin\\ffmpeg.exe',
-                'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
-                path.join(process.env.LOCALAPPDATA || '', 'ffmpeg', 'bin', 'ffmpeg.exe'),
-            ] : [
-                '/opt/homebrew/bin/ffmpeg',    // macOS (Apple Silicon Homebrew)
-                '/usr/local/bin/ffmpeg',       // macOS (Intel Homebrew) / Linux
-                '/usr/bin/ffmpeg',             // Linux system package
-            ]),
-        ];
-        
-        // Check PATH first
-        const { execFileSync } = require('child_process');
-        for (const candidate of candidates) {
-            try {
-                if (candidate === 'ffmpeg') {
-                    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 5000 });
-                    _cachedFFmpegPath = 'ffmpeg';
-                    return _cachedFFmpegPath;
-                } else if (fs.existsSync(candidate)) {
-                    _cachedFFmpegPath = candidate;
-                    return _cachedFFmpegPath;
-                }
-            } catch {}
-        }
-        _cachedFFmpegPath = null;
-        return null;
+        return _sharedFindFFmpeg();
     }
 
     /**

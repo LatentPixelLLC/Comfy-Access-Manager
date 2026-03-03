@@ -344,13 +344,29 @@ class SpokeService extends EventEmitter {
     _applyChange(change) {
         const { table, action, data } = change;
 
+        // Whitelist valid table names to prevent SQL injection from malicious SSE events
+        const ALLOWED_TABLES = new Set([
+            'assets', 'projects', 'sequences', 'shots', 'roles',
+            'settings', 'watch_folders', 'comfyui_mappings',
+            'users', 'project_hidden', 'activity_log',
+            'review_sessions', 'review_notes', 'overlay_presets', 'crates', 'crate_items',
+        ]);
+        if (!ALLOWED_TABLES.has(table)) {
+            console.error(`[Spoke] Rejected change for unknown table: ${table}`);
+            return;
+        }
+
+        // Whitelist valid column names (alphanumeric + underscore only)
+        const VALID_COL = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
         try {
             const { getDb } = require('../database');
             const db = getDb();
 
             if (action === 'insert' && data.record) {
                 const record = data.record;
-                const cols = Object.keys(record);
+                const cols = Object.keys(record).filter(c => VALID_COL.test(c));
+                if (cols.length === 0) return;
                 const placeholders = cols.map(() => '?').join(', ');
                 const stmt = db.prepare(
                     `INSERT OR REPLACE INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`
@@ -358,15 +374,18 @@ class SpokeService extends EventEmitter {
                 stmt.run(...cols.map(c => record[c]));
             } else if (action === 'update' && data.record && data.id) {
                 const record = data.record;
-                const sets = Object.keys(record).map(k => `${k} = ?`).join(', ');
+                const validCols = Object.keys(record).filter(c => VALID_COL.test(c));
+                if (validCols.length === 0) return;
+                const sets = validCols.map(k => `${k} = ?`).join(', ');
                 const stmt = db.prepare(`UPDATE ${table} SET ${sets} WHERE id = ?`);
-                stmt.run(...Object.values(record), data.id);
+                stmt.run(...validCols.map(k => record[k]), data.id);
             } else if (action === 'delete' && data.id) {
                 db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(data.id);
             } else if (action === 'bulk-insert' && data.records) {
                 const records = data.records;
                 if (records.length === 0) return;
-                const cols = Object.keys(records[0]);
+                const cols = Object.keys(records[0]).filter(c => VALID_COL.test(c));
+                if (cols.length === 0) return;
                 const placeholders = cols.map(() => '?').join(', ');
                 const stmt = db.prepare(
                     `INSERT OR REPLACE INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`

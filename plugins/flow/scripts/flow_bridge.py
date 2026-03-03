@@ -18,6 +18,8 @@ Commands:
     sync_steps           - Fetch pipeline steps (become Roles in MediaVault)
     publish_version      - Create a Version in Flow (requires --json '{"project_id":..., ...}')
     upload_thumbnail     - Upload thumbnail to a Version (requires --json '{"version_id":..., "path":"..."}')
+    fetch_thumbnail_urls - Get thumbnail URLs for Versions + PublishedFiles (requires --json '{"project_id":...}')
+    fetch_shot_thumbnails - Get thumbnail URLs for Shots in a project (requires --json '{"project_id":...}')
 """
 
 import sys
@@ -423,6 +425,306 @@ def cmd_upload_thumbnail(sg, args):
 
 # ─── Main ───────────────────────────────────────────────────
 
+def cmd_sync_versions(sg, args):
+    """Fetch Versions for a project with file paths for bulk import."""
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    try:
+        filters = [["project", "is", {"type": "Project", "id": int(project_id)}]]
+
+        # Optional: filter by status
+        statuses = params.get("statuses")
+        if statuses:
+            filters.append(["sg_status_list", "in", statuses])
+
+        versions = sg.find("Version",
+            filters=filters,
+            fields=[
+                "code", "description", "sg_status_list",
+                "sg_path_to_frames", "sg_path_to_movie",
+                "entity",           # linked Shot/Asset
+                "sg_task",          # linked Task (has pipeline step)
+                "sg_task.Task.step",
+                "created_at", "id"
+            ],
+            order=[{"field_name": "created_at", "direction": "desc"}]
+        )
+
+        result = []
+        for v in versions:
+            entity = v.get("entity")
+            task = v.get("sg_task")
+            # Get step from task
+            step = None
+            if task:
+                task_step = v.get("sg_task.Task.step")
+                if task_step:
+                    step = task_step
+
+            # Collect all available file paths
+            paths = []
+            if v.get("sg_path_to_frames"):
+                p = v["sg_path_to_frames"]
+                # Can be a dict with 'local_path' or a string
+                if isinstance(p, dict):
+                    for key in ("local_path", "local_path_windows", "local_path_mac", "local_path_linux"):
+                        if p.get(key):
+                            paths.append(p[key])
+                elif isinstance(p, str) and p:
+                    paths.append(p)
+
+            if v.get("sg_path_to_movie"):
+                p = v["sg_path_to_movie"]
+                if isinstance(p, dict):
+                    for key in ("local_path", "local_path_windows", "local_path_mac", "local_path_linux"):
+                        if p.get(key):
+                            paths.append(p[key])
+                elif isinstance(p, str) and p:
+                    paths.append(p)
+
+            # Deduplicate paths
+            paths = list(dict.fromkeys(paths))
+
+            result.append({
+                "flow_id": v["id"],
+                "code": v.get("code", ""),
+                "description": v.get("description", "") or "",
+                "status": v.get("sg_status_list", ""),
+                "entity_type": entity["type"] if entity else None,
+                "entity_id": entity["id"] if entity else None,
+                "entity_name": entity.get("name", "") if entity else None,
+                "step_id": step["id"] if step else None,
+                "step_name": step.get("name", "") if step else None,
+                "paths": paths,
+                "created_at": v.get("created_at"),
+            })
+
+        output({"success": True, "versions": result, "count": len(result)})
+    except Exception as e:
+        error(f"Failed to fetch versions: {str(e)}")
+
+
+def cmd_sync_published_files(sg, args):
+    """Fetch PublishedFiles for a project with file paths."""
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    try:
+        filters = [["project", "is", {"type": "Project", "id": int(project_id)}]]
+
+        pfiles = sg.find("PublishedFile",
+            filters=filters,
+            fields=[
+                "code", "description", "sg_status_list",
+                "path", "path_cache",
+                "entity",           # linked Shot/Asset
+                "task",             # linked Task
+                "task.Task.step",
+                "published_file_type",
+                "version_number",
+                "created_at", "id"
+            ],
+            order=[{"field_name": "created_at", "direction": "desc"}]
+        )
+
+        result = []
+        for pf in pfiles:
+            entity = pf.get("entity")
+            task = pf.get("task")
+            step = None
+            if task:
+                task_step = pf.get("task.Task.step")
+                if task_step:
+                    step = task_step
+
+            paths = []
+            # path field
+            p = pf.get("path")
+            if p:
+                if isinstance(p, dict):
+                    for key in ("local_path", "local_path_windows", "local_path_mac", "local_path_linux"):
+                        if p.get(key):
+                            paths.append(p[key])
+                elif isinstance(p, str) and p:
+                    paths.append(p)
+
+            # path_cache as fallback
+            pc = pf.get("path_cache")
+            if pc and isinstance(pc, str):
+                paths.append(pc)
+
+            paths = list(dict.fromkeys(paths))
+
+            pf_type = pf.get("published_file_type")
+
+            result.append({
+                "flow_id": pf["id"],
+                "code": pf.get("code", ""),
+                "description": pf.get("description", "") or "",
+                "status": pf.get("sg_status_list", ""),
+                "entity_type": entity["type"] if entity else None,
+                "entity_id": entity["id"] if entity else None,
+                "entity_name": entity.get("name", "") if entity else None,
+                "step_id": step["id"] if step else None,
+                "step_name": step.get("name", "") if step else None,
+                "paths": paths,
+                "file_type": pf_type.get("name", "") if pf_type else None,
+                "version_number": pf.get("version_number"),
+                "created_at": pf.get("created_at"),
+            })
+
+        output({"success": True, "published_files": result, "count": len(result)})
+    except Exception as e:
+        error(f"Failed to fetch published files: {str(e)}")
+
+
+def cmd_fetch_shot_thumbnails(sg, args):
+    """Fetch thumbnail URLs for all Shots in a project that have images."""
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    try:
+        shots = sg.find("Shot",
+            filters=[["project", "is", {"type": "Project", "id": int(project_id)}]],
+            fields=["id", "code", "image"],
+            order=[{"field_name": "code", "direction": "asc"}])
+
+        thumbnails = []
+        for s in shots:
+            if s.get("image"):
+                thumbnails.append({
+                    "flow_id": s["id"],
+                    "code": s.get("code", ""),
+                    "url": s["image"],
+                })
+
+        output({"success": True, "thumbnails": thumbnails, "count": len(thumbnails)})
+    except Exception as e:
+        error(f"Failed to fetch shot thumbnails: {str(e)}")
+
+
+def cmd_fetch_role_thumbnails(sg, args):
+    """Fetch the latest Version thumbnail per Shot+Step combo in a project.
+    This gives role-level thumbnails: e.g. the latest Paint version's thumbnail for shot 104_0100.
+    """
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    try:
+        # Get all Versions with thumbnails, linked to a Shot, with task step info
+        versions = sg.find("Version",
+            filters=[
+                ["project", "is", {"type": "Project", "id": int(project_id)}],
+                ["image", "is_not", None],
+                ["entity", "type_is", "Shot"],
+            ],
+            fields=["id", "image", "entity", "sg_task", "sg_task.Task.step", "created_at"],
+            order=[{"field_name": "created_at", "direction": "desc"}]  # newest first
+        )
+
+        # Group by (shot_flow_id, step_flow_id) — keep only the latest (first seen due to sort)
+        seen = {}  # key: "shotId_stepId" -> {shot_flow_id, step_flow_id, url}
+        for v in versions:
+            entity = v.get("entity")
+            if not entity or entity.get("type") != "Shot":
+                continue
+
+            # Get step from task link
+            step = None
+            task = v.get("sg_task")
+            if task:
+                task_step = v.get("sg_task.Task.step")
+                if task_step:
+                    step = task_step
+
+            if not step:
+                continue  # skip versions without a pipeline step
+
+            key = f"{entity['id']}_{step['id']}"
+            if key not in seen:
+                seen[key] = {
+                    "shot_flow_id": entity["id"],
+                    "shot_name": entity.get("name", ""),
+                    "step_flow_id": step["id"],
+                    "step_name": step.get("name", ""),
+                    "url": v["image"],
+                    "version_id": v["id"],
+                }
+
+        thumbnails = list(seen.values())
+        output({"success": True, "thumbnails": thumbnails, "count": len(thumbnails)})
+    except Exception as e:
+        error(f"Failed to fetch role thumbnails: {str(e)}")
+
+
+def cmd_fetch_thumbnail_urls(sg, args):
+    """Fetch thumbnail URLs for Versions and PublishedFiles in a project.
+    Returns {flow_id: url} for each entity that has a thumbnail.
+    """
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    source = params.get("source", "both")
+    # flow_ids: optional list of specific IDs to look up (for incremental fetch)
+    flow_ids = params.get("flow_ids")
+
+    thumbnails = []
+
+    try:
+        if source in ("versions", "both"):
+            filters = [["project", "is", {"type": "Project", "id": int(project_id)}]]
+            if flow_ids:
+                filters.append(["id", "in", flow_ids])
+
+            versions = sg.find("Version", filters=filters,
+                fields=["id", "image", "entity"],
+                order=[{"field_name": "id", "direction": "asc"}])
+
+            for v in versions:
+                if v.get("image"):
+                    thumbnails.append({
+                        "flow_id": v["id"],
+                        "entity_type": "Version",
+                        "url": v["image"],
+                        "linked_entity_type": v["entity"]["type"] if v.get("entity") else None,
+                        "linked_entity_id": v["entity"]["id"] if v.get("entity") else None,
+                    })
+
+        if source in ("published_files", "both"):
+            filters = [["project", "is", {"type": "Project", "id": int(project_id)}]]
+            if flow_ids:
+                filters.append(["id", "in", flow_ids])
+
+            pfs = sg.find("PublishedFile", filters=filters,
+                fields=["id", "image", "entity"],
+                order=[{"field_name": "id", "direction": "asc"}])
+
+            for pf in pfs:
+                if pf.get("image"):
+                    thumbnails.append({
+                        "flow_id": pf["id"],
+                        "entity_type": "PublishedFile",
+                        "url": pf["image"],
+                        "linked_entity_type": pf["entity"]["type"] if pf.get("entity") else None,
+                        "linked_entity_id": pf["entity"]["id"] if pf.get("entity") else None,
+                    })
+
+        output({"success": True, "thumbnails": thumbnails, "count": len(thumbnails)})
+    except Exception as e:
+        error(f"Failed to fetch thumbnail URLs: {str(e)}")
+
+
 COMMANDS = {
     "test_connection": cmd_test_connection,
     "sync_projects": cmd_sync_projects,
@@ -430,11 +732,16 @@ COMMANDS = {
     "sync_shots": cmd_sync_shots,
     "sync_steps": cmd_sync_steps,
     "sync_tasks": cmd_sync_tasks,
+    "sync_versions": cmd_sync_versions,
+    "sync_published_files": cmd_sync_published_files,
     "update_task_status": cmd_update_task_status,
     "publish_version": cmd_publish_version,
     "upload_thumbnail": cmd_upload_thumbnail,
     "upload_media": cmd_upload_media,
     "create_note": cmd_create_note,
+    "fetch_thumbnail_urls": cmd_fetch_thumbnail_urls,
+    "fetch_shot_thumbnails": cmd_fetch_shot_thumbnails,
+    "fetch_role_thumbnails": cmd_fetch_role_thumbnails,
 }
 
 def main():

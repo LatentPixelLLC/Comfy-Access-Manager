@@ -24,10 +24,17 @@ export function init() {
     const syncStepsBtn = document.getElementById('flowSyncStepsBtn');
     const fullSyncBtn = document.getElementById('flowFullSyncBtn');
     const syncTasksBtn = document.getElementById('flowSyncTasksBtn');
+    const syncVersionsBtn = document.getElementById('flowSyncVersionsBtn');
+    const syncThumbsBtn = document.getElementById('flowSyncThumbsBtn');
     const savePathBtn = document.getElementById('flowSavePathBtn');
     const autoMatchBtn = document.getElementById('flowAutoMatchBtn');
     const scanDryRunBtn = document.getElementById('flowScanDryRunBtn');
     const scanTreeBtn = document.getElementById('flowScanTreeBtn');
+
+    // Debug: log if critical buttons are missing from the DOM
+    if (!testBtn || !saveBtn) {
+        console.error('[Flow] init() called but buttons not found in DOM — testBtn:', testBtn, 'saveBtn:', saveBtn);
+    }
 
     if (testBtn) testBtn.addEventListener('click', testFlowConnection);
     if (syncBtn) syncBtn.addEventListener('click', showFlowSyncPanel);
@@ -36,6 +43,8 @@ export function init() {
     if (syncStepsBtn) syncStepsBtn.addEventListener('click', flowSyncSteps);
     if (fullSyncBtn) fullSyncBtn.addEventListener('click', flowFullSync);
     if (syncTasksBtn) syncTasksBtn.addEventListener('click', flowSyncTasks);
+    if (syncVersionsBtn) syncVersionsBtn.addEventListener('click', flowSyncVersions);
+    if (syncThumbsBtn) syncThumbsBtn.addEventListener('click', flowSyncThumbnails);
     if (savePathBtn) savePathBtn.addEventListener('click', savePathConfig);
     if (autoMatchBtn) autoMatchBtn.addEventListener('click', runAutoMatch);
     if (scanDryRunBtn) scanDryRunBtn.addEventListener('click', () => scanTree(true));
@@ -196,6 +205,85 @@ async function flowSyncTasks() {
     }
 }
 
+async function flowSyncVersions() {
+    const select = document.getElementById('flowProjectSelect');
+    if (!select || !select.value) {
+        _log('⚠️ Select a project first');
+        return;
+    }
+
+    const [flowId, localId] = select.value.split('|');
+    const sourceSelect = document.getElementById('flowVersionSourceSelect');
+    const source = sourceSelect ? sourceSelect.value : 'both';
+    const projectName = select.options[select.selectedIndex]?.text || '';
+
+    _log(`⏳ Importing media from Flow for ${projectName} (${source})… This may take a moment.`);
+
+    try {
+        const result = await api('/api/flow/sync/versions', {
+            method: 'POST',
+            body: { flowProjectId: Number(flowId), localProjectId: Number(localId), source }
+        });
+
+        if (result.registered > 0) {
+            _log(`✅ Imported ${result.registered} assets from Flow`);
+        } else {
+            _log('ℹ️ No new assets to import');
+        }
+        if (result.missing > 0) {
+            _log(`⚠️ ${result.missing} files not found on disk — check path mappings if media is on a NAS`);
+        }
+        if (result.skipped > 0) {
+            _log(`   ${result.skipped} already imported or non-media, ${result.errors} errors`);
+        }
+        _log(`   Total from Flow: ${result.total}`);
+    } catch (err) {
+        _log(`❌ Import: ${err.message}`);
+    }
+}
+async function flowSyncThumbnails() {
+    const select = document.getElementById('flowProjectSelect');
+    if (!select || !select.value) {
+        _log('\u26a0\ufe0f Select a project first');
+        return;
+    }
+
+    const [flowId, localId] = select.value.split('|');
+    const projectName = select.options[select.selectedIndex]?.text || '';
+
+    _log(`\u23f3 Pulling thumbnails from ShotGrid for ${projectName}\u2026`);
+
+    try {
+        const result = await api('/api/flow/sync/thumbnails', {
+            method: 'POST',
+            body: { flowProjectId: Number(flowId), localProjectId: Number(localId) }
+        });
+
+        if (result.downloaded > 0) {
+            _log(`\u2705 Downloaded ${result.downloaded} thumbnails from ShotGrid`);
+        } else if (result.noThumb > 0 && result.total > 0) {
+            _log(`\u2139\ufe0f No thumbnails available in ShotGrid for this project`);
+        } else if (result.total === 0) {
+            _log('\u2139\ufe0f No Flow-sourced items found for this project');
+        } else {
+            _log('\u2139\ufe0f All thumbnails already exist locally');
+        }
+        if (result.shots && result.shots.downloaded > 0) {
+            _log(`   Shot thumbnails: ${result.shots.downloaded} downloaded`);
+        }
+        if (result.roles && result.roles.downloaded > 0) {
+            _log(`   Role thumbnails: ${result.roles.downloaded} downloaded (per shot+department)`);
+        }
+        if (result.skipped > 0) {
+            _log(`   ${result.skipped} already had thumbnails`);
+        }
+        if (result.errors > 0) {
+            _log(`   ${result.errors} download errors`);
+        }
+    } catch (err) {
+        _log(`\u274c Thumbnails: ${err.message}`);
+    }
+}
 async function loadFlowProjectSelector() {
     try {
         const mappings = await api('/api/flow/mappings/projects');

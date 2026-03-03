@@ -201,7 +201,7 @@ class PathMatchService {
         }
 
         if (updates.length > 0) {
-            updates.push('updated_at = datetime("now")');
+            updates.push("updated_at = datetime('now')");
             params.push(assetId);
             db.prepare(`UPDATE assets SET ${updates.join(', ')} WHERE id = ?`).run(...params);
         }

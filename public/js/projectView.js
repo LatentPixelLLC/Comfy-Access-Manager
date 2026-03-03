@@ -255,6 +255,17 @@ async function showEditProjectModal(projectId) {
 
         <div id="editShotBuilderContainer"></div>
 
+        <div class="ep-section" id="epAiMatchSection" style="margin-top:16px;">
+            <div class="ep-section-hdr">
+                <span>🪄 Auto-Build Naming Convention via AI</span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <input type="text" id="epAiSpecInput" placeholder="Paste client filename (e.g. BATMAN_ep101_sq010_sh020_comp_v001.exr)" style="flex:1;">
+                <button class="btn" id="epAiSpecBtn">Generate 🪄</button>
+            </div>
+            <div id="epAiStatus" style="font-size:0.8rem; color:var(--accent); margin-top:4px; display:none;">Thinking...</div>
+        </div>
+
         <div class="ep-section" id="epOverlaySection">
             <div class="ep-section-hdr">
                 <span>Overlay Presets</span>
@@ -283,20 +294,68 @@ async function showEditProjectModal(projectId) {
     modal.style.display = 'flex';
 
     // Render Shot Builder with existing convention + project context
+    const currentProjectContext = {
+        code: proj.code,
+        name: proj.name,
+        episode: proj.episode || '',
+        sequences: (proj.sequences || []).map(s => ({
+            name: s.name,
+            code: s.code,
+            shots: (seqShotsMap[s.id] || []).map(sh => ({ name: sh.name, code: sh.code }))
+        }))
+    };
+
     renderShotBuilder(
         document.getElementById('editShotBuilderContainer'),
         proj.naming_convention || null,
-        {
-            code: proj.code,
-            name: proj.name,
-            episode: proj.episode || '',
-            sequences: (proj.sequences || []).map(s => ({
-                name: s.name,
-                code: s.code,
-                shots: (seqShotsMap[s.id] || []).map(sh => ({ name: sh.name, code: sh.code }))
-            }))
-        }
+        currentProjectContext
     );
+
+    // AI Convention Generation
+    const aiBtn = document.getElementById('epAiSpecBtn');
+    const aiInput = document.getElementById('epAiSpecInput');
+    const aiStatus = document.getElementById('epAiStatus');
+
+    if (aiBtn) {
+        aiBtn.addEventListener('click', async () => {
+            const spec = aiInput.value.trim();
+            if (!spec) return;
+
+            aiBtn.disabled = true;
+            aiStatus.style.display = 'block';
+            aiStatus.style.color = '#888';
+            aiStatus.textContent = '🧠 AI is analyzing format...';
+
+            try {
+                const res = await api('/api/projects/ai-parse-convention', {
+                    method: 'POST',
+                    body: { spec }
+                });
+                
+                if (res.convention && Array.isArray(res.convention)) {
+                    // Re-render Shot Builder with AI-generated sequence
+                    renderShotBuilder(
+                        document.getElementById('editShotBuilderContainer'),
+                        res.convention,
+                        currentProjectContext
+                    );
+                    
+                    showToast('Naming convention successfully built by AI!');
+                    aiStatus.textContent = '✨ Success!';
+                    aiStatus.style.color = 'var(--text-ok)';
+                    setTimeout(() => aiStatus.style.display = 'none', 3000);
+                } else {
+                    throw new Error('AI returned an unexpected format.');
+                }
+            } catch (err) {
+                aiStatus.textContent = '❌ Failed: ' + err.message;
+                aiStatus.style.color = 'var(--text-danger)';
+                console.error(err);
+            } finally {
+                aiBtn.disabled = false;
+            }
+        });
+    }
 
     // Live-update preview when episode field changes
     document.getElementById('editProjectEpisode').addEventListener('input', () => {

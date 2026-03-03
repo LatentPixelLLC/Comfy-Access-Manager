@@ -60,6 +60,9 @@ class PluginRegistry {
 
         /** @type {Map<string, Function>} Settings savers: pluginId → getSettingsValues function */
         this._settingsSavers = new Map();
+
+        /** @type {boolean} Whether settings sections have already been injected into the DOM */
+        this._settingsInjected = false;
     }
 
     /**
@@ -125,12 +128,15 @@ class PluginRegistry {
                         pluginId: plugin.id,
                         icon: plugin.icon,
                         items,   // Store declarative items for rendering
-                        getMenuItems: (asset, selected) => {
+                        getMenuItems: (context) => {
                             return items.filter(it => {
-                                if (it.singleOnly && selected.length > 1) return false;
+                                if (it.singleOnly && (!context.isSingle || context.count > 1)) return false;
                                 if (it.fileTypes) {
-                                    const ext = (asset.file_ext || '').replace('.', '').toLowerCase();
-                                    if (!it.fileTypes.split(/\s+/).includes(ext)) return false;
+                                    // Make sure we have an asset object first
+                                    const assetObj = context.asset || context;
+                                    const ext = (assetObj.file_ext || '').replace('.', '').toLowerCase();
+                                    const exts = Array.isArray(it.fileTypes) ? it.fileTypes : (typeof it.fileTypes === 'string' ? String(it.fileTypes).split(/\s+/) : []);
+                                    if (exts.length > 0 && !exts.includes(ext)) return false;
                                 }
                                 return true;
                             });
@@ -176,7 +182,7 @@ class PluginRegistry {
                     }
                     loaded.settings = true;
                 } catch (err) {
-                    console.warn(`[PluginRegistry] ${plugin.id} settings script failed:`, err.message);
+                    console.error(`[PluginRegistry] ${plugin.id} settings script FAILED to load:`, err);
                 }
             }
         }
@@ -314,6 +320,12 @@ class PluginRegistry {
      * Each plugin gets a placeholder <div id="plugin-settings-{id}"> in index.html.
      */
     injectSettingsSections() {
+        // Only inject HTML and wire event listeners ONCE.
+        // Re-injecting via innerHTML destroys DOM elements and their listeners,
+        // and the plugin init() guards prevent re-wiring.
+        if (this._settingsInjected) return;
+        this._settingsInjected = true;
+
         for (const section of this._settingsSections) {
             const container = document.getElementById(`plugin-settings-${section.pluginId}`);
             if (container) {

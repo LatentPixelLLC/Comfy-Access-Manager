@@ -1,5 +1,11 @@
 # Comfy Asset Manager (CAM) — AI Agent Instructions
 
+## ⚠️ CRITICAL AGENT PERSONA RULE
+**The creator of this application is a VFX/Media artist, NOT a formally trained software engineer. The entire app was built using "vibe coding" alongside AI agents.**
+- Explain technical concepts, architectures, and bugs in **simple, plain English**.
+- Avoid deep computer science jargon or theoretical lecturing. Tell the user *what* is broken, *why* it matters functionally, and *how* to fix it.
+- When proposing a major structural change, provide a clear, relatable metaphor (e.g., "Think of this like a render queue...").
+
 ## Project Overview
 
 **Comfy Asset Manager (CAM)** — formerly Digital Media Vault (DMV) — is a local media asset manager for creative production. Organize, browse, import, export, and play media files with a project-based hierarchy following ShotGrid/Flow Production Tracking naming conventions.
@@ -1018,6 +1024,20 @@ Users pick up updates automatically via the in-app update banner.
 39. **Naming convention uses `?.name || ?.code` fallback** — When calling `generateFromConvention()`, always pass `sequence?.name || sequence?.code` and `shot?.name || shot?.code`. Three call sites in `assetRoutes.js` were fixed for this.
 40. **DaVinci Resolve bridge uses Python subprocess** — Resolve's scripting API is Python-only. Use `scripts/resolve_bridge.py` called via `child_process.execFile()` from Node.js routes.
 41. **No Emojis in UI** — The frontend is 100% ASCII-compliant. Do not use emojis (✅, 📁, ⚙️) in the UI; use text labels (Success:, [Folder], [Settings]) or SVG icons to maintain a professional VFX aesthetic.
+
+### Rules for Safe AI Agent Scalability (March 2026 Audit)
+As the app surpasses 40,000 lines of Vanilla JS without type-safety, agents must adhere to these guardrails to prevent spaghetti code and context hallucinations:
+
+42. **Single Sources of Truth MUST be respected:**
+    - **Media Extensions:** Import `isImage`, `isVideo`, and `VIDEO_EXTS` from `src/utils/mediaTypes.js`. NEVER redefine lists of `.mp4` or `.jpg` in local files.
+    - **Locators:** Use `src/utils/rvFinder.js` and `src/utils/ffmpegUtils.js` to launch local binaries.
+    - **Access Control:** Use `resolveUserAccess()` in `src/utils/userAccess.js` for all asset/project visibility checks.
+43. **Do not hallucinate object structures:** JavaScript has no types. Do not guess what an `asset` or `session` object looks like in memory. Grep the database schema or inspect the actual generating functions first.
+44. **Security Posture (No RCE/XSS/SQLi):**
+    - **No eval():** Use strict parsing (e.g., `parseFloat()`) for remote data like ffprobe outputs.
+    - **XSS Prevention:** ALL user-provided data rendered directly into innerHTML or attributes must go through `esc()` imported from `public/js/utils.js`.
+    - **SQL Injection:** Spoke/Hub sync relies on `ALLOWED_TABLES` in `SpokeService.js`. If you add a new database table, you MUST add it to the whitelist, or the hub will reject the sync.
+45. **File Size Bleed:** If a file nears or exceeds 2,000 lines (e.g., `browser.js`, `assetRoutes.js`), strongly prefer extracting new features into smaller decoupled modules instead of endlessly appending.
 
 ---
 

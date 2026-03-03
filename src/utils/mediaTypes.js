@@ -16,7 +16,7 @@ const MEDIA_TYPES = {
         color: '#4fc3f7',
     },
     image: {
-        extensions: ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp', '.svg', '.ico', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw', '.dng', '.psd', '.psb', '.ai', '.eps'],
+        extensions: ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp', '.svg', '.ico', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw', '.dng', '.psd', '.psb', '.ai', '.eps', '.tga'],
         icon: '🖼️',
         color: '#81c784',
     },
@@ -103,6 +103,19 @@ function isImage(filename) {
     return type === 'image' || type === 'exr';
 }
 
+/**
+ * Pre-built extension Sets (without dots) for fast lookup.
+ * Derived from MEDIA_TYPES — single source of truth.
+ */
+const VIDEO_EXTS = new Set(MEDIA_TYPES.video.extensions.map(e => e.slice(1)));
+const IMAGE_EXTS = new Set(MEDIA_TYPES.image.extensions.map(e => e.slice(1)));
+const EXR_EXTS   = new Set(MEDIA_TYPES.exr.extensions.map(e => e.slice(1)));
+const AUDIO_EXTS = new Set(MEDIA_TYPES.audio.extensions.map(e => e.slice(1)));
+
+/** Pre-built extension arrays (with dots) for includes() checks */
+const VIDEO_EXTS_DOT = MEDIA_TYPES.video.extensions;
+const IMAGE_EXTS_DOT = [...MEDIA_TYPES.image.extensions, ...MEDIA_TYPES.exr.extensions];
+
 module.exports = {
     MEDIA_TYPES,
     detectMediaType,
@@ -111,4 +124,10 @@ module.exports = {
     isBrowserPlayable,
     isVideo,
     isImage,
+    VIDEO_EXTS,
+    IMAGE_EXTS,
+    EXR_EXTS,
+    AUDIO_EXTS,
+    VIDEO_EXTS_DOT,
+    IMAGE_EXTS_DOT,
 };

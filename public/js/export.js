@@ -13,7 +13,7 @@
 
 import { state } from './state.js';
 import { api } from './api.js';
-import { esc, showToast, closeModal } from './utils.js';
+import { esc, showToast, closeModal, formatSize } from './utils.js';
 import { showOverlayEditor } from './overlayEditor.js';
 
 // Cache presets after first load
@@ -54,7 +54,7 @@ export async function showExportModal(singleId = null) {
     const sourceRes = `${probeInfo.width}x${probeInfo.height}`;
     const sourceFps = probeInfo.fps ? `${Math.round(probeInfo.fps * 100) / 100} fps` : '';
     const sourceDur = probeInfo.duration ? formatDuration(probeInfo.duration) : '';
-    const sourceSize = probeInfo.file_size ? formatFileSize(probeInfo.file_size) : '';
+    const sourceSize = probeInfo.file_size ? formatSize(probeInfo.file_size) : '';
 
     // Build resolution options
     const resOptions = Object.entries(presets.resolutions).map(([key, p]) => {
@@ -430,12 +430,7 @@ function formatDuration(sec) {
     return `${s}s`;
 }
 
-function formatFileSize(bytes) {
-    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
-    if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
-    if (bytes >= 1e3) return (bytes / 1e3).toFixed(1) + ' KB';
-    return bytes + ' B';
-}
+// formatFileSize replaced by formatSize() imported from utils.js
 
 // ===========================================
 //  EXPOSE ON WINDOW (for HTML onclick handlers)

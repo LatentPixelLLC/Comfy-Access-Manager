@@ -89,13 +89,12 @@ function createSpokeProxy(spokeService) {
             spokeName: spokeService.localName,
         })
             .then((hubResponse) => {
-                // Forward the hub's response back to the client
+                // Forward the hub's response back to the client, preserving status code
                 const statusCode = hubResponse?.status || 200;
                 if (typeof hubResponse === 'object') {
-                    // The hub returns the response body directly from the /write endpoint
-                    res.json(hubResponse);
+                    res.status(statusCode).json(hubResponse);
                 } else {
-                    res.send(hubResponse);
+                    res.status(statusCode).send(hubResponse);
                 }
             })
             .catch((err) => {

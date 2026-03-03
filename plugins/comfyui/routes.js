@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { execFileSync } = require('child_process');
+const { isVideo } = require('../../src/utils/mediaTypes');
 
 // ─── Core API (injected via init) ───
 let core = null;
@@ -336,7 +337,7 @@ function extractWorkflowFromFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
 
     // ── Video files: workflow in comment metadata tag ──
-    if (['.mp4', '.webm', '.mkv', '.mov', '.avi'].includes(ext)) {
+    if (isVideo(filePath)) {
         return extractVideoWorkflow(filePath);
     }
 

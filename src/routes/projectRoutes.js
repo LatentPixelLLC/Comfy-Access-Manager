@@ -13,29 +13,8 @@ const express = require('express');
 const router = express.Router();
 const { getDb, logActivity } = require('../database');
 const FileService = require('../services/FileService');
-
-/**
- * Resolve user access from X-CAM-User header.
- * Blacklist model: users see everything EXCEPT hidden projects.
- * Returns { userId, isAdmin, hiddenIds } where hiddenIds is:
- *   - null → no user header → block everything
- *   - 'all' → admin → no filtering (sees everything)
- *   - Set<number> → project IDs to EXCLUDE
- */
-function resolveUserAccess(req) {
-    const userId = parseInt(req.headers['x-cam-user'], 10);
-    if (!userId || isNaN(userId)) return { userId: null, isAdmin: false, hiddenIds: null };
-
-    const db = getDb();
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    if (!user) return { userId: null, isAdmin: false, hiddenIds: null };
-
-    if (user.is_admin) return { userId: user.id, isAdmin: true, hiddenIds: 'all' };
-
-    const rows = db.prepare('SELECT project_id FROM project_hidden WHERE user_id = ?').all(user.id);
-    const ids = new Set(rows.map(r => r.project_id));
-    return { userId: user.id, isAdmin: false, hiddenIds: ids };
-}
+const { resolveUserAccess } = require('../utils/userAccess');
+const AIService = require('../services/AIService');
 
 // ═══════════════════════════════════════════
 //  PROJECTS
@@ -140,6 +119,46 @@ router.get('/tree', (req, res) => {
         ORDER BY r.sort_order, r.name
     `).all();
 
+    // Get roles from Flow tasks (shots with pipeline steps assigned but no assets yet)
+    // When multiple tasks exist for the same shot+step, pick the most "active" status
+    let taskRoles = [];
+    try {
+        taskRoles = db.prepare(`
+            SELECT sh.id as shot_id, r.id as role_id, r.name as role_name,
+                   r.code as role_code, r.color as role_color, r.icon as role_icon,
+                   ft.status as task_status
+            FROM flow_tasks ft
+            JOIN shots sh ON sh.flow_id = ft.entity_flow_id
+            JOIN roles r ON r.flow_id = ft.step_flow_id
+            WHERE ft.entity_type = 'Shot'
+              AND ft.rowid = (
+                  SELECT ft2.rowid FROM flow_tasks ft2
+                  WHERE ft2.entity_flow_id = ft.entity_flow_id
+                    AND ft2.step_flow_id = ft.step_flow_id
+                    AND ft2.entity_type = 'Shot'
+                  ORDER BY CASE ft2.status
+                      WHEN 'ip'  THEN 1
+                      WHEN 'rev' THEN 2
+                      WHEN 'pcr' THEN 3
+                      WHEN 'rdy' THEN 4
+                      WHEN 'wtg' THEN 5
+                      WHEN 'hld' THEN 6
+                      WHEN 'mn'  THEN 7
+                      WHEN 'cbb' THEN 8
+                      WHEN 'fin' THEN 9
+                      WHEN 'tfn' THEN 10
+                      WHEN 'fdi' THEN 11
+                      WHEN '4k'  THEN 12
+                      WHEN 'omt' THEN 13
+                      WHEN 'if'  THEN 14
+                      ELSE 15
+                  END
+                  LIMIT 1
+              )
+            ORDER BY r.sort_order, r.name
+        `).all();
+    } catch (_) { /* flow_tasks table may not exist if Flow plugin not used */ }
+
     // Get role counts per sequence (assets directly on sequence)
     const seqRoles = db.prepare(`
         SELECT a.sequence_id, r.id as role_id, r.name as role_name, r.code as role_code,
@@ -151,16 +170,27 @@ router.get('/tree', (req, res) => {
         ORDER BY r.sort_order, r.name
     `).all();
 
-    // Build tree
+    // Build tree — merge asset-based roles with task-based roles per shot
     const tree = projects.map(p => ({
         ...p,
         sequences: sequences.filter(s => s.project_id === p.id).map(s => ({
             ...s,
             roles: seqRoles.filter(sr => sr.sequence_id === s.id),
-            shots: shots.filter(sh => sh.sequence_id === s.id).map(sh => ({
-                ...sh,
-                roles: shotRoles.filter(sr => sr.shot_id === sh.id)
-            }))
+            shots: shots.filter(sh => sh.sequence_id === s.id).map(sh => {
+                // Start with asset-based roles
+                const assetRolesForShot = shotRoles.filter(sr => sr.shot_id === sh.id);
+                const assetRoleIds = new Set(assetRolesForShot.map(r => r.role_id));
+
+                // Add task-based roles that don't already have assets
+                const taskRolesForShot = taskRoles
+                    .filter(tr => tr.shot_id === sh.id && !assetRoleIds.has(tr.role_id))
+                    .map(tr => ({ ...tr, asset_count: 0, from_task: true, task_status: tr.task_status }));
+
+                return {
+                    ...sh,
+                    roles: [...assetRolesForShot, ...taskRolesForShot]
+                };
+            })
         }))
     }));
 
@@ -252,6 +282,21 @@ router.get('/:id', (req, res) => {
         assetCounts,
         totalAssets: totalAssets.count,
     });
+});
+
+// POST /api/projects/ai-parse-convention
+// Use local LLM to parse a client spec into Shot Builder convention tiles
+router.post('/ai-parse-convention', async (req, res) => {
+    const { spec } = req.body;
+    if (!spec) return res.status(400).json({ error: 'Spec example is required' });
+
+    try {
+        const convention = await AIService.parseNamingConvention(spec);
+        res.json({ success: true, convention });
+    } catch (err) {
+        console.error('[AIService Error]', err.message);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // POST /api/projects — Create project

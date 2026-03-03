@@ -26,6 +26,20 @@
                 <button id="flowFullSyncBtn">🔄 Full Sync</button>
             </div>
             <button id="flowSyncTasksBtn" style="margin-top:4px;">📋 Sync Tasks Only</button>
+            <div style="margin-top:8px; border-top:1px solid rgba(255,255,255,0.06); padding-top:8px;">
+                <p class="hint" style="margin:0 0 6px 0;">Import media from Flow — fetches Versions and Published Files from ShotGrid, finds the files on disk, and registers them in-place assigned to the correct shots and roles.</p>
+                <div class="input-row" style="gap:6px;">
+                    <select id="flowVersionSourceSelect" class="setting-select" style="max-width:160px;">
+                        <option value="both">Versions + Publishes</option>
+                        <option value="versions">Versions Only</option>
+                        <option value="published_files">Published Files Only</option>
+                    </select>
+                    <button id="flowSyncVersionsBtn">📥 Import Media from Flow</button>
+                </div>
+                <div class="input-row" style="gap:6px; margin-top:6px;">
+                    <button id="flowSyncThumbsBtn">🖼️ Pull Thumbnails from Flow</button>
+                </div>
+            </div>
         </div>
     </div>
     <div id="flowSyncLog" style="margin-top:8px;font-size:0.82rem;color:var(--text-dim);max-height:150px;overflow-y:auto;"></div>

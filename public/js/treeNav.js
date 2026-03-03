@@ -11,9 +11,32 @@
 
 import { state } from './state.js';
 import { api } from './api.js';
-import { esc, ensureReadableColor, icon } from './utils.js';
+import { esc, icon } from './utils.js';
 import { isShowArchived } from './projectView.js';
 import { clearCrateState } from './crate.js';
+
+// ShotGrid status → muted color dot mapping
+const SG_STATUS = {
+    ip:  { color: '#5b9bd5', label: 'In Progress' },
+    rev: { color: '#8e7cc3', label: 'Pending Review' },
+    pcr: { color: '#c9a84c', label: 'Pending Client Review' },
+    rdy: { color: '#6fa8dc', label: 'Ready to Start' },
+    wtg: { color: '#777777', label: 'Waiting to Start' },
+    hld: { color: '#bf8f3e', label: 'On Hold' },
+    mn:  { color: '#7a7a7a', label: 'Matte Needed' },
+    cbb: { color: '#7a7a7a', label: 'CBB' },
+    fin: { color: '#6aa84f', label: 'Final' },
+    tfn: { color: '#5a9040', label: 'Tech Final' },
+    fdi: { color: '#5a9040', label: 'Final Delivery' },
+    '4k': { color: '#5a9040', label: '4K' },
+    omt: { color: '#555555', label: 'Omitted' },
+    'if': { color: '#555555', label: 'Internal Final' },
+};
+function sgDot(status) {
+    const s = SG_STATUS[status];
+    if (!s) return '';
+    return `<span class="sg-status-dot" style="background:${s.color}" title="${s.label}"></span>`;
+}
 
 // ===========================================
 //  MODULE STATE
@@ -93,11 +116,10 @@ function renderTree() {
                 if (sOpen && sHasRoles) {
                     for (const role of seq.roles) {
                         const rActive = state.currentRole?.id === role.role_id && state.currentSequence?.id === seq.id && !state.currentShot;
-                        const roleColor = ensureReadableColor(role.role_color);
                         html += `<div class="tree-node tree-indent-2 ${rActive ? 'tree-active' : ''}" onclick="treeSelectSeqRole(${project.id}, ${seq.id}, ${role.role_id})">
                             <span class="tree-toggle"></span>
-                            <span class="tree-icon">${role.role_icon || icon('role')}</span>
-                            <span class="tree-label" style="color:${roleColor}">${esc(role.role_name)}</span>
+                            <span class="tree-icon">${role.task_status ? sgDot(role.task_status) : icon('role')}</span>
+                            <span class="tree-label">${esc(role.role_name)}</span>
                             <span class="tree-count">${role.asset_count}</span>
                         </div>`;
                     }
@@ -122,11 +144,10 @@ function renderTree() {
                         if (shOpen && shHasRoles) {
                             for (const role of shot.roles) {
                                 const rActive = state.currentRole?.id === role.role_id && state.currentShot?.id === shot.id;
-                                const roleColor = ensureReadableColor(role.role_color);
                                 html += `<div class="tree-node tree-indent-3 ${rActive ? 'tree-active' : ''}" onclick="treeSelectRole(${project.id}, ${seq.id}, ${shot.id}, ${role.role_id})">
                                     <span class="tree-toggle"></span>
-                                    <span class="tree-icon">${role.role_icon || icon('role')}</span>
-                                    <span class="tree-label" style="color:${roleColor}">${esc(role.role_name)}</span>
+                                    <span class="tree-icon">${role.task_status ? sgDot(role.task_status) : icon('role')}</span>
+                                    <span class="tree-label">${esc(role.role_name)}</span>
                                     <span class="tree-count">${role.asset_count}</span>
                                 </div>`;
                             }

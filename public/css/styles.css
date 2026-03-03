@@ -721,6 +721,24 @@ label {
     font-size: 0.6rem;
     color: var(--text-muted);
 }
+.tree-toggle svg {
+    width: 10px;
+    height: 10px;
+    stroke: #aaa;
+    fill: none;
+    stroke-width: 2.5;
+}
+
+/* ShotGrid status dot — small muted circle */
+.sg-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    opacity: 0.75;
+    vertical-align: middle;
+    margin-top: -1px;
+}
 .tree-icon {
     flex-shrink: 0;
     font-size: 0.85rem;

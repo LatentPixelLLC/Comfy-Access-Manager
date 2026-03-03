@@ -13,6 +13,39 @@
 const { getSetting } = require('../database');
 
 /**
+ * Load and normalize path mappings from settings.
+ * Returns an array of { sides: string[] } where sides are forward-slash normalized
+ * path prefixes from each platform.
+ * @returns {{ sides: string[] }[]}
+ */
+function _loadMappings() {
+    try {
+        const raw = getSetting('path_mappings');
+        if (!raw) return [];
+        const mappings = JSON.parse(raw);
+        if (!Array.isArray(mappings) || mappings.length === 0) return [];
+
+        return mappings.map(mapping => {
+            let sides;
+            if (mapping.from && mapping.to) {
+                sides = [mapping.from, mapping.to];
+            } else {
+                const w = mapping.windows || mapping.win || '';
+                const m = mapping.mac || mapping.macos || '';
+                const l = mapping.linux || '';
+                sides = [w, m, l].filter(Boolean);
+            }
+            return {
+                sides: sides.map(s => s.replace(/\\/g, '/').replace(/\/+$/, '')).filter(Boolean),
+                raw: mapping,
+            };
+        }).filter(m => m.sides.length >= 2);
+    } catch {
+        return [];
+    }
+}
+
+/**
  * Apply path mappings to translate a file path for the current platform.
  * Mappings are pairs like { from: "Z:\\Media", to: "/Volumes/media" }.
  * On Mac, Z:\Media\Project\file.mov → /Volumes/media/Project/file.mov
@@ -24,65 +57,38 @@ const { getSetting } = require('../database');
 function resolveFilePath(filePath) {
     if (!filePath) return filePath;
 
-    try {
-        const raw = getSetting('path_mappings');
-        if (!raw) return filePath;
+    const mappings = _loadMappings();
+    if (mappings.length === 0) return filePath;
 
-        const mappings = JSON.parse(raw);
-        if (!Array.isArray(mappings) || mappings.length === 0) return filePath;
+    const normalized = filePath.replace(/\\/g, '/');
+    const isMac = process.platform === 'darwin';
+    const isWin = process.platform === 'win32';
 
-        // Normalize separators for comparison
-        const normalized = filePath.replace(/\\/g, '/');
-        const isMac = process.platform === 'darwin';
-        const isWin = process.platform === 'win32';
+    for (const { sides, raw } of mappings) {
+        for (let i = 0; i < sides.length; i++) {
+            const src = sides[i];
 
-        for (const mapping of mappings) {
-            // Support both formats:
-            //   { from, to }  — generic pair
-            //   { windows, mac, linux } — platform-specific keys (saved by the UI)
-            let sides = [];
-            if (mapping.from && mapping.to) {
-                sides = [mapping.from, mapping.to];
-            } else {
-                // Collect all platform paths from the mapping
-                const w = mapping.windows || mapping.win || '';
-                const m = mapping.mac || mapping.macos || '';
-                const l = mapping.linux || '';
-                sides = [w, m, l].filter(Boolean);
-            }
-            if (sides.length < 2) continue;
-
-            for (let i = 0; i < sides.length; i++) {
-                const src = sides[i].replace(/\\/g, '/').replace(/\/+$/, '');
-                if (!src) continue;
-
-                if (normalized.toLowerCase().startsWith(src.toLowerCase() + '/') ||
-                    normalized.toLowerCase() === src.toLowerCase()) {
-                    // Find the best target for the current platform
-                    let target = null;
-                    if (mapping.from && mapping.to) {
-                        // Generic: swap to the other side
-                        target = (i === 0) ? mapping.to : mapping.from;
-                    } else {
-                        // Platform-specific: pick the current platform's path
-                        if (isMac) target = mapping.mac || mapping.macos;
-                        else if (isWin) target = mapping.windows || mapping.win;
-                        else target = mapping.linux || mapping.mac || mapping.macos;
-                    }
-                    if (!target || target.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === src.toLowerCase()) {
-                        continue; // Don't map to the same path
-                    }
-                    const targetClean = target.replace(/\\/g, '/').replace(/\/+$/, '');
-                    const remainder = normalized.substring(src.length);
-                    const resolved = targetClean + remainder;
-                    return process.platform === 'win32'
-                        ? resolved.replace(/\//g, '\\')
-                        : resolved;
+            if (normalized.toLowerCase().startsWith(src.toLowerCase() + '/') ||
+                normalized.toLowerCase() === src.toLowerCase()) {
+                // Find the best target for the current platform
+                let target = null;
+                if (raw.from && raw.to) {
+                    target = (i === 0) ? raw.to : raw.from;
+                } else {
+                    if (isMac) target = raw.mac || raw.macos;
+                    else if (isWin) target = raw.windows || raw.win;
+                    else target = raw.linux || raw.mac || raw.macos;
                 }
+                if (!target) continue;
+                const targetClean = target.replace(/\\/g, '/').replace(/\/+$/, '');
+                if (targetClean.toLowerCase() === src.toLowerCase()) continue;
+                const remainder = normalized.substring(src.length);
+                const resolved = targetClean + remainder;
+                return process.platform === 'win32'
+                    ? resolved.replace(/\//g, '\\')
+                    : resolved;
             }
         }
-    } catch (e) {
-        // If mappings can't be parsed, just return original path
     }
 
     return filePath;
@@ -103,45 +109,20 @@ function getAllPathVariants(filePath) {
     const normalized = filePath.replace(/\\/g, '/');
     variants.add(normalized);
 
-    try {
-        const raw = getSetting('path_mappings');
-        if (raw) {
-            const mappings = JSON.parse(raw);
-            if (Array.isArray(mappings) && mappings.length > 0) {
-                for (const mapping of mappings) {
-                    let sides = [];
-                    if (mapping.from && mapping.to) {
-                        sides = [mapping.from, mapping.to];
-                    } else {
-                        const w = mapping.windows || mapping.win || '';
-                        const m = mapping.mac || mapping.macos || '';
-                        const l = mapping.linux || '';
-                        sides = [w, m, l].filter(Boolean);
-                    }
-                    if (sides.length < 2) continue;
+    const mappings = _loadMappings();
+    for (const { sides } of mappings) {
+        for (let i = 0; i < sides.length; i++) {
+            const src = sides[i];
 
-                    for (let i = 0; i < sides.length; i++) {
-                        const src = sides[i].replace(/\\/g, '/').replace(/\/+$/, '');
-                        if (!src) continue;
-
-                        if (normalized.toLowerCase().startsWith(src.toLowerCase() + '/') ||
-                            normalized.toLowerCase() === src.toLowerCase()) {
-                            const remainder = normalized.substring(src.length);
-                            // Add variants for ALL other sides (cross-platform paths)
-                            for (let j = 0; j < sides.length; j++) {
-                                if (j === i) continue;
-                                const target = sides[j].replace(/\\/g, '/').replace(/\/+$/, '');
-                                if (target) {
-                                    variants.add(target + remainder);
-                                }
-                            }
-                        }
-                    }
+            if (normalized.toLowerCase().startsWith(src.toLowerCase() + '/') ||
+                normalized.toLowerCase() === src.toLowerCase()) {
+                const remainder = normalized.substring(src.length);
+                for (let j = 0; j < sides.length; j++) {
+                    if (j === i) continue;
+                    if (sides[j]) variants.add(sides[j] + remainder);
                 }
             }
         }
-    } catch {
-        // If mappings can't be parsed, continue with what we have
     }
 
     // Also include backslash versions of every variant so that DB

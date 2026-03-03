@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const os = require('os');
 const { getDb, getSetting, logActivity } = require('../database');
 const { resolveFilePath } = require('../utils/pathResolver');
+const { findRV } = require('../utils/rvFinder');
 
 // ═══════════════════════════════════════════
 //  HELPERS
@@ -56,77 +57,6 @@ function getLocalIP() {
         if (v4) return v4.address;
     }
     return '127.0.0.1';
-}
-
-/**
- * Find the RV executable (reuse logic from assetRoutes).
- * We import lazily to avoid circular dependency issues.
- */
-function findRV() {
-    const isWin = process.platform === 'win32';
-    const isMac = process.platform === 'darwin';
-
-    // 1. User-configured path
-    try {
-        const customPath = getSetting('rv_path');
-        if (customPath && fs.existsSync(customPath)) return customPath;
-    } catch (e) { /* settings not ready */ }
-
-    // 2. Bundled RV
-    if (isMac) {
-        const bundledMac = path.join(__dirname, '..', '..', 'tools', 'rv', 'RV.app', 'Contents', 'MacOS', 'RV');
-        if (fs.existsSync(bundledMac)) return bundledMac;
-    }
-    const bundled = path.join(__dirname, '..', '..', 'tools', 'rv', 'bin', isWin ? 'rv.exe' : 'rv');
-    if (fs.existsSync(bundled)) return bundled;
-
-    // 3. Standard locations
-    if (isWin) {
-        const searchDirs = ['C:\\Program Files', 'C:\\Program Files (x86)'];
-        const prefixes = ['Autodesk\\RV', 'Shotgun\\RV', 'ShotGrid\\RV', 'Shotgun RV', 'RV'];
-        for (const base of searchDirs) {
-            for (const prefix of prefixes) {
-                const exe = path.join(base, prefix, 'bin', 'rv.exe');
-                if (fs.existsSync(exe)) return exe;
-            }
-            try {
-                const autodesk = path.join(base, 'Autodesk');
-                if (fs.existsSync(autodesk)) {
-                    for (const d of fs.readdirSync(autodesk).filter(d => d.startsWith('RV'))) {
-                        const exe = path.join(autodesk, d, 'bin', 'rv.exe');
-                        if (fs.existsSync(exe)) return exe;
-                    }
-                }
-            } catch (e) { /* ignore */ }
-        }
-        // OpenRV local build
-        const openrvBuild = 'C:\\OpenRV\\_build\\stage\\app\\bin\\rv.exe';
-        if (fs.existsSync(openrvBuild)) return openrvBuild;
-    } else if (isMac) {
-        // Check OpenRV local builds FIRST (they tend to be newer/working)
-        const homedir = os.homedir();
-        const macBuilds = [
-            path.join(homedir, 'OpenRV', '_build', 'stage', 'app', 'RV.app', 'Contents', 'MacOS', 'RV'),
-            path.join(homedir, 'OpenRV', '_install', 'RV.app', 'Contents', 'MacOS', 'RV'),
-        ];
-        for (const p of macBuilds) { if (fs.existsSync(p)) return p; }
-        // Standard install locations
-        const candidates = [
-            '/Applications/RV.app/Contents/MacOS/RV',
-            '/Applications/Autodesk/RV.app/Contents/MacOS/RV',
-        ];
-        for (const c of candidates) { if (fs.existsSync(c)) return c; }
-        try {
-            for (const d of fs.readdirSync('/Applications').filter(d => d.startsWith('RV') && d.endsWith('.app'))) {
-                const exe = path.join('/Applications', d, 'Contents', 'MacOS', 'RV');
-                if (fs.existsSync(exe)) return exe;
-            }
-        } catch (e) { /* ignore */ }
-    } else {
-        const candidates = ['/usr/local/rv/bin/rv', '/opt/rv/bin/rv', '/usr/local/bin/rv', '/usr/bin/rv'];
-        for (const c of candidates) { if (fs.existsSync(c)) return c; }
-    }
-    return null;
 }
 
 /**
@@ -304,7 +234,7 @@ router.post('/start', (req, res) => {
 
     // Launch RV with network sync enabled (as host)
     try {
-        launchRVAsHost(rvExe, filePaths, networkPort);
+        launchRVSync(rvExe, filePaths, { mode: 'host', port: networkPort });
     } catch (err) {
         return res.status(500).json({ error: `Failed to launch RV: ${err.message}` });
     }
@@ -402,7 +332,7 @@ router.post('/join', (req, res) => {
 
     // Launch RV as sync client — it will connect to the host's session
     try {
-        launchRVAsClient(rvExe, session.host_ip, session.host_port, filePaths);
+        launchRVSync(rvExe, filePaths, { mode: 'client', port: session.host_port, hostIp: session.host_ip });
     } catch (err) {
         return res.status(500).json({ error: `Failed to launch RV: ${err.message}` });
     }
@@ -597,21 +527,30 @@ function killExistingRVSync() {
 }
 
 /**
- * Launch RV as the sync host (other RVs will connect to this one).
- * Uses `-networkPort` to open a sync server.
+ * Launch RV for network sync (host or client mode).
+ *
+ * Host mode: `-networkPort <port>` — opens a sync server for others to connect.
+ * Client mode: `-networkConnect <ip> <port>` — joins an existing host session.
+ *
+ * macOS: Must use `open -n -a <bundle> --args ...` for proper app activation.
+ * Environment variables injected via `open --env` on macOS or spawn env on Win/Linux.
+ *
+ * @param {string} rvExe - Path to the RV binary
+ * @param {string[]} filePaths - Media files to load
+ * @param {{ mode: 'host'|'client', port?: number, hostIp?: string }} opts
  */
-function launchRVAsHost(rvExe, filePaths, networkPort) {
+function launchRVSync(rvExe, filePaths, opts) {
     killExistingRVSync();
     const { execFile, spawn } = require('child_process');
-    const rvArgs = ['-network', '-networkPort', String(networkPort), ...filePaths];
+    const { mode, port, hostIp } = opts;
+    const label = mode === 'host' ? 'Host' : 'Client';
+
+    const rvArgs = mode === 'host'
+        ? ['-network', '-networkPort', String(port), ...filePaths]
+        : ['-network', '-networkConnect', hostIp, String(port), ...filePaths];
     const { envVars, fullEnv } = buildRVPathSwapEnv();
 
     if (process.platform === 'darwin') {
-        // macOS: RV needs app-bundle context to run properly.
-        // Use `open -n -a <bundle> --args ...` — the -n flag forces a new instance
-        // and reliably passes all arguments (unlike plain `open -a`).
-        // IMPORTANT: macOS `open` uses LaunchServices which does NOT inherit
-        // the caller's env vars. Use `open --env KEY=VALUE` to inject them.
         let appBundle = null;
         let dir = rvExe;
         for (let i = 0; i < 5; i++) {
@@ -619,16 +558,18 @@ function launchRVAsHost(rvExe, filePaths, networkPort) {
             if (dir.endsWith('.app')) { appBundle = dir; break; }
         }
         if (appBundle) {
-            // Build: open --env K1=V1 --env K2=V2 -n -a <bundle> --args ...
             const args = [];
             for (const [k, v] of Object.entries(envVars)) {
                 args.push('--env', `${k}=${v}`);
             }
             args.push('-n', '-a', appBundle, '--args', ...rvArgs);
             execFile('/usr/bin/open', args, (err) => {
-                if (err) console.error(`[RV Sync Host] open error:`, err.message);
+                if (err) console.error(`[RV Sync ${label}] open error:`, err.message);
             });
-            console.log(`[RV Sync] Host launched via 'open -n -a' (macOS), port ${networkPort}, ${filePaths.length} file(s), ${Object.keys(envVars).length} path swap vars`);
+            const detail = mode === 'host'
+                ? `port ${port}, ${filePaths.length} file(s)`
+                : `connecting to ${hostIp}:${port}`;
+            console.log(`[RV Sync] ${label} launched via 'open -n -a' (macOS), ${detail}, ${Object.keys(envVars).length} path swap vars`);
             return;
         }
     }
@@ -644,79 +585,20 @@ function launchRVAsHost(rvExe, filePaths, networkPort) {
 
     child.stdout.on('data', d => {
         const msg = d.toString().trim();
-        if (msg) console.log(`[RV Sync Host] stdout: ${msg.substring(0, 300)}`);
+        if (msg) console.log(`[RV Sync ${label}] stdout: ${msg.substring(0, 300)}`);
     });
     child.stderr.on('data', d => {
         const msg = d.toString().trim();
-        if (msg) console.error(`[RV Sync Host] stderr: ${msg.substring(0, 300)}`);
+        if (msg) console.error(`[RV Sync ${label}] stderr: ${msg.substring(0, 300)}`);
     });
-    child.on('error', err => console.error(`[RV Sync Host] Error: ${err.message}`));
-    child.on('exit', (code) => console.log(`[RV Sync Host] Exited (code=${code})`));
+    child.on('error', err => console.error(`[RV Sync ${label}] Error: ${err.message}`));
+    child.on('exit', (code) => console.log(`[RV Sync ${label}] Exited (code=${code})`));
     child.unref();
 
-    console.log(`[RV Sync] Host launched, port ${networkPort}, PID=${child.pid}, ${filePaths.length} file(s)`);
-}
-
-/**
- * Launch RV as a sync client (connects to an existing host session).
- * Uses `-networkConnect <ip> <port>` to join the host.
- * Also loads the same media files locally (RV sync shares state, not pixels).
- */
-function launchRVAsClient(rvExe, hostIp, hostPort, filePaths) {
-    killExistingRVSync();
-    const { execFile, spawn } = require('child_process');
-    const rvArgs = ['-network', '-networkConnect', hostIp, String(hostPort), ...filePaths];
-    const { envVars, fullEnv } = buildRVPathSwapEnv();
-
-    if (process.platform === 'darwin') {
-        // macOS: RV needs app-bundle context to run properly.
-        // Use `open -n -a <bundle> --args ...` — the -n flag forces a new instance
-        // and reliably passes all arguments (unlike plain `open -a`).
-        // IMPORTANT: macOS `open` uses LaunchServices which does NOT inherit
-        // the caller's env vars. Use `open --env KEY=VALUE` to inject them.
-        let appBundle = null;
-        let dir = rvExe;
-        for (let i = 0; i < 5; i++) {
-            dir = path.dirname(dir);
-            if (dir.endsWith('.app')) { appBundle = dir; break; }
-        }
-        if (appBundle) {
-            // Build: open --env K1=V1 --env K2=V2 -n -a <bundle> --args ...
-            const args = [];
-            for (const [k, v] of Object.entries(envVars)) {
-                args.push('--env', `${k}=${v}`);
-            }
-            args.push('-n', '-a', appBundle, '--args', ...rvArgs);
-            execFile('/usr/bin/open', args, (err) => {
-                if (err) console.error(`[RV Sync Client] open error:`, err.message);
-            });
-            console.log(`[RV Sync] Client launched via 'open -n -a' (macOS), connecting to ${hostIp}:${hostPort}, ${Object.keys(envVars).length} path swap vars`);
-            return;
-        }
-    }
-
-    // Windows / Linux or fallback
-    const child = spawn(rvExe, rvArgs, {
-        cwd: path.dirname(rvExe),
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: false,
-        env: fullEnv,
-    });
-
-    child.stdout.on('data', d => {
-        const msg = d.toString().trim();
-        if (msg) console.log(`[RV Sync Client] stdout: ${msg.substring(0, 300)}`);
-    });
-    child.stderr.on('data', d => {
-        const msg = d.toString().trim();
-        if (msg) console.error(`[RV Sync Client] stderr: ${msg.substring(0, 300)}`);
-    });
-    child.on('error', err => console.error(`[RV Sync Client] Error: ${err.message}`));
-    child.on('exit', (code) => console.log(`[RV Sync Client] Exited (code=${code})`));
-    child.unref();
-
-    console.log(`[RV Sync] Client launched, connecting to ${hostIp}:${hostPort}, PID=${child.pid}`);
+    const detail = mode === 'host'
+        ? `port ${port}, PID=${child.pid}, ${filePaths.length} file(s)`
+        : `connecting to ${hostIp}:${port}, PID=${child.pid}`;
+    console.log(`[RV Sync] ${label} launched, ${detail}`);
 }
 
 

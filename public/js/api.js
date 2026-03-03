@@ -12,16 +12,13 @@
 export async function api(url, opts = {}) {
     const userId = localStorage.getItem('cam_user_id');
     const options = {
+        ...opts,
         headers: {
             'Content-Type': 'application/json',
             ...(userId ? { 'X-CAM-User': userId } : {}),
+            ...(opts.headers || {}),
         },
-        ...opts,
     };
-    // Merge caller-provided headers with our defaults
-    if (opts.headers) {
-        options.headers = { ...options.headers, ...opts.headers };
-    }
     if (opts.body && typeof opts.body === 'object') {
         options.body = JSON.stringify(opts.body);
     }

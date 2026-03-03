@@ -3,6 +3,8 @@
  * Shot Builder - Drag-and-drop naming convention builder
  */
 
+import { esc } from './utils.js';
+
 // ===========================================
 //  TILE DEFINITIONS
 // ===========================================
@@ -108,7 +110,7 @@ function renderAssemblyTokens() {
         // Separator input (between tokens)
         const sepHtml = i > 0
             ? `<input class="sb-sep" type="text" maxlength="4"
-                      data-sep-index="${i}" value="${escHtml(sepValue)}"
+                      data-sep-index="${i}" value="${esc(sepValue)}"
                       placeholder="." title="Separator - click to edit (e.g. _ - . or empty)">`
             : '';
 
@@ -126,10 +128,10 @@ function renderAssemblyTokens() {
     const wcRows = assemblyTokens.map((tok, i) => {
         if (tok.type !== 'wildcard') return '';
         return `<div class="sb-wc-row" data-wc-for="${i}">
-            <span class="sb-wc-tag" style="background: #b89050;">[W] ${escHtml(tok.label || 'Wildcard')}</span>
-            <input class="sb-wc-label" type="text" value="${escHtml(tok.label || 'Custom')}"
+            <span class="sb-wc-tag" style="background: #b89050;">[W] ${esc(tok.label || 'Wildcard')}</span>
+            <input class="sb-wc-label" type="text" value="${esc(tok.label || 'Custom')}"
                    placeholder="Label" data-wc-label="${i}" title="Name for this wildcard">
-            <input class="sb-wc-value" type="text" value="${escHtml(tok.value || '')}"
+            <input class="sb-wc-value" type="text" value="${esc(tok.value || '')}"
                    placeholder="Default value" data-wc-value="${i}" title="Default value used in filename">
             <label class="sb-wc-ask" title="Prompt for this value during import">
                 <input type="checkbox" data-wc-ask="${i}" ${tok.askAtImport ? 'checked' : ''}>
@@ -162,8 +164,8 @@ function generatePreview() {
     const filenameParts = assemblyTokens.map((tok, i) => {
         const def = TILE_DEFS.find(d => d.type === tok.type);
         const example = getExampleForToken(tok);
-        const sep = i > 0 ? escHtml(tok.separator || '') : '';
-        return `${sep}<span class="sb-preview-token" style="color: ${def?.color || '#aaa'}">${escHtml(example)}</span>`;
+        const sep = i > 0 ? esc(tok.separator || '') : '';
+        return `${sep}<span class="sb-preview-token" style="color: ${def?.color || '#aaa'}">${esc(example)}</span>`;
     });
     const filenameLine = filenameParts.join('');
 
@@ -172,7 +174,7 @@ function generatePreview() {
         const def = TILE_DEFS.find(d => d.type === tok.type);
         const label = tok.type === 'wildcard' ? (tok.label || 'wildcard') : def.label.toLowerCase();
         const val = getExampleForToken(tok);
-        return `<span style="color: ${def?.color || '#aaa'}">${label}:<b>${escHtml(val)}</b></span>`;
+        return `<span style="color: ${def?.color || '#aaa'}">${label}:<b>${esc(val)}</b></span>`;
     });
     const legendLine = legendParts.join(' . ');
 
@@ -430,14 +432,6 @@ export function getAskAtImportWildcards() {
         .map(t => ({ label: t.label || 'Custom', defaultValue: t.value || '' }));
 }
 
-// ===========================================
-//  UTILITY
-// ===========================================
-
-function escHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-              .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-}
+// escHtml replaced by esc() imported from utils.js
 
 

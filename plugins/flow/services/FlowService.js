@@ -143,7 +143,7 @@ class FlowService {
 
             if (existing) {
                 db.prepare(
-                    'UPDATE projects SET name = ?, description = ?, updated_at = datetime("now") WHERE flow_id = ?'
+                    "UPDATE projects SET name = ?, description = ?, updated_at = datetime('now') WHERE flow_id = ?"
                 ).run(proj.name, proj.description, proj.flow_id);
                 updated++;
             } else {
@@ -153,7 +153,7 @@ class FlowService {
 
                 if (byCode) {
                     db.prepare(
-                        'UPDATE projects SET flow_id = ?, description = ?, updated_at = datetime("now") WHERE id = ?'
+                        "UPDATE projects SET flow_id = ?, description = ?, updated_at = datetime('now') WHERE id = ?"
                     ).run(proj.flow_id, proj.description, byCode.id);
                     updated++;
                 } else {
@@ -494,6 +494,591 @@ class FlowService {
             sequences: results.sequences,
             shots: results.shots,
             tasks: results.tasks,
+        };
+    }
+
+    /**
+     * Fetch Versions from Flow for a project, find their file paths on disk,
+     * and register them in-place (is_linked = 1) in the CAM database.
+     *
+     * Each Version is assigned to the correct project/sequence/shot/role
+     * based on the entity link (Shot) and task step from ShotGrid.
+     *
+     * @param {number} flowProjectId — ShotGrid project ID
+     * @param {number} localProjectId — CAM project ID
+     * @param {object} [opts] — { source: 'versions'|'published_files'|'both', statuses: string[] }
+     * @returns {object} — { registered, skipped, missing, errors, total }
+     */
+    static async syncVersions(flowProjectId, localProjectId, opts = {}) {
+        const path = require('path');
+        const fs = require('fs');
+        const { isMediaFile, detectMediaType } = require('../../../src/utils/mediaTypes');
+        const { resolveFilePath } = require('../../../src/utils/pathResolver');
+
+        const db = this._getDb();
+        const source = opts.source || 'both';
+
+        // Collect all items (versions + published files)
+        let items = [];
+
+        if (source === 'versions' || source === 'both') {
+            try {
+                const vResult = await this.execute('sync_versions', {
+                    project_id: flowProjectId,
+                    statuses: opts.statuses || null,
+                });
+                if (vResult.versions) {
+                    items.push(...vResult.versions.map(v => ({ ...v, _source: 'version' })));
+                }
+            } catch (err) {
+                console.warn('[Flow] Version fetch failed:', err.message);
+            }
+        }
+
+        if (source === 'published_files' || source === 'both') {
+            try {
+                const pfResult = await this.execute('sync_published_files', {
+                    project_id: flowProjectId,
+                });
+                if (pfResult.published_files) {
+                    items.push(...pfResult.published_files.map(pf => ({ ...pf, _source: 'published_file' })));
+                }
+            } catch (err) {
+                console.warn('[Flow] PublishedFile fetch failed:', err.message);
+            }
+        }
+
+        if (items.length === 0) {
+            return { success: true, registered: 0, skipped: 0, missing: 0, errors: 0, total: 0, message: 'No versions or published files found in Flow' };
+        }
+
+        // Build lookup maps for shots and roles by flow_id
+        const shotsByFlowId = new Map();
+        db.prepare('SELECT id, flow_id, sequence_id FROM shots WHERE project_id = ?').all(localProjectId)
+            .forEach(s => shotsByFlowId.set(s.flow_id, s));
+
+        const rolesByFlowId = new Map();
+        db.prepare('SELECT id, flow_id FROM roles WHERE flow_id IS NOT NULL').all()
+            .forEach(r => rolesByFlowId.set(r.flow_id, r));
+
+        // Existing file paths in DB to skip duplicates
+        const existingPaths = new Set(
+            db.prepare('SELECT file_path FROM assets WHERE project_id = ?').all(localProjectId)
+                .map(a => a.file_path)
+        );
+
+        // Also track by flow_version_id to skip re-importing same version
+        const existingFlowIds = new Set();
+        try {
+            db.prepare("SELECT json_extract(metadata, '$.flow_version_id') as fv FROM assets WHERE project_id = ? AND metadata IS NOT NULL")
+                .all(localProjectId)
+                .forEach(a => { if (a.fv) existingFlowIds.add(a.fv); });
+        } catch { /* metadata column may not have json_extract */ }
+
+        const insertAsset = db.prepare(`
+            INSERT INTO assets (
+                project_id, sequence_id, shot_id, role_id,
+                original_name, vault_name, file_path, relative_path,
+                media_type, file_ext, file_size,
+                is_linked, status, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?)
+        `);
+
+        let registered = 0, skipped = 0, missing = 0, errors = 0;
+        const ThumbnailService = require('../../../src/services/ThumbnailService');
+        const newAssetIds = [];
+
+        const registerBatch = db.transaction((batchItems) => {
+            for (const item of batchItems) {
+                try {
+                    // Skip if we already imported this flow version
+                    if (existingFlowIds.has(item.flow_id)) {
+                        skipped++;
+                        continue;
+                    }
+
+                    // Try each path variant until we find one that exists on disk
+                    let resolvedPath = null;
+                    for (const rawPath of (item.paths || [])) {
+                        // Try the path as-is first
+                        if (fs.existsSync(rawPath)) {
+                            resolvedPath = rawPath;
+                            break;
+                        }
+                        // Try cross-platform path resolution
+                        try {
+                            const mapped = resolveFilePath(rawPath);
+                            if (mapped && fs.existsSync(mapped)) {
+                                resolvedPath = mapped;
+                                break;
+                            }
+                        } catch {}
+                    }
+
+                    if (!resolvedPath) {
+                        missing++;
+                        continue;
+                    }
+
+                    // Skip if this exact path is already registered
+                    if (existingPaths.has(resolvedPath)) {
+                        skipped++;
+                        continue;
+                    }
+
+                    const fileName = path.basename(resolvedPath);
+
+                    // Skip non-media files
+                    if (!isMediaFile(fileName)) {
+                        skipped++;
+                        continue;
+                    }
+
+                    const ext = path.extname(fileName).toLowerCase();
+                    const { type: mediaType } = detectMediaType(fileName);
+                    let fileSize = 0;
+                    try { fileSize = fs.statSync(resolvedPath).size; } catch {}
+
+                    // Resolve shot + sequence from entity link
+                    let shotId = null, sequenceId = null;
+                    if (item.entity_type === 'Shot' && item.entity_id) {
+                        const shot = shotsByFlowId.get(item.entity_id);
+                        if (shot) {
+                            shotId = shot.id;
+                            sequenceId = shot.sequence_id;
+                        }
+                    }
+
+                    // Resolve role from step link
+                    let roleId = null;
+                    if (item.step_id) {
+                        const role = rolesByFlowId.get(item.step_id);
+                        if (role) roleId = role.id;
+                    }
+
+                    // Store flow metadata
+                    const metadata = JSON.stringify({
+                        flow_version_id: item.flow_id,
+                        flow_source: item._source,
+                        flow_code: item.code,
+                    });
+
+                    const result = insertAsset.run(
+                        localProjectId, sequenceId, shotId, roleId,
+                        fileName,       // original_name
+                        item.code || fileName,  // vault_name (use SG version code)
+                        resolvedPath,   // file_path (absolute)
+                        resolvedPath,   // relative_path
+                        mediaType,
+                        ext,
+                        fileSize,
+                        metadata
+                    );
+
+                    existingPaths.add(resolvedPath);
+                    registered++;
+                    if (result.lastInsertRowid) {
+                        newAssetIds.push(result.lastInsertRowid);
+                    }
+                } catch (err) {
+                    errors++;
+                }
+            }
+        });
+
+        registerBatch(items);
+
+        // Queue thumbnail generation asynchronously
+        if (newAssetIds.length > 0) {
+            setTimeout(() => {
+                for (const assetId of newAssetIds) {
+                    try {
+                        const asset = db.prepare('SELECT id, file_path, media_type FROM assets WHERE id = ?').get(assetId);
+                        if (asset) {
+                            ThumbnailService.generateThumbnail(asset.file_path, asset.id);
+                        }
+                    } catch {}
+                }
+            }, 100);
+        }
+
+        // Broadcast to spokes if hub mode
+        if (registered > 0 && typeof global._broadcastChange === 'function') {
+            try {
+                const newAssets = db.prepare(
+                    `SELECT * FROM assets WHERE id IN (${newAssetIds.map(() => '?').join(',')}) LIMIT 500`
+                ).all(...newAssetIds.slice(0, 500));
+                for (const asset of newAssets) {
+                    global._broadcastChange('assets', 'insert', { record: asset });
+                }
+            } catch {}
+        }
+
+        return {
+            success: true,
+            registered,
+            skipped,
+            missing,
+            errors,
+            total: items.length,
+            message: `Registered ${registered} assets from Flow. ${missing} files not found on disk. ${skipped} already imported.`
+        };
+    }
+
+    /**
+     * Fetch thumbnails from ShotGrid for assets already registered from Flow.
+     * Looks up assets with flow_version_id metadata, fetches thumbnail URLs from SG,
+     * and downloads them to CAM's thumbnails/ directory.
+     *
+     * @param {number} flowProjectId - Flow project ID
+     * @param {number} localProjectId - Local project ID
+     * @param {object} [opts] - Options
+     * @param {string} [opts.source='both'] - 'versions'|'published_files'|'both'
+     * @param {boolean} [opts.overwrite=false] - Overwrite existing thumbnails
+     * @returns {object} - { downloaded, skipped, noThumb, errors, total }
+     */
+    static async syncThumbnails(flowProjectId, localProjectId, opts = {}) {
+        const fs = require('fs');
+        const pathMod = require('path');
+        const https = require('https');
+        const http = require('http');
+
+        const db = this._getDb();
+        const thumbDir = pathMod.join(__dirname, '..', '..', '..', 'thumbnails');
+        if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+
+        // Get all assets in this project that have flow metadata
+        const assets = db.prepare(
+            `SELECT id, metadata FROM assets WHERE project_id = ? AND metadata IS NOT NULL`
+        ).all(localProjectId);
+
+        // Build map: flow_version_id → [assetId, ...]
+        const flowToAssets = new Map();  // flowId → [assetIds]
+        const flowSourceMap = new Map(); // flowId → 'version' | 'published_file'
+        for (const asset of assets) {
+            try {
+                const meta = JSON.parse(asset.metadata);
+                if (!meta.flow_version_id) continue;
+                const fid = meta.flow_version_id;
+                if (!flowToAssets.has(fid)) flowToAssets.set(fid, []);
+                flowToAssets.get(fid).push(asset.id);
+                flowSourceMap.set(fid, meta.flow_source || 'version');
+            } catch {}
+        }
+
+        if (flowToAssets.size === 0) {
+            return { success: true, downloaded: 0, skipped: 0, noThumb: 0, errors: 0, total: 0, message: 'No Flow-sourced assets found.' };
+        }
+
+        // Filter to only assets that need thumbnails (no existing file)
+        const overwrite = opts.overwrite || false;
+        const needsThumbs = new Map();
+        for (const [flowId, assetIds] of flowToAssets) {
+            const allExist = assetIds.every(id =>
+                fs.existsSync(pathMod.join(thumbDir, `thumb_${id}.jpg`))
+            );
+            if (!allExist || overwrite) {
+                needsThumbs.set(flowId, assetIds);
+            }
+        }
+
+        if (needsThumbs.size === 0) {
+            return { success: true, downloaded: 0, skipped: flowToAssets.size, noThumb: 0, errors: 0, total: flowToAssets.size, message: 'All thumbnails already exist.' };
+        }
+
+        // Fetch thumbnail URLs from ShotGrid
+        const source = opts.source || 'both';
+        let thumbResult;
+        try {
+            thumbResult = await this.execute('fetch_thumbnail_urls', {
+                project_id: flowProjectId,
+                source,
+            });
+        } catch (err) {
+            throw new Error(`Failed to fetch thumbnail URLs from ShotGrid: ${err.message}`);
+        }
+
+        if (!thumbResult.thumbnails || thumbResult.thumbnails.length === 0) {
+            return { success: true, downloaded: 0, skipped: 0, noThumb: flowToAssets.size, errors: 0, total: flowToAssets.size, message: 'No thumbnails found in ShotGrid for this project.' };
+        }
+
+        // Build flowId → url map
+        const urlMap = new Map();
+        for (const t of thumbResult.thumbnails) {
+            urlMap.set(t.flow_id, t.url);
+        }
+
+        // Download thumbnails
+        let downloaded = 0, skipped = 0, noThumb = 0, errors = 0;
+
+        const downloadImage = (url, destPath) => {
+            return new Promise((resolve, reject) => {
+                const client = url.startsWith('https') ? https : http;
+                const req = client.get(url, { timeout: 15000 }, (res) => {
+                    // Handle redirects (SG often returns 302)
+                    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        downloadImage(res.headers.location, destPath).then(resolve).catch(reject);
+                        return;
+                    }
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`HTTP ${res.statusCode}`));
+                        return;
+                    }
+                    const fileStream = fs.createWriteStream(destPath);
+                    res.pipe(fileStream);
+                    fileStream.on('finish', () => { fileStream.close(); resolve(); });
+                    fileStream.on('error', reject);
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+            });
+        };
+
+        for (const [flowId, assetIds] of needsThumbs) {
+            const url = urlMap.get(flowId);
+            if (!url) {
+                noThumb++;
+                continue;
+            }
+
+            try {
+                // Download to the first asset's thumb path, then copy for others
+                const primaryPath = pathMod.join(thumbDir, `thumb_${assetIds[0]}.jpg`);
+                await downloadImage(url, primaryPath);
+
+                // Copy for additional assets sharing the same flow version
+                for (let i = 1; i < assetIds.length; i++) {
+                    const copyPath = pathMod.join(thumbDir, `thumb_${assetIds[i]}.jpg`);
+                    try { fs.copyFileSync(primaryPath, copyPath); } catch {}
+                }
+
+                downloaded++;
+            } catch (err) {
+                errors++;
+            }
+        }
+
+        skipped = flowToAssets.size - needsThumbs.size;
+
+        return {
+            success: true,
+            downloaded,
+            skipped,
+            noThumb,
+            errors,
+            total: flowToAssets.size,
+            message: `Downloaded ${downloaded} thumbnails from ShotGrid. ${skipped} already existed. ${noThumb} had no thumbnail in SG.`
+        };
+    }
+
+    /**
+     * Fetch and download shot thumbnails from ShotGrid.
+     * Saves as thumbnails/shot_<localShotId>.jpg so they can be served statically.
+     *
+     * @param {number} flowProjectId - Flow project ID
+     * @param {number} localProjectId - Local project ID
+     * @param {object} [opts] - Options
+     * @param {boolean} [opts.overwrite=false] - Overwrite existing thumbnails
+     * @returns {object} - { downloaded, skipped, noThumb, errors, total }
+     */
+    static async syncShotThumbnails(flowProjectId, localProjectId, opts = {}) {
+        const fs = require('fs');
+        const pathMod = require('path');
+        const https = require('https');
+        const http = require('http');
+
+        const db = this._getDb();
+        const thumbDir = pathMod.join(__dirname, '..', '..', '..', 'thumbnails');
+        if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+
+        // Get local shots with flow_ids
+        const shots = db.prepare(
+            'SELECT id, flow_id FROM shots WHERE project_id = ? AND flow_id IS NOT NULL'
+        ).all(localProjectId);
+
+        if (shots.length === 0) {
+            return { success: true, downloaded: 0, skipped: 0, noThumb: 0, errors: 0, total: 0, message: 'No shots with Flow IDs found.' };
+        }
+
+        // Build map: flowId -> localShotId
+        const flowToLocal = new Map();
+        for (const s of shots) flowToLocal.set(s.flow_id, s.id);
+
+        const overwrite = opts.overwrite || false;
+
+        // Fetch shot thumbnail URLs from ShotGrid
+        let thumbResult;
+        try {
+            thumbResult = await this.execute('fetch_shot_thumbnails', {
+                project_id: flowProjectId,
+            });
+        } catch (err) {
+            throw new Error(`Failed to fetch shot thumbnails from ShotGrid: ${err.message}`);
+        }
+
+        if (!thumbResult.thumbnails || thumbResult.thumbnails.length === 0) {
+            return { success: true, downloaded: 0, skipped: 0, noThumb: shots.length, errors: 0, total: shots.length, message: 'No shot thumbnails found in ShotGrid.' };
+        }
+
+        const downloadImage = (url, destPath) => {
+            return new Promise((resolve, reject) => {
+                const client = url.startsWith('https') ? https : http;
+                const req = client.get(url, { timeout: 15000 }, (res) => {
+                    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        downloadImage(res.headers.location, destPath).then(resolve).catch(reject);
+                        return;
+                    }
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`HTTP ${res.statusCode}`));
+                        return;
+                    }
+                    const fileStream = fs.createWriteStream(destPath);
+                    res.pipe(fileStream);
+                    fileStream.on('finish', () => { fileStream.close(); resolve(); });
+                    fileStream.on('error', reject);
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+            });
+        };
+
+        let downloaded = 0, skipped = 0, noThumb = 0, errors = 0;
+
+        for (const t of thumbResult.thumbnails) {
+            const localId = flowToLocal.get(t.flow_id);
+            if (!localId) continue; // shot not in our DB
+
+            const destPath = pathMod.join(thumbDir, `shot_${localId}.jpg`);
+            if (!overwrite && fs.existsSync(destPath)) {
+                skipped++;
+                continue;
+            }
+
+            try {
+                await downloadImage(t.url, destPath);
+                downloaded++;
+            } catch (err) {
+                errors++;
+            }
+        }
+
+        // Count shots that had no thumbnail in SG
+        const sgFlowIds = new Set(thumbResult.thumbnails.map(t => t.flow_id));
+        noThumb = shots.filter(s => !sgFlowIds.has(s.flow_id)).length;
+
+        return {
+            success: true,
+            downloaded,
+            skipped,
+            noThumb,
+            errors,
+            total: shots.length,
+            message: `Downloaded ${downloaded} shot thumbnails from ShotGrid. ${skipped} already existed. ${noThumb} shots have no thumbnail in SG.`
+        };
+    }
+
+    /**
+     * Fetch and download role-level thumbnails from ShotGrid.
+     * For each shot+role combo, gets the latest Version's thumbnail.
+     * Saves as thumbnails/task_<shotId>_<roleId>.jpg
+     *
+     * @param {number} flowProjectId - Flow project ID
+     * @param {number} localProjectId - Local project ID
+     * @param {object} [opts]
+     * @param {boolean} [opts.overwrite=false]
+     * @returns {object} - { downloaded, skipped, noThumb, errors, total }
+     */
+    static async syncRoleThumbnails(flowProjectId, localProjectId, opts = {}) {
+        const fs = require('fs');
+        const pathMod = require('path');
+        const https = require('https');
+        const http = require('http');
+
+        const db = this._getDb();
+        const thumbDir = pathMod.join(__dirname, '..', '..', '..', 'thumbnails');
+        if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+
+        // Build lookup maps: flow_id -> local id
+        const shotsByFlowId = new Map();
+        db.prepare('SELECT id, flow_id FROM shots WHERE project_id = ? AND flow_id IS NOT NULL')
+            .all(localProjectId)
+            .forEach(s => shotsByFlowId.set(s.flow_id, s.id));
+
+        const rolesByFlowId = new Map();
+        db.prepare('SELECT id, flow_id FROM roles WHERE flow_id IS NOT NULL').all()
+            .forEach(r => rolesByFlowId.set(r.flow_id, r.id));
+
+        if (shotsByFlowId.size === 0) {
+            return { success: true, downloaded: 0, skipped: 0, noThumb: 0, errors: 0, total: 0, message: 'No shots with Flow IDs found.' };
+        }
+
+        // Fetch role-level thumbnail URLs from ShotGrid
+        let thumbResult;
+        try {
+            thumbResult = await this.execute('fetch_role_thumbnails', {
+                project_id: flowProjectId,
+            });
+        } catch (err) {
+            throw new Error(`Failed to fetch role thumbnails from ShotGrid: ${err.message}`);
+        }
+
+        if (!thumbResult.thumbnails || thumbResult.thumbnails.length === 0) {
+            return { success: true, downloaded: 0, skipped: 0, noThumb: 0, errors: 0, total: 0, message: 'No role-level thumbnails found in ShotGrid.' };
+        }
+
+        const overwrite = opts.overwrite || false;
+
+        const downloadImage = (url, destPath) => {
+            return new Promise((resolve, reject) => {
+                const client = url.startsWith('https') ? https : http;
+                const req = client.get(url, { timeout: 15000 }, (res) => {
+                    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        downloadImage(res.headers.location, destPath).then(resolve).catch(reject);
+                        return;
+                    }
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`HTTP ${res.statusCode}`));
+                        return;
+                    }
+                    const fileStream = fs.createWriteStream(destPath);
+                    res.pipe(fileStream);
+                    fileStream.on('finish', () => { fileStream.close(); resolve(); });
+                    fileStream.on('error', reject);
+                });
+                req.on('error', reject);
+                req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+            });
+        };
+
+        let downloaded = 0, skipped = 0, errors = 0;
+
+        for (const t of thumbResult.thumbnails) {
+            const localShotId = shotsByFlowId.get(t.shot_flow_id);
+            const localRoleId = rolesByFlowId.get(t.step_flow_id);
+            if (!localShotId || !localRoleId) continue;
+
+            const destPath = pathMod.join(thumbDir, `task_${localShotId}_${localRoleId}.jpg`);
+            if (!overwrite && fs.existsSync(destPath)) {
+                skipped++;
+                continue;
+            }
+
+            try {
+                await downloadImage(t.url, destPath);
+                downloaded++;
+            } catch (err) {
+                errors++;
+            }
+        }
+
+        return {
+            success: true,
+            downloaded,
+            skipped,
+            noThumb: 0,
+            errors,
+            total: thumbResult.thumbnails.length,
+            message: `Downloaded ${downloaded} role thumbnails. ${skipped} already existed.`
         };
     }
 

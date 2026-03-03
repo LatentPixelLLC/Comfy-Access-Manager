@@ -275,9 +275,17 @@ function renderAssets() {
     const container = document.getElementById('assetContainer');
 
     if (state.assets.length === 0) {
+        // Show role-level thumbnail (shot+role), fall back to shot-level thumbnail
+        let thumbHtml = '';
+        if (state.currentShot && state.currentRole) {
+            // Role thumbnail: task_<shotId>_<roleId>.jpg, fallback to shot_<shotId>.jpg
+            thumbHtml = `<img src="/thumbnails/task_${state.currentShot.id}_${state.currentRole.id}.jpg?v=${_thumbCacheBuster}" style="max-width:480px;max-height:320px;border-radius:6px;margin-bottom:12px;opacity:0.85" onerror="this.src='/thumbnails/shot_${state.currentShot.id}.jpg?v=${_thumbCacheBuster}';this.onerror=function(){this.style.display='none'}">`;
+        } else if (state.currentShot) {
+            thumbHtml = `<img src="/thumbnails/shot_${state.currentShot.id}.jpg?v=${_thumbCacheBuster}" style="max-width:480px;max-height:320px;border-radius:6px;margin-bottom:12px;opacity:0.85" onerror="this.style.display='none'">`;
+        }
         container.innerHTML = `
             <div class="empty-state" style="grid-column: 1/-1;">
-                <div class="empty-icon">📭</div>
+                ${thumbHtml}
                 <p>No assets yet. Import some files to get started!</p>
             </div>
         `;

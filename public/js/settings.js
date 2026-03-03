@@ -28,6 +28,13 @@ export async function loadSettings() {
         document.getElementById('settingThumbSize').value = state.settings.thumbnail_size || '320';
         document.getElementById('settingAutoThumb').checked = state.settings.auto_thumbnail !== 'false';
 
+        // AI Settings
+        if (document.getElementById('settingLlmUrl')) {
+            document.getElementById('settingLlmUrl').value = state.settings.llm_url || 'http://localhost:11434/api/generate';
+        }
+        if (document.getElementById('settingLlmModel')) {
+            document.getElementById('settingLlmModel').value = state.settings.llm_model || 'deepseek-r1:32b';
+        }
 
         // External player
         const playerSel = document.getElementById('settingDefaultPlayer');
@@ -105,6 +112,10 @@ async function saveSettings() {
         naming_template: document.getElementById('settingNamingTemplate').value.trim(),
         thumbnail_size: document.getElementById('settingThumbSize').value,
         auto_thumbnail: document.getElementById('settingAutoThumb').checked ? 'true' : 'false',
+
+        // AI Settings
+        llm_url: document.getElementById('settingLlmUrl') ? document.getElementById('settingLlmUrl').value.trim() : '',
+        llm_model: document.getElementById('settingLlmModel') ? document.getElementById('settingLlmModel').value.trim() : '',
 
         default_player: document.getElementById('settingDefaultPlayer').value,
         custom_player_path: document.getElementById('settingCustomPlayerPath').value.trim(),

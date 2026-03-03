@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const ThumbnailService = require('./ThumbnailService');
+const { findFFprobe: _sharedFindFFprobe } = require('../utils/ffmpegUtils');
 
 class MediaInfoService {
 
@@ -103,61 +103,7 @@ class MediaInfoService {
      * Find FFprobe in common locations
      */
     static findFFprobe() {
-        const isWin = process.platform === 'win32';
-        const localTools = path.join(__dirname, '..', '..', 'tools', 'ffmpeg', 'bin', isWin ? 'ffprobe.exe' : 'ffprobe');
-        const candidates = [
-            'ffprobe',  // Works if on PATH
-            localTools, // Local tools/ directory (installed by install.bat)
-            ...(isWin ? [
-                'C:\\ffmpeg\\bin\\ffprobe.exe',
-                'C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe',
-                path.join(process.env.LOCALAPPDATA || '', 'ffmpeg', 'bin', 'ffprobe.exe'),
-            ] : [
-                '/opt/homebrew/bin/ffprobe',
-                '/usr/local/bin/ffprobe',
-                '/usr/bin/ffprobe',
-            ]),
-        ];
-        
-        const { execFileSync } = require('child_process');
-        for (const candidate of candidates) {
-            try {
-                if (candidate === 'ffprobe') {
-                    execFileSync('ffprobe', ['-version'], { stdio: 'ignore', timeout: 5000 });
-                    return 'ffprobe';
-                } else if (fs.existsSync(candidate)) {
-                    return candidate;
-                }
-            } catch {}
-        }
-        return null;
-    }
-
-    /**
-     * Format file size for display
-     */
-    static formatFileSize(bytes) {
-        if (!bytes) return '0 B';
-        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        let i = 0;
-        let size = bytes;
-        while (size >= 1024 && i < units.length - 1) {
-            size /= 1024;
-            i++;
-        }
-        return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
-    }
-
-    /**
-     * Format duration for display
-     */
-    static formatDuration(seconds) {
-        if (!seconds) return '--:--';
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-        return `${m}:${String(s).padStart(2, '0')}`;
+        return _sharedFindFFprobe();
     }
 }
 
