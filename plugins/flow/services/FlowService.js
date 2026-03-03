@@ -594,6 +594,7 @@ class FlowService {
         let registered = 0, skipped = 0, missing = 0, errors = 0;
         const ThumbnailService = require('../../../src/services/ThumbnailService');
         const newAssetIds = [];
+        const newFlowMap = [];  // { flowId, assetId, source } for thumbnail fetch
 
         const registerBatch = db.transaction((batchItems) => {
             for (const item of batchItems) {
@@ -686,6 +687,7 @@ class FlowService {
                     registered++;
                     if (result.lastInsertRowid) {
                         newAssetIds.push(result.lastInsertRowid);
+                        newFlowMap.push({ flowId: item.flow_id, assetId: result.lastInsertRowid, source: item._source });
                     }
                 } catch (err) {
                     errors++;
@@ -695,38 +697,144 @@ class FlowService {
 
         registerBatch(items);
 
-        // Queue thumbnail generation sequentially with concurrency limit
-        // Avoids hammering network drives with dozens of simultaneous FFmpeg processes
+        // ─── Thumbnails: prefer ShotGrid thumbnails, FFmpeg fallback ───
         if (newAssetIds.length > 0) {
-            const THUMB_CONCURRENCY = 2;
-            const generateSequential = async () => {
-                for (let i = 0; i < newAssetIds.length; i += THUMB_CONCURRENCY) {
-                    const batch = newAssetIds.slice(i, i + THUMB_CONCURRENCY);
-                    await Promise.allSettled(batch.map(async (assetId) => {
-                        try {
-                            const asset = db.prepare('SELECT id, file_path, media_type FROM assets WHERE id = ?').get(assetId);
-                            if (asset) {
-                                const thumbPath = await ThumbnailService.generate(asset.file_path, asset.id);
-                                if (thumbPath) {
-                                    db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?').run(thumbPath, asset.id);
-                                }
+            const pathMod = require('path');
+            const https = require('https');
+            const http = require('http');
+            const thumbDir = pathMod.join(__dirname, '..', '..', '..', 'thumbnails');
+            if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+
+            const downloadImage = (url, destPath) => {
+                return new Promise((resolve, reject) => {
+                    const client = url.startsWith('https') ? https : http;
+                    const req = client.get(url, { timeout: 15000 }, (res) => {
+                        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                            downloadImage(res.headers.location, destPath).then(resolve).catch(reject);
+                            return;
+                        }
+                        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                        const fileStream = fs.createWriteStream(destPath);
+                        res.pipe(fileStream);
+                        fileStream.on('finish', () => { fileStream.close(); resolve(); });
+                        fileStream.on('error', reject);
+                    });
+                    req.on('error', reject);
+                    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+                });
+            };
+
+            const fetchSgThumbnails = async () => {
+                // Group by source type (Version vs PublishedFile IDs can overlap)
+                const versionFlowIds = newFlowMap.filter(m => m.source === 'version').map(m => m.flowId);
+                const pfFlowIds = newFlowMap.filter(m => m.source === 'published_file').map(m => m.flowId);
+                const flowIdToAssetIds = new Map();
+                for (const m of newFlowMap) {
+                    const key = `${m.source}:${m.flowId}`;
+                    if (!flowIdToAssetIds.has(key)) flowIdToAssetIds.set(key, []);
+                    flowIdToAssetIds.get(key).push(m.assetId);
+                }
+
+                // Fetch SG thumbnail URLs for newly registered items
+                const urlMap = new Map();  // 'source:flowId' → url
+                const BATCH_SIZE = 500;
+                try {
+                    if (versionFlowIds.length > 0) {
+                        for (let i = 0; i < versionFlowIds.length; i += BATCH_SIZE) {
+                            const batch = versionFlowIds.slice(i, i + BATCH_SIZE);
+                            const result = await this.execute('fetch_thumbnail_urls', {
+                                project_id: flowProjectId, source: 'versions', flow_ids: batch,
+                            });
+                            for (const t of (result.thumbnails || [])) {
+                                urlMap.set(`version:${t.flow_id}`, t.url);
                             }
-                        } catch {}
+                        }
+                    }
+                    if (pfFlowIds.length > 0) {
+                        for (let i = 0; i < pfFlowIds.length; i += BATCH_SIZE) {
+                            const batch = pfFlowIds.slice(i, i + BATCH_SIZE);
+                            const result = await this.execute('fetch_thumbnail_urls', {
+                                project_id: flowProjectId, source: 'published_files', flow_ids: batch,
+                            });
+                            for (const t of (result.thumbnails || [])) {
+                                urlMap.set(`published_file:${t.flow_id}`, t.url);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn(`[Flow] Failed to fetch SG thumbnail URLs: ${err.message}`);
+                }
+
+                // Download SG thumbnails with concurrency limit
+                let sgDownloaded = 0, sgMissing = 0;
+                const DL_CONCURRENCY = 6;
+                const entries = [...flowIdToAssetIds.entries()];
+
+                for (let i = 0; i < entries.length; i += DL_CONCURRENCY) {
+                    const batch = entries.slice(i, i + DL_CONCURRENCY);
+                    await Promise.allSettled(batch.map(async ([key, assetIds]) => {
+                        const url = urlMap.get(key);
+                        if (!url) { sgMissing++; return; }
+                        try {
+                            const primaryPath = pathMod.join(thumbDir, `thumb_${assetIds[0]}.jpg`);
+                            await downloadImage(url, primaryPath);
+                            db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?').run(primaryPath, assetIds[0]);
+                            for (let j = 1; j < assetIds.length; j++) {
+                                const copyPath = pathMod.join(thumbDir, `thumb_${assetIds[j]}.jpg`);
+                                try { fs.copyFileSync(primaryPath, copyPath); } catch {}
+                                db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?').run(copyPath, assetIds[j]);
+                            }
+                            sgDownloaded++;
+                        } catch { sgMissing++; }
                     }));
                 }
-                console.log(`[Flow] Thumbnail generation complete: ${newAssetIds.length} assets processed`);
+                console.log(`[Flow] SG thumbnails: ${sgDownloaded} downloaded, ${sgMissing} not available in ShotGrid`);
+
+                // FFmpeg fallback ONLY for assets that didn't get a SG thumbnail
+                if (sgMissing > 0) {
+                    const missingThumbAssets = [];
+                    const SQL_BATCH = 500;
+                    for (let i = 0; i < newAssetIds.length; i += SQL_BATCH) {
+                        const batch = newAssetIds.slice(i, i + SQL_BATCH);
+                        const rows = db.prepare(
+                            `SELECT id, file_path, media_type FROM assets WHERE id IN (${batch.map(() => '?').join(',')}) AND thumbnail_path IS NULL`
+                        ).all(...batch);
+                        missingThumbAssets.push(...rows);
+                    }
+
+                    if (missingThumbAssets.length > 0) {
+                        console.log(`[Flow] Generating ${missingThumbAssets.length} thumbnails via FFmpeg (no SG thumbnail)...`);
+                        const FFMPEG_CONCURRENCY = 2;
+                        for (let i = 0; i < missingThumbAssets.length; i += FFMPEG_CONCURRENCY) {
+                            const batch = missingThumbAssets.slice(i, i + FFMPEG_CONCURRENCY);
+                            await Promise.allSettled(batch.map(async (asset) => {
+                                try {
+                                    const thumbPath = await ThumbnailService.generate(asset.file_path, asset.id);
+                                    if (thumbPath) {
+                                        db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?').run(thumbPath, asset.id);
+                                    }
+                                } catch {}
+                            }));
+                        }
+                    }
+                }
+                console.log(`[Flow] Thumbnail sync complete for ${newAssetIds.length} new assets`);
             };
-            setTimeout(generateSequential, 500);
+            setTimeout(fetchSgThumbnails, 500);
         }
 
         // Broadcast to spokes if hub mode
         if (registered > 0 && typeof global._broadcastChange === 'function') {
             try {
-                const newAssets = db.prepare(
-                    `SELECT * FROM assets WHERE id IN (${newAssetIds.map(() => '?').join(',')}) LIMIT 500`
-                ).all(...newAssetIds.slice(0, 500));
-                for (const asset of newAssets) {
-                    global._broadcastChange('assets', 'insert', { record: asset });
+                const SQL_BATCH = 500;
+                for (let i = 0; i < newAssetIds.length; i += SQL_BATCH) {
+                    const batch = newAssetIds.slice(i, i + SQL_BATCH);
+                    const newAssets = db.prepare(
+                        `SELECT * FROM assets WHERE id IN (${batch.map(() => '?').join(',')})`
+                    ).all(...batch);
+                    for (const asset of newAssets) {
+                        global._broadcastChange('assets', 'insert', { record: asset });
+                    }
                 }
             } catch {}
         }
