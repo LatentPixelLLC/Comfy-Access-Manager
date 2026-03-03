@@ -67,8 +67,8 @@ echo.
 cd /d "%~dp0"
 if not exist "tools" mkdir tools
 
-:: ─── [1/5] Check / Install Node.js ───
-echo  [1/5] Checking Node.js...
+:: ─── [1/6] Check / Install Node.js ───
+echo  [1/6] Checking Node.js...
 where node >nul 2>&1
 if errorlevel 1 (
     echo         Node.js not found. Installing automatically...
@@ -124,8 +124,8 @@ if errorlevel 1 (
     for /f "tokens=*" %%v in ('node --version') do echo         Found Node.js %%v
 )
 
-:: ─── [2/5] Check / Install Git ───
-echo  [2/5] Checking Git...
+:: ─── [2/6] Check / Install Git ───
+echo  [2/6] Checking Git...
 where git >nul 2>&1
 if errorlevel 1 (
     echo         Git not found. Installing automatically...
@@ -168,13 +168,33 @@ if errorlevel 1 (
     for /f "tokens=*" %%v in ('git --version') do echo         Found %%v
 )
 
-:: ─── [3/5] Install npm packages ───
-echo  [3/5] Installing npm packages...
+:: ─── [3/6] Install npm packages ───
+echo  [3/6] Installing npm packages...
 call npm install --no-audit --no-fund
 echo         Done.
 
-:: ─── [4/5] Download FFmpeg ───
-echo  [4/5] Checking FFmpeg...
+:: ─── [4/6] Python + ShotGrid SDK ───
+echo  [4/6] Checking Python...
+where python >nul 2>&1
+if not errorlevel 1 (
+    for /f "tokens=*" %%v in ('python --version') do echo         Found %%v
+    echo         Installing ShotGrid API...
+    python -m pip install shotgun_api3 --quiet >nul 2>&1
+    if not errorlevel 1 (
+        echo         Done.
+    ) else (
+        echo         NOTE: pip install failed. You can run manually:
+        echo         python -m pip install shotgun_api3
+    )
+) else (
+    echo         Python not found — skipping ShotGrid SDK install.
+    echo         If you need Flow/ShotGrid sync, install Python from:
+    echo         https://www.python.org/downloads/
+    echo         Then run:  python -m pip install shotgun_api3
+)
+
+:: ─── [5/6] Download FFmpeg ───
+echo  [5/6] Checking FFmpeg...
 
 :: Check if FFmpeg is already on PATH
 where ffmpeg >nul 2>&1
@@ -219,8 +239,8 @@ if exist "tools\ffmpeg\bin\ffmpeg.exe" (
 
 :done_ffmpeg
 
-:: ─── [5/5] Check RV / OpenRV ───
-echo  [5/5] Checking RV / OpenRV...
+:: ─── [6/6] Check RV / OpenRV ───
+echo  [6/6] Checking RV / OpenRV...
 set "RV_FOUND=0"
 if exist "tools\rv\bin\rv.exe" set "RV_FOUND=1"
 if exist "C:\OpenRV\_build\stage\app\bin\rv.exe" set "RV_FOUND=1"

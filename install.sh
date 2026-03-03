@@ -12,9 +12,9 @@ echo ""
 echo "  Sit back — this installs everything you need."
 echo ""
 
-# ─── [1/6] Homebrew (macOS only) ───
+# ─── [1/7] Homebrew (macOS only) ───
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "  [1/6] Checking Homebrew..."
+    echo "  [1/7] Checking Homebrew..."
     if command -v brew &>/dev/null; then
         echo "         ✓ Homebrew ready."
     else
@@ -29,11 +29,11 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         echo "         ✓ Homebrew installed."
     fi
 else
-    echo "  [1/6] Linux detected — using apt."
+    echo "  [1/7] Linux detected — using apt."
 fi
 
-# ─── [2/6] Node.js (need v18+) ───
-echo "  [2/6] Checking Node.js..."
+# ─── [2/7] Node.js (need v18+) ───
+echo "  [2/7] Checking Node.js..."
 NEED_NODE=false
 if command -v node &>/dev/null; then
     NODE_VER_FULL=$(node --version)
@@ -65,8 +65,8 @@ if [ "$NEED_NODE" = true ]; then
     echo "         ✓ Node.js $(node --version)"
 fi
 
-# ─── [3/6] Git ───
-echo "  [3/6] Checking Git..."
+# ─── [3/7] Git ───
+echo "  [3/7] Checking Git..."
 if command -v git &>/dev/null; then
     echo "         ✓ Git ready."
 else
@@ -79,8 +79,8 @@ else
     echo "         ✓ Git installed."
 fi
 
-# ─── [4/6] Python3 (needed for Resolve bridge, Flow sync) ───
-echo "  [4/6] Checking Python3..."
+# ─── [4/7] Python3 + ShotGrid SDK ───
+echo "  [4/7] Checking Python3..."
 if command -v python3 &>/dev/null; then
     echo "         ✓ Python3 $(python3 --version 2>&1 | cut -d' ' -f2)"
 else
@@ -94,6 +94,13 @@ else
         sudo apt install -y python3
     fi
     echo "         ✓ Python3 ready."
+fi
+# Install ShotGrid API (needed for Flow/ShotGrid sync)
+if command -v python3 &>/dev/null; then
+    echo "         Installing ShotGrid API..."
+    python3 -m pip install shotgun_api3 --quiet 2>/dev/null || \
+        pip3 install shotgun_api3 --quiet 2>/dev/null || \
+        echo "         NOTE: pip install failed. Run: pip3 install shotgun_api3"
 fi
 
 # ─── [5/7] FFmpeg ───
