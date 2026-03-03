@@ -2,6 +2,40 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.7.1] - 2026-03-03
+
+### Added — ShotGrid Bulk Sync, Thumbnails & Tree Enhancements
+
+#### Flow/ShotGrid Media Import
+- **Import Media from Flow** — New button in Flow sync panel fetches all Versions and PublishedFiles from ShotGrid, finds the files on disk (with cross-platform path resolution), and registers them in-place assigned to the correct project/sequence/shot/role. Source selector: Versions Only, Published Files Only, or both.
+- **`sync_versions` bridge command** — Queries ShotGrid Versions with `sg_path_to_frames`, `sg_path_to_movie`, entity link (Shot), and task step. Handles path as dict (local_path, local_path_windows, etc.) or string.
+- **`sync_published_files` bridge command** — Same pattern for PublishedFile entities with `path`, `path_cache`, and `published_file_type`.
+- **`FlowService.syncVersions()`** — Fetches from bridge, builds shot/role lookup maps, skips duplicates by flow_version_id and file path, registers in transaction with proper metadata, queues thumbnail generation.
+
+#### ShotGrid Thumbnail Sync (3 levels)
+- **Pull Thumbnails from Flow** — Single button downloads all three levels of ShotGrid thumbnails:
+  - **Shot thumbnails** (`shot_<shotId>.jpg`) — The Shot entity's `image` field. Displayed when browsing a shot with no assets.
+  - **Role thumbnails** (`task_<shotId>_<roleId>.jpg`) — The latest Version's thumbnail per shot+pipeline step combo (e.g., the Paint thumbnail for shot 104_0100). Displayed when clicking a specific role under a shot.
+  - **Asset thumbnails** — Version/PublishedFile thumbnails for already-imported assets.
+- **Fallback chain in browser** — Role view tries `task_<shotId>_<roleId>.jpg`, falls back to `shot_<shotId>.jpg`, then shows empty state.
+- **`fetch_shot_thumbnails` bridge command** — Queries Shot entities with `image` field.
+- **`fetch_role_thumbnails` bridge command** — Queries Versions with `image`, groups by shot+step, keeps latest (newest `created_at` first).
+- **`fetch_thumbnail_urls` bridge command** — Gets thumbnail URLs for Versions + PublishedFiles.
+
+#### Tree Navigation Enhancements
+- **Task-based roles in tree** — Shots now show pipeline step roles from `flow_tasks` table even when no assets exist yet. Roles appear with `asset_count: 0` and `from_task: true` flag.
+- **ShotGrid status dots** — Replaced emoji icons with colored status dots (14 SG statuses mapped: ip, rev, pcr, rdy, wtg, hld, mn, cbb, fin, tfn, fdi, 4k, omt, if). Muted colors at 0.75 opacity.
+- **Priority-based status aggregation** — When multiple tasks exist for the same shot+step, the most active status is shown (ip > rev > pcr > rdy > ...).
+- **Removed bright role colors** — Role labels no longer use inline `style="color"` — they inherit the neutral gray tree text color for VFX-appropriate appearance.
+- **Gray tree arrows** — `.tree-toggle svg` fill set to `#888` to match neutral theme.
+
+### Fixed
+- **SQL datetime bug** — `datetime("now")` with double quotes treated as column name in SQLite. Fixed to `datetime('now')` in FlowService.js (2 places) and PathMatchService.js (1 place). This was causing sync operations to hang.
+- **Plugin settings button responsiveness** — `pluginRegistry.js` `injectSettingsSections()` was destroying event listeners on every settings reload via innerHTML re-injection. Added `_settingsInjected` guard to prevent re-injection.
+
+### Infrastructure
+- Extracted `rvFinder.js`, `ffmpegUtils.js`, `userAccess.js` as single-source-of-truth utility modules.
+
 ## [1.7.0] - 2026-03-01
 
 ### Added — Direct RV-to-ShotGrid Annotation Export
