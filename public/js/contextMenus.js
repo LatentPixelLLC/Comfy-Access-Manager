@@ -58,18 +58,29 @@ async function showContextMenu(event, assetIdx) {
     let formats = [];
     let hasComfyWorkflow = false;
     if (isSingle) {
-        const [fmtRes, wfRes] = await Promise.all([
-            fetch(`/api/assets/${asset.id}/formats`).catch(() => null),
-            fetch(`/api/comfyui/check-workflow/${asset.id}`).catch(() => null),
-        ]);
-        try {
-            const data = await fmtRes?.json();
-            formats = data?.formats || [];
-        } catch { formats = [{ id: asset.id, file_ext: asset.file_ext || '?', media_type: asset.media_type, file_size: asset.file_size }]; }
-        try {
-            const wfData = await wfRes?.json();
-            hasComfyWorkflow = !!wfData?.hasWorkflow;
-        } catch { /* no workflow */ }
+        // If asset already has format_variants from grouped API, use those directly
+        if (asset.format_variants && asset.format_variants.length > 0) {
+            formats = asset.format_variants;
+            // Still need to check for ComfyUI workflow
+            try {
+                const wfRes = await fetch(`/api/comfyui/check-workflow/${asset.id}`).catch(() => null);
+                const wfData = await wfRes?.json();
+                hasComfyWorkflow = !!wfData?.hasWorkflow;
+            } catch { /* no workflow */ }
+        } else {
+            const [fmtRes, wfRes] = await Promise.all([
+                fetch(`/api/assets/${asset.id}/formats`).catch(() => null),
+                fetch(`/api/comfyui/check-workflow/${asset.id}`).catch(() => null),
+            ]);
+            try {
+                const data = await fmtRes?.json();
+                formats = data?.formats || [];
+            } catch { formats = [{ id: asset.id, file_ext: asset.file_ext || '?', media_type: asset.media_type, file_size: asset.file_size }]; }
+            try {
+                const wfData = await wfRes?.json();
+                hasComfyWorkflow = !!wfData?.hasWorkflow;
+            } catch { /* no workflow */ }
+        }
     }
 
     // Remove any existing context menu

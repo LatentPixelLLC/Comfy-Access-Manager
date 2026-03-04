@@ -15,6 +15,7 @@ import { api } from './api.js';
 import { loadProjects, loadTree, initFileDropZone, loadCrates } from './browser.js';
 import { loadImportTab } from './import.js';
 import { loadSettings, loadRoles, openFolderPicker, autoCheckForUpdates } from './settings.js';
+import { restoreGroupFormats } from './assetGrid.js';
 import pluginRegistry from './pluginRegistry.js';
 import './export.js';
 import './overlayEditor.js';
@@ -213,6 +214,9 @@ async function checkSetup() {
             const defaultView = state.settings?.default_view || 'grid';
             state.viewMode = defaultView;
 
+            // Restore format grouping toggle
+            restoreGroupFormats();
+
             // Auto-check for updates (unless disabled in prefs)
             if (state.settings?.auto_check_updates !== 'false') {
                 autoCheckForUpdates();
@@ -365,9 +369,10 @@ async function updateFlowSyncStatus() {
             statusEl.title = `Last synced: ${new Date(status.lastSync).toLocaleString()}`;
 
             // Detect background sync completion and auto-refresh UI
+            // Await tree rebuild first so DOM is settled before asset grid render
             if (_lastKnownSync && status.lastSync !== _lastKnownSync) {
-                window.loadTree?.();
-                window.loadProjectAssets?.(window.state?.currentProject?.id);
+                await window.loadTree?.();
+                await window.loadProjectAssets?.(window.state?.currentProject?.id);
             }
             _lastKnownSync = status.lastSync;
         } else {
@@ -425,8 +430,9 @@ async function triggerFlowSync() {
             window.showToast?.(msg, 4000);
 
             // Refresh the tree and grid to show new data
-            window.loadTree?.();
-            window.loadProjectAssets?.(window.state?.currentProject?.id);
+            // Await tree rebuild first so DOM is settled before asset grid render
+            await window.loadTree?.();
+            await window.loadProjectAssets?.(window.state?.currentProject?.id);
         }
     } catch (err) {
         window.showToast?.('Sync failed: ' + (err.message || 'Unknown error'), 5000);

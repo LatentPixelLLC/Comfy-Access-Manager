@@ -221,6 +221,9 @@ export async function loadProjectAssets(projectId) {
     if (state.currentShot) params.set('shot_id', state.currentShot.id);
     if (state.currentRole) params.set('role_id', state.currentRole.id);
 
+    // Format grouping: collapse same-version tiles into one with format sub-menu
+    if (state.groupFormats) params.set('group_formats', '1');
+
     try {
         const result = await api(`/api/assets?${params}`);
         state.assets = result.assets;
@@ -236,6 +239,29 @@ function filterAssets() {
     if (state.currentProject) {
         loadProjectAssets(state.currentProject.id);
     }
+}
+
+function toggleGroupFormats() {
+    state.groupFormats = !state.groupFormats;
+    const btn = document.getElementById('btnGroupFormats');
+    if (btn) btn.classList.toggle('active', state.groupFormats);
+    // Persist preference
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_formats: state.groupFormats ? '1' : '0' })
+    }).catch(() => {});
+    filterAssets();
+}
+
+/**
+ * Restore groupFormats toggle state from saved settings.
+ */
+export function restoreGroupFormats() {
+    const saved = state.settings?.group_formats;
+    state.groupFormats = saved === '1' || saved === 1;
+    const btn = document.getElementById('btnGroupFormats');
+    if (btn) btn.classList.toggle('active', state.groupFormats);
 }
 
 function setView(mode) {
@@ -273,6 +299,11 @@ function _observeThumbnails(container) {
     if (!lazyImages.length) return;
 
     if ('IntersectionObserver' in window) {
+        // Root must be the actual scroll container (.browser-main), not the
+        // viewport. Without this, a DOM reflow (e.g. tree rebuild during Flow
+        // sync) can cause the viewport-relative intersection check to miss
+        // images that are visible inside the scrollable panel.
+        const scrollRoot = container.closest('.browser-main') || null;
         _thumbObserver = new IntersectionObserver((entries) => {
             for (const entry of entries) {
                 if (entry.isIntersecting) {
@@ -282,7 +313,7 @@ function _observeThumbnails(container) {
                     _thumbObserver.unobserve(img);
                 }
             }
-        }, { rootMargin: '200px' }); // Start loading 200px before visible
+        }, { root: scrollRoot, rootMargin: '200px' });
 
         lazyImages.forEach(img => _thumbObserver.observe(img));
     } else {
@@ -329,6 +360,7 @@ function renderAssets() {
                     ${a.is_linked ? '<span class="asset-link-badge" title="Linked – file remains at original location">🔗</span>' : ''}
                     ${a.role_name ? `<span class="asset-role-badge" style="background:${a.role_color || '#666'}">${a.role_icon || '🎭'} ${esc(a.role_code)}</span>` : ''}
                     ${a.duration ? `<span class="asset-duration">${formatDuration(a.duration)}</span>` : ''}
+                    ${a.format_variants && a.format_variants.length > 1 ? `<span class="asset-formats-badge" title="${a.format_variants.map(f => (f.file_ext || '').toLowerCase()).join(', ')}">${a.format_variants.length} formats</span>` : ''}
                 </div>
                 <button class="asset-star" onclick="event.stopPropagation();toggleStar(${a.id})">${a.starred ? '⭐' : '☆'}</button>
                 <div class="asset-info">
@@ -370,7 +402,7 @@ function renderAssets() {
                 <div class="row-audio">${hasAudio ? '🔊' : '<span style="opacity:.25">🔇</span>'}</div>
                 <div class="row-show">${esc(a.project_code || '')}</div>
                 <div class="row-shot">${esc(a.shot_name || a.shot_code || '—')}</div>
-                <div class="row-name">${a.is_linked ? '🔗 ' : ''}${esc(a.vault_name)}</div>
+                <div class="row-name">${a.is_linked ? '🔗 ' : ''}${esc(a.vault_name)}${a.format_variants && a.format_variants.length > 1 ? ` <span class="row-formats-tag" title="${a.format_variants.map(f => (f.file_ext || '').toLowerCase()).join(', ')}">${a.format_variants.length}f</span>` : ''}</div>
                 <div class="row-role">${a.role_name ? `<span class="role-tag" style="background:${a.role_color || '#666'}">${a.role_icon || ''} ${esc(a.role_code)}</span>` : ''}</div>
                 <div class="row-res">${a.width ? `${a.width}×${a.height}` : '—'}</div>
                 <div class="row-size">${formatSize(a.file_size)}</div>
@@ -991,6 +1023,7 @@ window.onSeqDragLeave = onSeqDragLeave;
 window.onShotDrop = onShotDrop;
 window.onSeqDrop = onSeqDrop;
 window.refreshAssets = refreshAssets;
+window.toggleGroupFormats = toggleGroupFormats;
 
 // ═══════════════════════════════════════════
 //  VIDEO SCRUBBING

@@ -34,6 +34,9 @@ export const state = {
     settings: {},
     vaultConfigured: false,
 
+    // Format grouping toggle
+    groupFormats: false,
+
     // Asset selection (for bulk operations)
     selectedAssets: [],    // Array of asset IDs
     lastClickedAsset: -1,  // Index in state.assets for shift-select

@@ -115,6 +115,49 @@ router.get('/', (req, res) => {
     }
     const total = db.prepare('SELECT COUNT(*) as count FROM assets').get();
 
+    // ── Format grouping: collapse same shot+role+version into one tile ──
+    if (req.query.group_formats === '1') {
+        const groups = new Map();
+        for (const a of assets) {
+            // Only group assets that have a defined shot + role + version.
+            // Unassigned assets (null shot/role) or version-0 assets stay ungrouped.
+            const vMatch = (a.vault_name || '').match(/_v(\d+)/);
+            const ver = vMatch ? parseInt(vMatch[1]) : (a.version || 0);
+            if (!a.shot_id || !a.role_id || ver === 0) {
+                groups.set(`solo_${a.id}`, [a]);
+            } else {
+                const key = `${a.shot_id}_${a.role_id}_${ver}`;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(a);
+            }
+        }
+
+        const grouped = [];
+        for (const [, group] of groups) {
+            if (group.length === 1) {
+                group[0].format_variants = null;
+                grouped.push(group[0]);
+                continue;
+            }
+            // Pick representative: prefer video (scrubbable mov), then image, then first
+            const rep = group.find(a => a.media_type === 'video')
+                     || group.find(a => a.media_type === 'image')
+                     || group[0];
+            rep.format_variants = group.map(a => ({
+                id:          a.id,
+                vault_name:  a.vault_name,
+                file_ext:    a.file_ext,
+                media_type:  a.media_type,
+                file_size:   a.file_size,
+                is_sequence: a.is_sequence,
+                file_path:   a.file_path,
+            }));
+            grouped.push(rep);
+        }
+
+        return res.json({ assets: grouped, total: total.count, filteredTotal });
+    }
+
     res.json({ assets, total: total.count, filteredTotal });
 });
 
