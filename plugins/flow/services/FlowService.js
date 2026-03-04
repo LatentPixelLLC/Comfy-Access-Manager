@@ -659,8 +659,8 @@ class FlowService {
                 project_id, sequence_id, shot_id, role_id,
                 original_name, vault_name, file_path, relative_path,
                 media_type, file_ext, file_size,
-                is_linked, status, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?)
+                is_linked, status, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
         `);
 
         // Separate insert for frame sequences — includes is_sequence columns
@@ -670,8 +670,9 @@ class FlowService {
                 original_name, vault_name, file_path, relative_path,
                 media_type, file_ext, file_size,
                 is_linked, status, metadata,
-                is_sequence, frame_start, frame_end, frame_count, frame_pattern
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, 1, ?, ?, ?, ?)
+                is_sequence, frame_start, frame_end, frame_count, frame_pattern,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, 1, ?, ?, ?, ?, ?)
         `);
 
         const { detectSequences } = require('../../../src/utils/sequenceDetector');
@@ -869,7 +870,8 @@ class FlowService {
                                 seq.frameStart,        // frame_start
                                 seq.frameEnd,          // frame_end
                                 seq.frameCount,        // frame_count
-                                framePattern           // frame_pattern (printf-style full path)
+                                framePattern,          // frame_pattern (printf-style full path)
+                                item.created_at || null  // SG creation date
                             );
 
                             existingPaths.add(firstFrame);
@@ -947,7 +949,8 @@ class FlowService {
                         mediaType,
                         ext,
                         fileSize,
-                        metadata
+                        metadata,
+                        item.created_at || null  // SG creation date (not CAM import time)
                     );
 
                     existingPaths.add(resolvedPath);

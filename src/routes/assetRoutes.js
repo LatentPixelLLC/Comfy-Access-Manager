@@ -1054,6 +1054,10 @@ router.post('/import', async (req, res) => {
 
             let firstFramePath, framePatternString, totalSize = 0;
 
+            // Grab the original file's mtime before import (may move/copy)
+            let fileMtime = null;
+            try { fileMtime = fs.statSync(seq.files[0]).mtime.toISOString(); } catch {}
+
             if (registerInPlace) {
                 // Register in place: just catalog the sequence
                 firstFramePath = path.resolve(seq.files[0]);
@@ -1131,8 +1135,8 @@ router.post('/import', async (req, res) => {
                     width, height, duration, fps, codec,
                     take_number, version, is_linked,
                     is_sequence, frame_start, frame_end, frame_count, frame_pattern,
-                    status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             `).run(
                 project.id,
                 sequence?.id || null,
@@ -1156,7 +1160,8 @@ router.post('/import', async (req, res) => {
                 seq.frameStart,
                 seq.frameEnd,
                 seq.frameCount,
-                framePatternString
+                framePatternString,
+                fileMtime  // Use original file's mtime instead of import time
             );
 
             const assetId = result.lastInsertRowid;
@@ -1228,6 +1233,10 @@ router.post('/import', async (req, res) => {
 
             const originalName = path.basename(filePath);
             const { type: mediaType } = detectMediaType(originalName);
+
+            // Grab the original file's mtime before import (may move/copy)
+            let fileMtime = null;
+            try { fileMtime = fs.statSync(filePath).mtime.toISOString(); } catch {}
 
             let vaultPath, vaultName, relativePath, finalMediaType;
 
@@ -1325,8 +1334,8 @@ router.post('/import', async (req, res) => {
                     media_type, file_ext, file_size,
                     width, height, duration, fps, codec,
                     take_number, version, is_linked,
-                    status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             `).run(
                 project.id,
                 sequence?.id || null,
@@ -1342,7 +1351,8 @@ router.post('/import', async (req, res) => {
                 info.width, info.height, info.duration, info.fps, info.codec,
                 take_number || (i + 1),
                 1,
-                registerInPlace ? 1 : 0
+                registerInPlace ? 1 : 0,
+                fileMtime  // Use original file's mtime instead of import time
             );
 
             const assetId = result.lastInsertRowid;
