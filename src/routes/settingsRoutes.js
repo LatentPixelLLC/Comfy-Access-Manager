@@ -963,4 +963,41 @@ router.post('/github-token', (req, res) => {
     });
 });
 
+// POST /api/settings/fix-dates — Backfill created_at from actual file mtime
+router.post('/fix-dates', async (req, res) => {
+    const db = getDb();
+    const assets = db.prepare('SELECT id, file_path, created_at FROM assets').all();
+
+    let updated = 0, skipped = 0, missing = 0;
+    const updateStmt = db.prepare('UPDATE assets SET created_at = ? WHERE id = ?');
+
+    for (const asset of assets) {
+        const resolved = resolveFilePath(asset.file_path);
+        if (!resolved || !fs.existsSync(resolved)) {
+            missing++;
+            continue;
+        }
+        try {
+            const stat = fs.statSync(resolved);
+            const mtime = stat.mtime.toISOString();
+            const existingDate = new Date(asset.created_at).getTime();
+            if (Math.abs(existingDate - stat.mtime.getTime()) < 60000) {
+                skipped++;
+                continue;
+            }
+            updateStmt.run(mtime, asset.id);
+            updated++;
+        } catch {
+            skipped++;
+        }
+    }
+
+    // Broadcast changes to spokes if hub
+    if (updated > 0) {
+        req.app.locals.broadcastChange?.('assets', 'bulk-update', { count: updated });
+    }
+
+    res.json({ success: true, updated, skipped, missing, total: assets.length });
+});
+
 module.exports = router;
