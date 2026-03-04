@@ -21,6 +21,7 @@ import './export.js';
 import './overlayEditor.js';
 import './syncReview.js';
 import './voiceChat.js';
+import './edl.js';
 
 // ===========================================
 //  INIT

@@ -385,6 +385,8 @@ function showShotContextMenu(event, seqId, shotId, shotName) {
         <div class="ctx-separator"></div>
         <div class="ctx-item" data-action="select"> Select Shot</div>
         <div class="ctx-item" data-action="rename">Edit Rename</div>
+        <div class="ctx-separator"></div>
+        <div class="ctx-item" data-action="minicut"> Play Minicut</div>
         ${isAdmin ? `<div class="ctx-separator"></div>
         <div class="ctx-item ctx-danger" data-action="delete"> Delete Shot</div>` : ''}
     `;
@@ -397,6 +399,7 @@ function showShotContextMenu(event, seqId, shotId, shotName) {
         switch (item.dataset.action) {
             case 'select': window.selectShot?.(seqId, shotId); break;
             case 'rename': window.renameShot?.(seqId, shotId, shotName); break;
+            case 'minicut': window.playMinicut?.(shotId); break;
             case 'delete': deleteShot(seqId, shotId, shotName); break;
         }
     });

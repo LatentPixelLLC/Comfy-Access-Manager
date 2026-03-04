@@ -350,6 +350,7 @@ class SpokeService extends EventEmitter {
             'settings', 'watch_folders', 'comfyui_mappings',
             'users', 'project_hidden', 'activity_log',
             'review_sessions', 'review_notes', 'overlay_presets', 'crates', 'crate_items',
+            'edit_contexts', 'edit_entries',
         ]);
         if (!ALLOWED_TABLES.has(table)) {
             console.error(`[Spoke] Rejected change for unknown table: ${table}`);

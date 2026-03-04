@@ -487,6 +487,42 @@ function runMigrations(wrapper) {
         CREATE INDEX IF NOT EXISTS idx_review_notes_asset ON review_notes(asset_id);
     `);
 
+    // ─── Edit Contexts (EDL imports for minicut playback) ───
+    wrapper.exec(`
+        CREATE TABLE IF NOT EXISTS edit_contexts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            fps REAL NOT NULL DEFAULT 24.0,
+            filename TEXT,
+            is_active INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_edit_contexts_project ON edit_contexts(project_id);
+    `);
+
+    // ─── Edit Entries (individual cuts from an EDL) ───
+    wrapper.exec(`
+        CREATE TABLE IF NOT EXISTS edit_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            context_id INTEGER NOT NULL,
+            cut_order INTEGER NOT NULL,
+            event_num TEXT,
+            reel_name TEXT NOT NULL,
+            shot_id INTEGER,
+            source_in TEXT,
+            source_out TEXT,
+            record_in TEXT,
+            record_out TEXT,
+            duration_frames INTEGER,
+            FOREIGN KEY(context_id) REFERENCES edit_contexts(id) ON DELETE CASCADE,
+            FOREIGN KEY(shot_id) REFERENCES shots(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_edit_entries_context ON edit_entries(context_id);
+        CREATE INDEX IF NOT EXISTS idx_edit_entries_shot ON edit_entries(shot_id);
+    `);
+
     // ─── Migrations: add columns to existing tables ───
     // annotation_image column for review_notes (stores annotated frame snapshot path)
     try {

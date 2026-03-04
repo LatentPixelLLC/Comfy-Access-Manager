@@ -47,6 +47,7 @@ const LOCAL_ONLY_REGEX = [
     /^\/api\/review\/notes(\/\d+)?$/,       // Review notes — saved locally + forwarded to hub in route handler
     /^\/api\/review\/notes\/annotated-frame$/,  // Annotated frame from RV — saved locally
     /^\/api\/update\//,                     // ALL update routes — must execute on THIS machine
+    /^\/api\/edl\/\d+\/minicut$/,           // Minicut — launches RV locally
 ];
 
 /**

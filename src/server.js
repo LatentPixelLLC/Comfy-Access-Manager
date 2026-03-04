@@ -118,6 +118,7 @@ const crateRoutes = require('./routes/crateRoutes');
 const overlayRoutes = require('./routes/overlayRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
 const voiceRoutes = require('./routes/voiceRoutes');
+const edlRoutes = require('./routes/edlRoutes');
 const DiscoveryService = require('./services/DiscoveryService');
 
 app.use('/api/projects', projectRoutes);
@@ -133,6 +134,7 @@ app.use('/api/crates', crateRoutes);
 app.use('/api/overlay', overlayRoutes);
 app.use('/api/review', reviewRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/edl', edlRoutes);
 
 // ─── Hub Sync Routes (hub mode only) ───
 if (APP_MODE === 'hub') {
