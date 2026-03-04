@@ -19,6 +19,7 @@ const http = require('http');
 const https = require('https');
 const WatcherService = require('../services/WatcherService');
 const FileService = require('../services/FileService');
+const { resolveFilePath } = require('../utils/pathResolver');
 const MediaInfoService = require('../services/MediaInfoService');
 const ThumbnailService = require('../services/ThumbnailService');
 const RVPluginSync = require('../services/RVPluginSync');
@@ -626,6 +627,63 @@ router.post('/rebuild-vault', async (req, res) => {
         console.error(`[Rebuild] Fatal error: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
+});
+
+// POST /api/settings/regenerate-thumbnails — Generate thumbnails for all assets missing them
+router.post('/regenerate-thumbnails', async (req, res) => {
+    const db = getDb();
+    const allAssets = db.prepare('SELECT id, file_path, media_type FROM assets').all();
+
+    // Find assets whose thumbnail file doesn't exist on disk
+    const thumbDir = path.join(__dirname, '..', '..', 'thumbnails');
+    const missing = allAssets.filter(a => {
+        const thumbFile = path.join(thumbDir, `thumb_${a.id}.jpg`);
+        return !fs.existsSync(thumbFile);
+    });
+
+    if (missing.length === 0) {
+        return res.json({ success: true, message: 'All assets already have thumbnails', total: allAssets.length, generated: 0, failed: 0, skipped: 0 });
+    }
+
+    // SSE streaming for progress
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+    });
+
+    const updateStmt = db.prepare('UPDATE assets SET thumbnail_path = ? WHERE id = ?');
+    let generated = 0, failed = 0, skipped = 0;
+    const CONCURRENCY = 3;
+
+    for (let i = 0; i < missing.length; i += CONCURRENCY) {
+        const batch = missing.slice(i, i + CONCURRENCY);
+        await Promise.allSettled(batch.map(async (a) => {
+            try {
+                const filePath = resolveFilePath(a.file_path);
+                if (!filePath || !fs.existsSync(filePath)) {
+                    skipped++;
+                    return;
+                }
+                const thumbPath = await ThumbnailService.generate(filePath, a.id);
+                if (thumbPath) {
+                    updateStmt.run(thumbPath, a.id);
+                    generated++;
+                } else {
+                    skipped++; // unsupported media type (audio, 3D, etc.)
+                }
+            } catch {
+                failed++;
+            }
+        }));
+
+        // Send progress every batch
+        const done = generated + failed + skipped;
+        res.write(`data: ${JSON.stringify({ current: done, total: missing.length, generated, failed, skipped })}\n\n`);
+    }
+
+    res.write(`event: done\ndata: ${JSON.stringify({ total: missing.length, generated, failed, skipped })}\n\n`);
+    res.end();
 });
 
 // POST /api/settings/sync-rv-plugin — Force re-deploy MediaVault plugin to all RV installations

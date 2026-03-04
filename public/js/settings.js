@@ -1552,6 +1552,75 @@ function selectHub(url) {
 }
 
 // ===========================================
+//  THUMBNAIL REGENERATION
+// ===========================================
+
+async function regenerateThumbnails() {
+    const btn = document.getElementById('btnRegenThumbs');
+    const statusEl = document.getElementById('regenThumbStatus');
+    const progressWrap = document.getElementById('regenThumbProgress');
+    const fill = document.getElementById('regenThumbFill');
+    const text = document.getElementById('regenThumbText');
+
+    btn.disabled = true;
+    statusEl.textContent = 'Scanning...';
+    progressWrap.style.display = 'block';
+    fill.style.width = '0%';
+    text.textContent = '';
+
+    try {
+        const resp = await fetch('/api/settings/regenerate-thumbnails', { method: 'POST' });
+
+        // Could be JSON (all present) or SSE stream
+        const ct = resp.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+            const result = await resp.json();
+            statusEl.textContent = result.message || 'All thumbnails present';
+            progressWrap.style.display = 'none';
+            btn.disabled = false;
+            return;
+        }
+
+        // SSE stream
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // keep incomplete line
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const d = JSON.parse(line.slice(6));
+                        const pct = d.total > 0 ? Math.round((d.current / d.total) * 100) : 0;
+                        fill.style.width = pct + '%';
+                        text.textContent = `${d.current} / ${d.total} (${d.generated} generated, ${d.skipped} skipped)`;
+                        statusEl.textContent = `${pct}%`;
+                    } catch { /* ignore parse errors */ }
+                }
+                if (line.startsWith('event: done')) {
+                    // Next data line has final summary
+                }
+            }
+        }
+
+        statusEl.textContent = 'Done';
+        fill.style.width = '100%';
+        window.showToast?.('Thumbnail generation complete', 3000);
+    } catch (err) {
+        statusEl.textContent = 'Error: ' + (err.message || 'Unknown');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ===========================================
 //  EXPOSE ON WINDOW (for HTML onclick handlers)
 // ===========================================
 
@@ -1606,6 +1675,7 @@ window.onSyncModeChange = onSyncModeChange;
 window.saveSyncConfig = saveSyncConfig;
 window.scanForHub = scanForHub;
 window.selectHub = selectHub;
+window.regenerateThumbnails = regenerateThumbnails;
 
 // ===========================================
 //  SPOKE MODE RESTRICTIONS

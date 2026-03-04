@@ -580,6 +580,20 @@ Import from Resolve</button>
                     <label>Thumbnail Size (px)</label>
                     <input type="number" id="settingThumbSize" value="320" min="100" max="800">
                     <label><input type="checkbox" id="settingAutoThumb" checked> Auto-generate thumbnails on import</label>
+                    <div style="margin-top:12px; border-top: 1px solid var(--border); padding-top:10px;">
+                        <label>Regenerate Missing</label>
+                        <p class="hint">Scan all assets and generate thumbnails for any that are missing. Useful after ShotGrid sync or database transfer.</p>
+                        <div class="input-row" style="margin-top:6px; align-items:center;">
+                            <button id="btnRegenThumbs" onclick="regenerateThumbnails()">Generate Missing Thumbnails</button>
+                            <span id="regenThumbStatus" style="font-size:0.8rem; color:var(--text-dim); margin-left:8px;"></span>
+                        </div>
+                        <div id="regenThumbProgress" style="display:none; margin-top:6px;">
+                            <div style="background:var(--bg-dark); border-radius:4px; height:22px; position:relative; overflow:hidden;">
+                                <div id="regenThumbFill" style="background:var(--accent); height:100%; width:0%; transition:width 0.3s;"></div>
+                                <span id="regenThumbText" style="position:absolute; top:0; left:0; right:0; text-align:center; font-size:0.7rem; line-height:22px; color:#fff;"></span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="settings-section" id="section-ai">
