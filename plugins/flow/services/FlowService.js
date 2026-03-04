@@ -644,6 +644,14 @@ class FlowService {
 
                     const ext = path.extname(fileName).toLowerCase();
                     const { type: mediaType } = detectMediaType(fileName);
+
+                    // Skip non-viewable types (3D caches, documents, etc.)
+                    // CAM is a media viewer — .abc, .fbx, .obj, .pdf etc. just clutter the UI
+                    if (mediaType === 'threed' || mediaType === 'document' || mediaType === 'other') {
+                        skipped++;
+                        continue;
+                    }
+
                     let fileSize = 0;
                     try { fileSize = fs.statSync(resolvedPath).size; } catch {}
 
