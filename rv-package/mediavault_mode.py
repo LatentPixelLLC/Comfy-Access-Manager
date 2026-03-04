@@ -1262,6 +1262,174 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             ])]
         )
 
+    # ── dynamic native menu ──────────────────────────────────────
+
+    def _rebuildNativeMenu(self):
+        """Rebuild the MediaVault right-click menu with version sub-submenus.
+
+        Called when the source changes and role data is freshly cached.
+        Uses self._cached_data to populate Compare/Switch submenus with
+        per-role version lists instead of flat "load latest" entries.
+        """
+        def _version_items(mode):
+            """Build role submenu items using cached data.
+
+            Roles with multiple versions become sub-submenus listing
+            individual versions (v229, v228, ...).  Roles with one
+            version are flat actions.
+            """
+            items = []
+            data = self._cached_data
+            if not data:
+                # No cached data — fall back to flat role names
+                for r in self._all_role_names:
+                    items.append(
+                        (r,
+                         lambda e, _m=mode, _r=r: self._loadRoleLatest(_m, _r),
+                         None, None))
+                items.append(("_", None))
+                items.append(("Prev Version",
+                              lambda e, _m=mode: self._stepVersion(1, _m),
+                              None, None))
+                items.append(("Next Version",
+                              lambda e, _m=mode: self._stepVersion(-1, _m),
+                              None, None))
+                items.append(("_", None))
+                items.append(("Browse All ...",
+                              lambda e, _m=mode: self._showPickerDialog(_m),
+                              None, None))
+                return items
+
+            roles = data.get("roles", [])
+            sorted_roles = sorted(
+                roles, key=lambda r: (r.get("name") or "").lower())
+
+            for role in sorted_roles:
+                role_name = role.get("name", "Unassigned")
+                assets = role.get("assets", [])
+                # Sort by version descending
+                sorted_assets = sorted(
+                    assets,
+                    key=lambda a: self._extract_version(
+                        a.get("vault_name", "")),
+                    reverse=True)
+                available = [a for a in sorted_assets if a.get("file_path")]
+                if not available:
+                    continue
+
+                if len(available) == 1:
+                    # Single version — flat action
+                    a = available[0]
+                    ver = self._extract_version(a.get("vault_name", ""))
+                    label = "%s  v%03d" % (role_name, ver) if ver else role_name
+                    rv_path = self._assetToRvPath(a)
+                    items.append((
+                        label,
+                        lambda e, _m=mode, _p=rv_path: (
+                            self._loadAsCompare(_p) if _m == "compare"
+                            else self._switchTo(_p)),
+                        None, None))
+                else:
+                    # Multiple versions — sub-submenu
+                    ver_items = []
+                    for a in available:
+                        ver = self._extract_version(a.get("vault_name", ""))
+                        ext = (a.get("file_ext") or
+                               os.path.splitext(
+                                   a.get("file_path", ""))[1] or ""
+                               ).lstrip(".")
+                        vlabel = "v%03d" % ver if ver else a.get(
+                            "vault_name", "unknown")
+                        if ext:
+                            vlabel += "  .%s" % ext
+                        if a.get("is_current"):
+                            vlabel += "  [current]"
+                        rv_path = self._assetToRvPath(a)
+                        ver_items.append((
+                            vlabel,
+                            lambda e, _m=mode, _p=rv_path: (
+                                self._loadAsCompare(_p) if _m == "compare"
+                                else self._switchTo(_p)),
+                            None, None))
+                    items.append((role_name, ver_items))
+
+            if not items:
+                # No roles with assets — show flat list as fallback
+                for r in self._all_role_names:
+                    items.append((
+                        r,
+                        lambda e, _m=mode, _r=r: self._loadRoleLatest(_m, _r),
+                        None, None))
+
+            items.append(("_", None))
+            items.append(("Prev Version",
+                          lambda e, _m=mode: self._stepVersion(1, _m),
+                          None, None))
+            items.append(("Next Version",
+                          lambda e, _m=mode: self._stepVersion(-1, _m),
+                          None, None))
+            items.append(("_", None))
+            items.append(("Browse All ...",
+                          lambda e, _m=mode: self._showPickerDialog(_m),
+                          None, None))
+            return items
+
+        new_menu = [("MediaVault", [
+            ("Compare to ...", _version_items("compare")),
+            ("Switch to ...", _version_items("switch")),
+            ("Browse All ...", self.showBrowseAll, "alt+b", None),
+            ("_", None),
+            ("Prev Version", self.prevVersion, "alt+Left", None),
+            ("Next Version", self.nextVersion, "alt+Right", None),
+            ("_", None),
+            ("Set Status", [
+                ("WIP", lambda *args, **kwargs: self.setStatus("WIP"), None, None),
+                ("Review", lambda *args, **kwargs: self.setStatus("Review"), None, None),
+                ("Approved", lambda *args, **kwargs: self.setStatus("Approved"), "alt+a", None),
+                ("Final", lambda *args, **kwargs: self.setStatus("Final"), None, None),
+                ("_", None),
+                ("Reject", lambda *args, **kwargs: self.setStatus("Reject"), "alt+r", None),
+            ]),
+            ("_", None),
+            ("Publish Frame", self.publishFrame, "alt+p", None),
+            ("Save Annotated Frame as Note", self.saveAnnotatedFrameAsNote, "alt+n", None),
+            ("Send Annotation to ShotGrid", self.sendAnnotationToShotGrid, "alt+shift+n", None),
+            ("ShotGrid Notes", self.showShotGridNotes, "alt+s",
+             lambda *args, **kwargs: rvc.CheckedMenuState
+                     if self._notes_panel and self._notes_panel.isVisible()
+                     else rvc.UncheckedMenuState),
+            ("Add to Crate ...", self.addToCrateMenu, "alt+c", None),
+            ("_", None),
+            ("Toggle Overlay", self._toggleOverlay, "shift+o",
+             lambda *args, **kwargs: rvc.CheckedMenuState if self._overlay_enabled
+                     else rvc.UncheckedMenuState),
+            ("  Metadata Burn-in", self._toggleMetadata, None,
+             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_metadata
+                     else rvc.UncheckedMenuState),
+            ("  Status Stamp", self._toggleStatus, None,
+             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_status
+                     else rvc.UncheckedMenuState),
+            ("  Watermark", self._toggleWatermark, None,
+             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_watermark
+                     else rvc.UncheckedMenuState),
+            ("  CAM Overlay Preset", self._toggleCAMOverlay, None,
+             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_cam_overlay
+                     else rvc.UncheckedMenuState),
+            ("  Refresh CAM Overlay", self._refreshCAMOverlay, None, None),
+            ("_", None),
+            ("ComfyUI Metadata", self._toggleComfyUI, "shift+c",
+             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_comfyui
+                     else rvc.UncheckedMenuState),
+        ])]
+
+        try:
+            self.setMenu(new_menu)
+            role_count = len([r for r in (self._cached_data or {}).get("roles", [])
+                              if any(a.get("file_path") for a in r.get("assets", []))])
+            print("[MediaVault] Native menu rebuilt with %d roles (version submenus)" % role_count)
+        except Exception as e:
+            print("[MediaVault] Failed to rebuild native menu: %s" % e)
+
     # ── source path resolution ───────────────────────────────────
 
     def _writeDiagLog(self, lines, force=False):
@@ -2427,6 +2595,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
             # Sort roles by name
             sorted_roles = sorted(roles, key=lambda r: (r.get("name") or "").lower())
+            print("[MediaVault] _showRoleMenu: %d roles, mode=%s" % (len(sorted_roles), mode))
             for role in sorted_roles:
                 role_name = role.get("name", "Unassigned")
                 role_id = role.get("id")
@@ -2445,6 +2614,11 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 # on cross-platform setups; better to show all versions and
                 # let the load fail gracefully if a file is truly missing)
                 available = [a for a in sorted_assets if a.get("file_path")]
+                if role_name.lower() == "comfyui":
+                    print("[MediaVault] ComfyUI: %d assets from API, %d sorted, %d available (have file_path)" % (len(assets), len(sorted_assets), len(available)))
+                    if assets and len(assets) <= 5:
+                        for a in assets:
+                            print("[MediaVault]   asset: %s  fp=%s" % (a.get("vault_name"), repr(a.get("file_path"))))
 
                 # Skip role if it only contains the current file for 'switch'
                 if role_id == current_role_id and mode == "switch":
@@ -3164,6 +3338,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 role_names = [r.get("name") for r in self._cached_data.get("roles", [])]
                 print("[MediaVault] Role cache ready (scope=%s, %d roles with assets: %s)"
                       % (scope, len(role_names), ", ".join(role_names[:10])))
+                # Rebuild the native right-click menu with version submenus
+                self._rebuildNativeMenu()
         except Exception as e:
             print("[MediaVault] Pre-cache roles failed: %s" % e)
 
