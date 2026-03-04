@@ -1607,6 +1607,12 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         """
         try:
             intended_norm = os.path.normpath(intended_path)
+            is_seq_notation = '#' in intended_path
+            # For sequence notation (####), RV may store a different
+            # representation in .media.movie.  Compare directories
+            # instead of exact paths to avoid blanking the intended source.
+            intended_dir = os.path.normpath(
+                os.path.dirname(intended_path)) if is_seq_notation else None
             nodes = rvc.nodesInGroup(source_group)
 
             for node in nodes:
@@ -1618,8 +1624,14 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     try:
                         media = rvc.getStringProperty(node + ".media.movie")
                         if media:
-                            clean = [m for m in media
-                                     if os.path.normpath(m) == intended_norm]
+                            if is_seq_notation:
+                                # Keep entries in the same directory
+                                clean = [m for m in media
+                                         if os.path.normpath(
+                                             os.path.dirname(m)) == intended_dir]
+                            else:
+                                clean = [m for m in media
+                                         if os.path.normpath(m) == intended_norm]
                             if not clean:
                                 # This whole node is an audio-only addition —
                                 # blank it out so RV can't play it
@@ -1761,9 +1773,11 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 return
             rvc.setSourceMedia(file_source, [filepath])
 
-            # Strip auto-audio from ALL source groups
-            for sg in rvc.nodesOfType("RVSourceGroup"):
-                self._stripAutoAudio(sg, filepath)
+            # Strip auto-audio from the modified source group only.
+            # Stripping ALL groups was a bug — it blanked other sources
+            # (e.g., during A/B compare, switching one side would wipe
+            # the other because its media path != intended_path).
+            self._stripAutoAudio(sourceGroups[0], filepath)
 
             # Invalidate cache since we changed the source
             self._cached_data = None
