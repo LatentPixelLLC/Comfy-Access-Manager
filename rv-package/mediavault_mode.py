@@ -74,6 +74,9 @@ except ImportError:
 
 DMV_URL = "http://127.0.0.1:7700"
 
+# Set True for verbose console output (debug); False for quiet production use
+_VERBOSE = False
+
 # ─── Dark theme with teal accent ─────────────────────────────────
 # Dark charcoal base with teal (#2ec4b6) highlights.
 
@@ -834,12 +837,13 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self._cached_data = None
         self._cached_path = None
 
-        print("[MediaVault] Initialising mediavault-mode (overlay build)")
+        print("[MediaVault] Initialising mediavault-mode")
 
         # Fetch real roles from CAM at init (falls back to defaults if
         # the server isn't running yet).
         self._all_role_names = self._fetchAllRoleNames()
-        print("[MediaVault] Roles for submenu: %s" % self._all_role_names)
+        if _VERBOSE:
+            print("[MediaVault] Roles for submenu: %s" % self._all_role_names)
 
         def _role_state(role_name):
             """Return a state callback that grays out *role_name* when
@@ -1545,7 +1549,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         try:
             encoded = urllib.parse.quote(filepath, safe="")
             url = "%s/api/assets/compare-targets-by-path?path=%s" % (DMV_URL, encoded)
-            print("[MediaVault] Fetching: %s" % url)
+            if _VERBOSE:
+                print("[MediaVault] Fetching: %s" % url)
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -1605,13 +1610,15 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                                 # blank it out so RV can't play it
                                 rvc.setStringProperty(
                                     node + ".media.movie", [""], True)
-                                print("[MediaVault] Blanked auto-audio node: "
-                                      "%s (%s)" % (node, media))
+                                if _VERBOSE:
+                                    print("[MediaVault] Blanked auto-audio node: "
+                                          "%s (%s)" % (node, media))
                             elif len(clean) < len(media):
                                 rvc.setStringProperty(
                                     node + ".media.movie", clean, True)
-                                print("[MediaVault] Stripped %d extra file(s) "
-                                      "from %s" % (len(media) - len(clean), node))
+                                if _VERBOSE:
+                                    print("[MediaVault] Stripped %d extra file(s) "
+                                          "from %s" % (len(media) - len(clean), node))
                     except Exception:
                         pass
 
@@ -1621,8 +1628,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         if audio and any(a for a in audio if a):
                             rvc.setStringProperty(
                                 node + ".media.audio", [""], True)
-                            print("[MediaVault] Cleared .media.audio on %s: "
-                                  "%s" % (node, audio))
+                            if _VERBOSE:
+                                print("[MediaVault] Cleared .media.audio on %s: "
+                                      "%s" % (node, audio))
                     except Exception:
                         pass
 
@@ -1633,8 +1641,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         if media and any(m for m in media if m):
                             rvc.setStringProperty(
                                 node + ".media.movie", [""], True)
-                            print("[MediaVault] Cleared soundtrack: "
-                                  "%s (%s)" % (node, media))
+                            if _VERBOSE:
+                                print("[MediaVault] Cleared soundtrack: "
+                                      "%s (%s)" % (node, media))
                     except Exception:
                         pass
 
@@ -1644,8 +1653,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     if af and any(a for a in af if a):
                         rvc.setStringProperty(
                             node + ".request.audioFile", [""], True)
-                        print("[MediaVault] Cleared request.audioFile on "
-                              "%s" % node)
+                        if _VERBOSE:
+                            print("[MediaVault] Cleared request.audioFile on "
+                                  "%s" % node)
                 except Exception:
                     pass
 
@@ -1719,7 +1729,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             return
 
         basename = os.path.basename(filepath)
-        print("[MediaVault] setStatus('%s') on: %s" % (status, basename))
+        if _VERBOSE:
+            print("[MediaVault] setStatus('%s') on: %s" % (status, basename))
 
         # We need the asset ID to update status. We can get it from overlay-info or compare-targets
         # Let's fetch overlay-info to get the asset ID
@@ -2412,7 +2423,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             _diag_frame = rvc.frame()
         except Exception:
             _diag_frame = '?'
-        print("[MediaVault] addToCrate: frame=%s  path='%s'  crate=%s"
+        if _VERBOSE:
+            print("[MediaVault] addToCrate: frame=%s  path='%s'  crate=%s"
               % (_diag_frame, filepath, crateId))
         try:
             payload = json.dumps({"filePath": filepath}).encode("utf-8")
@@ -2424,7 +2436,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
 
-            print("[MediaVault] addToCrate response: %s" % result)
+            if _VERBOSE:
+                print("[MediaVault] addToCrate response: %s" % result)
             if result.get("ok"):
                 rve.displayFeedback(
                     "Added \"%s\" to crate \"%s\"" % (
@@ -2448,7 +2461,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         """Show a simple Qt dialog listing available crates. Returns crate ID or None."""
         if not HAS_QT:
             # No Qt available — fall back to first crate
-            print("[MediaVault] No Qt — using first crate: %s" % crates[0].get("name"))
+            if _VERBOSE:
+                print("[MediaVault] No Qt — using first crate: %s" % crates[0].get("name"))
             rve.displayFeedback("Using crate: %s (no Qt for picker)" % crates[0].get("name"), 2.0)
             return crates[0].get("id")
 
@@ -2532,7 +2546,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
     def _toggleOverlay(self, event):
         self._overlay_enabled = not self._overlay_enabled
-        print("[MediaVault] Overlay toggled: %s  GL=%s" % (
+        if _VERBOSE:
+            print("[MediaVault] Overlay toggled: %s  GL=%s" % (
             self._overlay_enabled, _HAS_GL))
         if self._overlay_enabled:
             self._refreshOverlayMeta()
@@ -2564,13 +2579,15 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
     def _toggleCAMOverlay(self, event):
         self._show_cam_overlay = not self._show_cam_overlay
-        print("[MediaVault] CAM Overlay toggled: %s" % self._show_cam_overlay)
+        if _VERBOSE:
+            print("[MediaVault] CAM Overlay toggled: %s" % self._show_cam_overlay)
         if self._show_cam_overlay and not self._overlay_enabled:
             self._overlay_enabled = True
             self._refreshOverlayMeta()
         if self._show_cam_overlay:
             # Always force re-fetch so preset edits in CAM UI are picked up
-            print("[MediaVault] CAM Overlay: force-fetching latest preset...")
+            if _VERBOSE:
+                print("[MediaVault] CAM Overlay: force-fetching latest preset...")
             self._cam_draw_logged = False   # reset one-time log
             self._cam_draw_warn  = False
             self._fetchCAMOverlay(force=True)
@@ -2579,7 +2596,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
     def _refreshCAMOverlay(self, event):
         """Force re-fetch CAM overlay preset from server (picks up UI edits)."""
-        print("[MediaVault] CAM Overlay: manual refresh requested")
+        if _VERBOSE:
+            print("[MediaVault] CAM Overlay: manual refresh requested")
         self._cam_draw_logged = False
         self._cam_draw_warn  = False
         self._fetchCAMOverlay(force=True)
@@ -2622,7 +2640,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 self._probeAndCacheFile(fp)
                 newly_probed += 1
             last_probed_path = fp
-        if newly_probed:
+        if newly_probed and _VERBOSE:
             print("[MediaVault] ComfyUI auto-probe: %d new source(s) cached"
                   " (%d total)" % (newly_probed, len(self._comfyui_cache)))
 
@@ -2712,8 +2730,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         key = self._normKey(cur)
         if key != self._comfyui_path:
             in_cache = key in self._comfyui_cache
-            print("[MediaVault] source switched → %s  (cached=%s)"
-                  % (os.path.basename(cur), in_cache))
+            if _VERBOSE:
+                print("[MediaVault] source switched → %s  (cached=%s)"
+                      % (os.path.basename(cur), in_cache))
 
         # Standard overlay (shot name, status, etc.)
         if self._overlay_enabled:
@@ -3396,18 +3415,21 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         uncached = [p for p in all_paths
                     if self._normKey(p) not in self._comfyui_cache]
         if not uncached:
-            print("[MediaVault] ComfyUI batch: all %d sources already "
-                  "cached" % len(all_paths))
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI batch: all %d sources already "
+                      "cached" % len(all_paths))
         else:
-            print("[MediaVault] ComfyUI batch: probing %d of %d sources..."
-                  % (len(uncached), len(all_paths)))
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI batch: probing %d of %d sources..."
+                      % (len(uncached), len(all_paths)))
             for fp in uncached:
                 self._probeAndCacheFile(fp)
             cached_with_meta = sum(
                 1 for v in self._comfyui_cache.values() if v is not False)
-            print("[MediaVault] ComfyUI batch: done — %d with metadata, "
-                  "%d without" % (cached_with_meta,
-                                   len(self._comfyui_cache) - cached_with_meta))
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI batch: done — %d with metadata, "
+                      "%d without" % (cached_with_meta,
+                                       len(self._comfyui_cache) - cached_with_meta))
 
         # Set current-file pointer for the overlay renderer
         cur = self._getCurrentSourcePath()
@@ -3456,8 +3478,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             m = len(meta.get("models", []))
             s = len(meta.get("samplers", []))
             lo = len(meta.get("loras", []))
-            print("[MediaVault] ComfyUI:   %s — %d models, %d samplers, "
-                  "%d loras" % (fname, m, s, lo))
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI:   %s — %d models, %d samplers, "
+                      "%d loras" % (fname, m, s, lo))
 
     def _refreshComfyUIMeta(self):
         """Load and cache ComfyUI metadata for the current source.
@@ -3483,7 +3506,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self._comfyui_path = key
         ext = os.path.splitext(filepath)[1].lower()
         fname = os.path.basename(filepath)
-        print("[MediaVault] ComfyUI: reading %s  (ext=%s)" % (fname, ext))
+        if _VERBOSE:
+            print("[MediaVault] ComfyUI: reading %s  (ext=%s)" % (fname, ext))
 
         self._comfyui_meta = None
 
@@ -3491,10 +3515,12 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             prompt = self._readPngPrompt(filepath)
             if prompt:
                 nc = len(prompt) if isinstance(prompt, dict) else 0
-                print("[MediaVault] ComfyUI: PNG prompt format (%d nodes)" % nc)
+                if _VERBOSE:
+                    print("[MediaVault] ComfyUI: PNG prompt format (%d nodes)" % nc)
                 self._comfyui_meta = self._parseComfyPrompt(prompt)
             else:
-                print("[MediaVault] ComfyUI: no prompt data in PNG")
+                if _VERBOSE:
+                    print("[MediaVault] ComfyUI: no prompt data in PNG")
 
         elif ext in (".mp4", ".mov", ".mkv", ".webm", ".avi"):
             raw = self._readVideoMeta(filepath)
@@ -3503,8 +3529,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 # prompt-wrapped has 'prompt' key
                 if "nodes" in raw and isinstance(raw.get("nodes"), list):
                     nc = len(raw["nodes"])
-                    print("[MediaVault] ComfyUI: workflow format "
-                          "(%d nodes)" % nc)
+                    if _VERBOSE:
+                        print("[MediaVault] ComfyUI: workflow format "
+                              "(%d nodes)" % nc)
                     self._comfyui_meta = self._parseComfyWorkflow(raw)
                 else:
                     # Prompt-wrapped: {"prompt": "...", "workflow": "..."}
@@ -3518,16 +3545,20 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         prompt = None
                     if prompt:
                         nc = len(prompt) if isinstance(prompt, dict) else 0
-                        print("[MediaVault] ComfyUI: prompt format "
-                              "(%d nodes)" % nc)
+                        if _VERBOSE:
+                            print("[MediaVault] ComfyUI: prompt format "
+                                  "(%d nodes)" % nc)
                         self._comfyui_meta = self._parseComfyPrompt(prompt)
                     else:
-                        print("[MediaVault] ComfyUI: comment JSON has "
-                              "no 'prompt' or 'nodes' key")
+                        if _VERBOSE:
+                            print("[MediaVault] ComfyUI: comment JSON has "
+                                  "no 'prompt' or 'nodes' key")
             else:
-                print("[MediaVault] ComfyUI: no comment metadata in file")
+                if _VERBOSE:
+                    print("[MediaVault] ComfyUI: no comment metadata in file")
         else:
-            print("[MediaVault] ComfyUI: unsupported ext '%s'" % ext)
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI: unsupported ext '%s'" % ext)
 
         # ── Store result in dict cache (False = no metadata) ─────
         self._comfyui_cache[key] = (
@@ -3539,10 +3570,12 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             s = len(self._comfyui_meta.get("samplers", []))
             lo = len(self._comfyui_meta.get("loras", []))
             r = self._comfyui_meta.get("resolution")
-            print("[MediaVault] ComfyUI: parsed — %d models, %d samplers,"
-                  " %d loras, res=%s" % (m, s, lo, r))
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI: parsed — %d models, %d samplers,"
+                      " %d loras, res=%s" % (m, s, lo, r))
         else:
-            print("[MediaVault] ComfyUI: no metadata extracted")
+            if _VERBOSE:
+                print("[MediaVault] ComfyUI: no metadata extracted")
 
     # ── CAM overlay preset fetch ───────────────────────────────
 
@@ -3556,7 +3589,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         if filepath is None:
             filepath = self._getCurrentSourcePath()
         if not filepath:
-            print("[MediaVault] CAM Overlay fetch: no source path available")
+            if _VERBOSE:
+                print("[MediaVault] CAM Overlay fetch: no source path available")
             self._cam_overlay_data = None
             return
 
@@ -3564,12 +3598,14 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         if (not force
                 and self._normKey(filepath) == self._normKey(self._cam_overlay_path)
                 and self._cam_overlay_data):
-            print("[MediaVault] CAM Overlay fetch: using cache for %s" %
-                  os.path.basename(filepath))
+            if _VERBOSE:
+                print("[MediaVault] CAM Overlay fetch: using cache for %s" %
+                      os.path.basename(filepath))
             return
 
         if urllib is None:
-            print("[MediaVault] CAM Overlay fetch: urllib not available")
+            if _VERBOSE:
+                print("[MediaVault] CAM Overlay fetch: urllib not available")
             self._cam_overlay_data = None
             self._cam_overlay_path = filepath
             return
@@ -3577,8 +3613,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         try:
             encoded = urllib.parse.quote(filepath, safe="")
             url = "%s/api/overlay/preset-for-path?path=%s" % (DMV_URL, encoded)
-            print("[MediaVault] CAM Overlay fetch: GET %s" %
-                  url[:120])
+            if _VERBOSE:
+                print("[MediaVault] CAM Overlay fetch: GET %s" %
+                      url[:120])
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=3) as resp:
                 raw = resp.read().decode("utf-8")
@@ -3586,15 +3623,17 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 if data.get("found") and data.get("preset"):
                     preset = data["preset"]
                     elems = preset.get("config", {}).get("elements", [])
-                    print("[MediaVault] CAM Overlay fetch: OK — preset '%s' "
-                          "with %d element(s)" %
-                          (preset.get("name", "?"), len(elems)))
+                    if _VERBOSE:
+                        print("[MediaVault] CAM Overlay fetch: OK — preset '%s' "
+                              "with %d element(s)" %
+                              (preset.get("name", "?"), len(elems)))
                     self._cam_overlay_data = data
                 else:
-                    print("[MediaVault] CAM Overlay fetch: asset %s — "
-                          "found=%s, preset=%s" %
-                          ("found" if data.get("found") else "NOT found",
-                           data.get("found"), data.get("preset") is not None))
+                    if _VERBOSE:
+                        print("[MediaVault] CAM Overlay fetch: asset %s — "
+                              "found=%s, preset=%s" %
+                              ("found" if data.get("found") else "NOT found",
+                               data.get("found"), data.get("preset") is not None))
                     self._cam_overlay_data = None
                 self._cam_overlay_path = filepath
         except Exception as e:
@@ -3649,8 +3688,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
         # One-time render confirmation
         if not hasattr(self, '_render_logged'):
-            print("[MediaVault] render() called – drawing overlay (w=%s, h=%s)" %
-                  (event.domain()[0], event.domain()[1]))
+            if _VERBOSE:
+                print("[MediaVault] render() called – drawing overlay (w=%s, h=%s)" %
+                      (event.domain()[0], event.domain()[1]))
             self._render_logged = True
 
         try:
@@ -3838,7 +3878,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         data = self._cam_overlay_data
         if not data:
             if not hasattr(self, '_cam_draw_warn'):
-                print("[MediaVault] _drawCAMOverlay: no data — skipping")
+                if _VERBOSE:
+                    print("[MediaVault] _drawCAMOverlay: no data — skipping")
                 self._cam_draw_warn = True
             return
         preset = data.get("preset")
@@ -3851,8 +3892,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             return
 
         if not hasattr(self, '_cam_draw_logged'):
-            print("[MediaVault] _drawCAMOverlay: drawing %d element(s) "
-                  "at %dx%d" % (len(elements), w, h))
+            if _VERBOSE:
+                print("[MediaVault] _drawCAMOverlay: drawing %d element(s) "
+                      "at %dx%d" % (len(elements), w, h))
             self._cam_draw_logged = True
 
         # Current frame for dynamic elements
