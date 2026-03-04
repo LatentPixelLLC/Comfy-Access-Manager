@@ -428,6 +428,13 @@ router.put('/:id/archive', (req, res) => {
 // DELETE /api/projects/:id — Delete project and all assets
 router.delete('/:id', (req, res) => {
     const db = getDb();
+
+    // SAFETY: Only admins can delete projects
+    const { isAdmin } = resolveUserAccess(req);
+    if (!isAdmin) {
+        return res.status(403).json({ error: 'Only administrators can delete projects' });
+    }
+
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -518,6 +525,13 @@ router.put('/:projectId/sequences/:seqId', (req, res) => {
 // DELETE /api/projects/:projectId/sequences/:seqId
 router.delete('/:projectId/sequences/:seqId', (req, res) => {
     const db = getDb();
+
+    // SAFETY: Only admins can delete sequences
+    const { isAdmin } = resolveUserAccess(req);
+    if (!isAdmin) {
+        return res.status(403).json({ error: 'Only administrators can delete sequences' });
+    }
+
     const seq = db.prepare('SELECT * FROM sequences WHERE id = ? AND project_id = ?')
         .get(req.params.seqId, req.params.projectId);
     if (!seq) return res.status(404).json({ error: 'Sequence not found' });
@@ -612,6 +626,13 @@ router.put('/:projectId/sequences/:seqId/shots/:shotId', (req, res) => {
 // DELETE /api/projects/:projectId/sequences/:seqId/shots/:shotId
 router.delete('/:projectId/sequences/:seqId/shots/:shotId', (req, res) => {
     const db = getDb();
+
+    // SAFETY: Only admins can delete shots
+    const { isAdmin } = resolveUserAccess(req);
+    if (!isAdmin) {
+        return res.status(403).json({ error: 'Only administrators can delete shots' });
+    }
+
     const shot = db.prepare('SELECT * FROM shots WHERE id = ? AND sequence_id = ?')
         .get(req.params.shotId, req.params.seqId);
     if (!shot) return res.status(404).json({ error: 'Shot not found' });

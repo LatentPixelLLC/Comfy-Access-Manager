@@ -1427,15 +1427,18 @@ router.delete('/:id', (req, res) => {
 
     const deleteFile = req.query.delete_file === 'true'; // Default: DB only — file stays on disk
 
-    // SAFETY: Only admins can delete files from disk
-    if (deleteFile) {
-        const { isAdmin } = resolveUserAccess(req);
-        if (!isAdmin) {
-            return res.status(403).json({ error: 'Only administrators can delete files from disk' });
-        }
+    // SAFETY: All deletes are admin-only
+    const { isAdmin } = resolveUserAccess(req);
+    if (!isAdmin) {
+        return res.status(403).json({ error: 'Only administrators can delete assets' });
     }
 
-    // Never delete the physical file for linked/referenced assets
+    // SAFETY: Disk deletion is blocked entirely for registered-in-place assets
+    if (deleteFile && asset.is_linked) {
+        return res.status(403).json({ error: 'Cannot delete files from disk for registered-in-place assets. Use "Remove from DB" instead.' });
+    }
+
+    // Delete the physical file (vault-ingested only)
     if (deleteFile && !asset.is_linked && fs.existsSync(asset.file_path)) {
         fs.unlinkSync(asset.file_path);
     }
@@ -1591,12 +1594,10 @@ router.post('/bulk-delete', (req, res) => {
         return res.status(400).json({ error: 'ids array required' });
     }
 
-    // SAFETY: Only admins can delete files from disk
-    if (delete_files) {
-        const { isAdmin } = resolveUserAccess(req);
-        if (!isAdmin) {
-            return res.status(403).json({ error: 'Only administrators can delete files from disk' });
-        }
+    // SAFETY: All deletes are admin-only
+    const { isAdmin } = resolveUserAccess(req);
+    if (!isAdmin) {
+        return res.status(403).json({ error: 'Only administrators can delete assets' });
     }
 
     let deleted = 0;
@@ -1608,7 +1609,7 @@ router.post('/bulk-delete', (req, res) => {
             if (!asset) { errors.push({ id, error: 'Not found' }); continue; }
 
             // Never delete physical file for linked/referenced assets
-            if (delete_files && !asset.is_linked && fs.existsSync(asset.file_path)) {
+            if (delete_files && !asset.is_linked && asset.file_path && fs.existsSync(asset.file_path)) {
                 fs.unlinkSync(asset.file_path);
             }
             ThumbnailService.deleteThumb(asset.id);

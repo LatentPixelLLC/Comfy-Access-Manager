@@ -60,6 +60,13 @@ export function renderProjectDetail(project) {
     document.getElementById('projectPath').textContent = projectFolder ? `📂 ${projectFolder}` : '';
     document.getElementById('projectPath').title = projectFolder;
 
+    // Only admins can delete projects
+    const btnDelProj = document.getElementById('btnDeleteProject');
+    if (btnDelProj) {
+        const isAdminUser = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+        btnDelProj.style.display = isAdminUser ? '' : 'none';
+    }
+
     // Sequences panel
     const seqPanel = document.getElementById('sequencesPanel');
     const seqList = document.getElementById('sequenceList');
@@ -693,6 +700,16 @@ function updateSelectionToolbar() {
     for (const id of adminBtns) {
         const el = document.getElementById(id);
         if (el) el.style.display = isAdmin ? '' : 'none';
+    }
+
+    // Hide "Delete from Disk" when all selected assets are registered-in-place
+    if (isAdmin) {
+        const allLinked = state.selectedAssets.every(id => {
+            const a = state.assets.find(a => a.id === id);
+            return a && a.is_linked;
+        });
+        const diskBtn = document.getElementById('btnDeleteFromDisk');
+        if (diskBtn && allLinked) diskBtn.style.display = 'none';
     }
 }
 

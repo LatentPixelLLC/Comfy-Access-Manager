@@ -193,9 +193,18 @@ async function showContextMenu(event, assetIdx) {
     if (!window.getActiveCrateId?.()) {
         // Only admins can remove from DB or delete from disk
         if (isAdmin) {
+            // Check if ALL selected assets are registered-in-place (is_linked)
+            const allLinked = selectedIds.every(id => {
+                const a = state.assets.find(a => a.id === id);
+                return a && a.is_linked;
+            });
+
             html += `<div class="ctx-separator"></div>`;
             html += `<div class="ctx-item" data-action="removeDb"> Remove from DB${!isSingle ? ` (${count})` : ''}</div>`;
-            html += `<div class="ctx-item ctx-danger" data-action="delete"> Delete files from disk${!isSingle ? ` (${count})` : ''}</div>`;
+            // Hide "Delete from Disk" entirely when all selected assets are registered-in-place
+            if (!allLinked) {
+                html += `<div class="ctx-item ctx-danger" data-action="delete"> Delete files from disk${!isSingle ? ` (${count})` : ''}</div>`;
+            }
         }
     }
 
@@ -365,6 +374,8 @@ function showShotContextMenu(event, seqId, shotId, shotName) {
     dismissHierarchyMenu();
     dismissContextMenu();
 
+    const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+
     const menu = document.createElement('div');
     menu.id = 'hierarchyContextMenu';
     menu.className = 'context-menu';
@@ -374,8 +385,8 @@ function showShotContextMenu(event, seqId, shotId, shotName) {
         <div class="ctx-separator"></div>
         <div class="ctx-item" data-action="select"> Select Shot</div>
         <div class="ctx-item" data-action="rename">Edit Rename</div>
-        <div class="ctx-separator"></div>
-        <div class="ctx-item ctx-danger" data-action="delete"> Delete Shot</div>
+        ${isAdmin ? `<div class="ctx-separator"></div>
+        <div class="ctx-item ctx-danger" data-action="delete"> Delete Shot</div>` : ''}
     `;
 
     menu.addEventListener('click', (e) => {
@@ -399,6 +410,8 @@ function showSeqContextMenu(event, seqId, seqName) {
     dismissHierarchyMenu();
     dismissContextMenu();
 
+    const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+
     const menu = document.createElement('div');
     menu.id = 'hierarchyContextMenu';
     menu.className = 'context-menu';
@@ -412,8 +425,8 @@ function showSeqContextMenu(event, seqId, seqName) {
         <div class="ctx-item" data-action="select"> Select Sequence</div>
         <div class="ctx-item" data-action="rename">Edit Rename</div>
         <div class="ctx-item" data-action="addShot">+ Add Shot</div>
-        <div class="ctx-separator"></div>
-        <div class="ctx-item ctx-danger" data-action="delete"> Delete Sequence${shotCount > 0 ? ` (${shotCount} shots)` : ''}</div>
+        ${isAdmin ? `<div class="ctx-separator"></div>
+        <div class="ctx-item ctx-danger" data-action="delete"> Delete Sequence${shotCount > 0 ? ` (${shotCount} shots)` : ''}</div>` : ''}
     `;
 
     menu.addEventListener('click', (e) => {
@@ -440,6 +453,7 @@ function showProjectContextMenu(event) {
 
     if (!state.currentProject) return;
     const project = state.currentProject;
+    const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
 
     const menu = document.createElement('div');
     menu.id = 'hierarchyContextMenu';
@@ -454,7 +468,7 @@ function showProjectContextMenu(event) {
         <div class="ctx-item" data-action="editNaming"> Naming Convention</div>
         <div class="ctx-separator"></div>
         <div class="ctx-item" data-action="archive">${project.archived ? ' Unarchive Project' : ' Archive Project'}</div>
-        <div class="ctx-item ctx-danger" data-action="delete"> Delete Project${seqCount > 0 ? ` (${seqCount} sequences)` : ''}</div>
+        ${isAdmin ? `<div class="ctx-item ctx-danger" data-action="delete"> Delete Project${seqCount > 0 ? ` (${seqCount} sequences)` : ''}</div>` : ''}
     `;
 
     menu.addEventListener('click', (e) => {
@@ -773,11 +787,21 @@ async function bulkDeleteAssets(dbOnly = false) {
     const count = state.selectedAssets.length;
     if (count === 0) return;
 
-    // Admin-only check for disk deletion (client-side, server enforces too)
+    // Admin-only check for all deletes (client-side, server enforces too)
+    const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+    if (!isAdmin) {
+        alert('Only administrators can delete assets.');
+        return;
+    }
+
+    // Block disk deletion for registered-in-place assets
     if (!dbOnly) {
-        const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
-        if (!isAdmin) {
-            alert('Only administrators can delete files from disk.\n\nUse "Remove from DB" instead to untrack assets without affecting files.');
+        const allLinked = state.selectedAssets.every(id => {
+            const a = state.assets.find(a => a.id === id);
+            return a && a.is_linked;
+        });
+        if (allLinked) {
+            alert('Cannot delete files from disk for registered-in-place assets.\n\nUse "Remove from DB" to untrack them without affecting files.');
             return;
         }
     }
