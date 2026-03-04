@@ -1320,8 +1320,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 if len(available) == 1:
                     # Single version — flat action
                     a = available[0]
-                    ver = self._extract_version(a.get("vault_name", ""))
-                    label = "%s  v%03d" % (role_name, ver) if ver else role_name
+                    label = "%s  (%s)" % (role_name, self._formatVersionLabel(a, include_current=False))
                     rv_path = self._assetToRvPath(a)
                     items.append((
                         label,
@@ -1333,17 +1332,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     # Multiple versions — sub-submenu
                     ver_items = []
                     for a in available:
-                        ver = self._extract_version(a.get("vault_name", ""))
-                        ext = (a.get("file_ext") or
-                               os.path.splitext(
-                                   a.get("file_path", ""))[1] or ""
-                               ).lstrip(".")
-                        vlabel = "v%03d" % ver if ver else a.get(
-                            "vault_name", "unknown")
-                        if ext:
-                            vlabel += "  .%s" % ext
-                        if a.get("is_current"):
-                            vlabel += "  [current]"
+                        vlabel = self._formatVersionLabel(a)
                         rv_path = self._assetToRvPath(a)
                         ver_items.append((
                             vlabel,
@@ -2484,6 +2473,39 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         m = re.search(r'_v(\d+)', vault_name or '')
         return int(m.group(1)) if m else 0
 
+    @staticmethod
+    def _formatVersionLabel(asset, include_current=True):
+        """Build a rich version label like ShotGrid's take list.
+
+        Format:  [2026-03-03 14:55] vault_name_without_ext
+        If is_current:  [2026-03-03 14:55] vault_name  [current]
+        """
+        vname = asset.get("vault_name", "unknown")
+        # Strip file extension from vault_name for cleaner display
+        base, _ = os.path.splitext(vname)
+        created = asset.get("created_at", "")
+        # Format date: "2026-03-03 14:55:15" -> "2026-03-03 14:55"
+        date_str = ""
+        if created:
+            # Handle both "2026-03-03T14:55:15" and "2026-03-03 14:55:15"
+            clean = created.replace("T", " ")
+            # Trim seconds if present: "2026-03-03 14:55:15" -> "2026-03-03 14:55"
+            parts = clean.split(":")
+            if len(parts) >= 2:
+                date_str = ":".join(parts[:2])
+            else:
+                date_str = clean[:16]
+
+        label = ""
+        if date_str:
+            label = "[%s] %s" % (date_str, base)
+        else:
+            label = base
+
+        if include_current and asset.get("is_current"):
+            label += "  [current]"
+        return label
+
     def _stepVersion(self, direction, mode="switch"):
         """
         Move to the previous or next version within the same role.
@@ -2638,8 +2660,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 # --- Single version: flat action (no submenu needed) ---
                 if len(available) == 1:
                     a = available[0]
-                    ver = self._extract_version(a.get("vault_name", ""))
-                    label = "%s  v%03d" % (role_name, ver) if ver else role_name
+                    label = "%s  (%s)" % (role_name, self._formatVersionLabel(a, include_current=False))
                     action = menu.addAction(label)
                     if role_id == current_role_id:
                         font = action.font()
@@ -2676,14 +2697,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     if gi > 0:
                         sub.addSeparator()
                     for a in group:
-                        ver = self._extract_version(a.get("vault_name", ""))
-                        ext = (a.get("file_ext") or os.path.splitext(a.get("file_path", ""))[1] or "").lstrip(".")
-                        # Build version label: "v003 (.exr)" or "v003 (.mov) *"
-                        vlabel = "v%03d" % ver if ver else a.get("vault_name", "unknown")
-                        if ext:
-                            vlabel += "  .%s" % ext
-                        if a.get("is_current"):
-                            vlabel += "  [current]"
+                        vlabel = self._formatVersionLabel(a)
 
                         v_action = sub.addAction(vlabel)
                         v_action.setData(self._assetToRvPath(a))
