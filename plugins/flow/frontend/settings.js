@@ -24,6 +24,7 @@ export function init() {
     const syncStepsBtn = document.getElementById('flowSyncStepsBtn');
     const fullSyncBtn = document.getElementById('flowFullSyncBtn');
     const syncTasksBtn = document.getElementById('flowSyncTasksBtn');
+    const syncNotesBtn = document.getElementById('flowSyncNotesBtn');
     const syncVersionsBtn = document.getElementById('flowSyncVersionsBtn');
     const syncThumbsBtn = document.getElementById('flowSyncThumbsBtn');
     const savePathBtn = document.getElementById('flowSavePathBtn');
@@ -43,6 +44,7 @@ export function init() {
     if (syncStepsBtn) syncStepsBtn.addEventListener('click', flowSyncSteps);
     if (fullSyncBtn) fullSyncBtn.addEventListener('click', flowFullSync);
     if (syncTasksBtn) syncTasksBtn.addEventListener('click', flowSyncTasks);
+    if (syncNotesBtn) syncNotesBtn.addEventListener('click', flowSyncNotes);
     if (syncVersionsBtn) syncVersionsBtn.addEventListener('click', flowSyncVersions);
     if (syncThumbsBtn) syncThumbsBtn.addEventListener('click', flowSyncThumbnails);
     if (savePathBtn) savePathBtn.addEventListener('click', savePathConfig);
@@ -215,7 +217,26 @@ async function flowSyncTasks() {
         _log(`❌ Tasks: ${err.message}`);
     }
 }
+async function flowSyncNotes() {
+    const select = document.getElementById('flowProjectSelect');
+    if (!select || !select.value) {
+        _log('\u26A0\uFE0F Select a project first');
+        return;
+    }
 
+    const [flowId, localId] = select.value.split('|');
+    _log(`\u23F3 Syncing notes for ${select.options[select.selectedIndex]?.text}\u2026`);
+
+    try {
+        const result = await api('/api/flow/sync/notes', {
+            method: 'POST',
+            body: { flowProjectId: Number(flowId), localProjectId: Number(localId) }
+        });
+        _log(`\u2705 Notes \u2014 ${result.created || 0} created, ${result.updated || 0} updated (${result.total || 0} total)`);
+    } catch (err) {
+        _log(`\u274C Notes: ${err.message}`);
+    }
+}
 async function flowSyncVersions() {
     const select = document.getElementById('flowProjectSelect');
     if (!select || !select.value) {

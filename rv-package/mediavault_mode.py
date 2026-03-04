@@ -50,7 +50,7 @@ try:
         QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
         QCheckBox, QLabel, QFrame, QAbstractItemView, QGroupBox,
         QSplitter, QWidget, QMenu, QAction, QApplication,
-        QListWidget, QListWidgetItem
+        QListWidget, QListWidgetItem, QTextBrowser
     )
     from PySide2.QtGui import (QCursor, QFont, QColor, QBrush, QIcon,
                                 QImage, QPainter, QFontMetrics)
@@ -63,7 +63,7 @@ except ImportError:
             QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
             QCheckBox, QLabel, QFrame, QAbstractItemView, QGroupBox,
             QSplitter, QWidget, QMenu, QApplication,
-            QListWidget, QListWidgetItem
+            QListWidget, QListWidgetItem, QTextBrowser
         )
         from PySide6.QtGui import (QCursor, QAction, QFont, QColor, QBrush, QIcon,
                                     QImage, QPainter, QFontMetrics)
@@ -822,6 +822,289 @@ class AssetPickerDialog(QDialog):
         return self._selected_asset
 
 
+# ─── ShotGrid Notes Style ─────────────────────────────────────
+NOTES_DIALOG_STYLE = DIALOG_STYLE + """
+QTextBrowser {
+    background: #25252d;
+    border: 1px solid #3a3a46;
+    border-radius: 6px;
+    color: #d4d4d8;
+    font-size: 13px;
+    padding: 8px;
+    selection-background-color: #2ec4b650;
+}
+"""
+
+
+class ShotGridNotesPanel(QDialog):
+    """
+    Persistent side-panel showing ShotGrid notes for the active source.
+
+    Unlike a modal dialog this is a non-modal tool window that stays
+    open alongside the RV viewport.  It auto-updates when the artist
+    scrubs to a different clip and can be toggled with Alt+S.
+    """
+
+    def __init__(self, parent=None):
+        super(ShotGridNotesPanel, self).__init__(parent)
+        # Tool-window flags: stays on top, thin title bar, no taskbar entry
+        self.setWindowFlags(
+            Qt.Tool | Qt.WindowStaysOnTopHint | Qt.CustomizeWindowHint
+            | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+        self.setWindowTitle("ShotGrid Notes")
+        self.setMinimumSize(340, 400)
+        self.resize(380, 700)
+        self.setStyleSheet(NOTES_DIALOG_STYLE)
+
+        self._notes_data = {}    # last API response
+        self._source_path = None # path the data belongs to
+        self._role_filter = "current"
+        self._buildUI()
+        self._showEmpty("Open a clip and press Alt+S to load notes.")
+
+    # ── public API (called by MediaVaultMode) ────────────────
+
+    def updateForPath(self, filepath):
+        """Refresh the panel for a new source path (non-blocking)."""
+        if not filepath or urllib is None:
+            return
+        if filepath == self._source_path and self._notes_data:
+            return  # already showing this clip
+
+        self._source_path = filepath
+        self._fetchNotes(filepath)
+
+    # ── UI construction ──────────────────────────────────────
+
+    def _buildUI(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        # ── Title row ──
+        title_row = QHBoxLayout()
+        title = QLabel("ShotGrid Notes")
+        title.setObjectName("titleLabel")
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
+
+        # ── Context line (shot / role / version) ──
+        self._context_label = QLabel("")
+        self._context_label.setWordWrap(True)
+        self._context_label.setObjectName("scopeLabel")
+        layout.addWidget(self._context_label)
+
+        # ── Filter bar ──
+        filter_bar = QHBoxLayout()
+        self._role_btn = QPushButton("Showing: current role")
+        self._role_btn.clicked.connect(self._toggleRoleFilter)
+        filter_bar.addWidget(self._role_btn)
+        filter_bar.addStretch()
+        layout.addLayout(filter_bar)
+
+        # ── Notes browser ──
+        self._browser = QTextBrowser()
+        self._browser.setOpenExternalLinks(False)
+        self._browser.setReadOnly(True)
+        layout.addWidget(self._browser, 1)
+
+    # ── positioning ──────────────────────────────────────────
+
+    def positionBesideRV(self):
+        """Place the panel to the right of the RV main window."""
+        try:
+            main = QApplication.activeWindow()
+            if main and main is not self:
+                mg = main.geometry()
+                x = mg.x() + mg.width() + 8
+                y = mg.y()
+                h = mg.height()
+                self.move(x, y)
+                self.resize(self.width(), h)
+        except Exception:
+            pass
+
+    # ── data fetching ────────────────────────────────────────
+
+    def _fetchNotes(self, filepath):
+        try:
+            encoded = urllib.parse.quote(filepath, safe="")
+            url = "%s/api/assets/sg-notes-by-path?path=%s&role=%s" % (
+                DMV_URL, encoded, self._role_filter)
+            req = urllib.request.Request(url,
+                                         headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            self._showEmpty("Could not connect to CAM: %s" % e)
+            return
+
+        if not data.get("found"):
+            self._showEmpty("Asset not found in vault.")
+            return
+
+        data["_source_path"] = filepath
+        self._notes_data = data
+        self._applyData()
+
+    def _applyData(self):
+        """Update header labels and render notes from self._notes_data."""
+        d = self._notes_data
+        shot  = d.get("shot_name", "?")
+        role  = d.get("role_name", "?")
+        ver   = d.get("version", 0)
+        total = d.get("total_notes", 0)
+        total_all = d.get("total_all_roles", 0)
+
+        self.setWindowTitle("ShotGrid Notes  |  %s  |  %s" % (shot, role))
+        if self._role_filter == "all":
+            self._context_label.setText(
+                "%s  |  All Roles  |  %d notes" % (shot, total_all))
+        else:
+            ctx = "%s  |  %s  v%03d  |  %d notes" % (shot, role, ver, total)
+            if total_all > total:
+                ctx += "  (%d across all roles)" % total_all
+            self._context_label.setText(ctx)
+
+        self._role_btn.setText(
+            "Showing: All Roles" if self._role_filter == "all"
+            else "Showing: %s only" % role)
+
+        self._renderNotes()
+
+    def _showEmpty(self, message):
+        self._browser.setHtml(
+            '<div style="color:#888; text-align:center; padding:40px 0; '
+            'font-size:14px;">%s</div>' % self._esc(message))
+        self._context_label.setText("")
+
+    # ── role filter toggle ───────────────────────────────────
+
+    def _toggleRoleFilter(self):
+        if self._role_filter == "current":
+            self._role_filter = "all"
+        else:
+            self._role_filter = "current"
+        if self._source_path:
+            self._notes_data = {}  # force re-fetch
+            self._fetchNotes(self._source_path)
+
+    # (legacy compat alias)
+    def _fetchAndRefresh(self):
+        if self._source_path:
+            self._notes_data = {}
+            self._fetchNotes(self._source_path)
+
+    # ── render HTML ──────────────────────────────────────────
+
+    def _renderNotes(self):
+        """Render all note groups as styled HTML."""
+        groups = self._notes_data.get("groups", [])
+
+        if not groups:
+            self._browser.setHtml(
+                '<div style="color:#888; text-align:center; padding:40px 0; '
+                'font-size:14px;">'
+                'No notes found for this shot / role.<br>'
+                '<span style="font-size:12px;">'
+                'Try "All Roles" to see notes from other departments.'
+                '</span></div>')
+            return
+
+        h = []  # html parts
+        h.append('<div style="font-family: Segoe UI, Arial, sans-serif; '
+                 'color: #d4d4d8;">')
+
+        for group in groups:
+            ver_label = group.get("version_label", "General")
+            is_current = group.get("is_current", False)
+            notes = group.get("notes", [])
+
+            # ── version section ──
+            if is_current:
+                badge = ('&nbsp;<span style="background:#2ec4b6; color:#111; '
+                         'padding:2px 8px; border-radius:3px; font-size:11px; '
+                         'font-weight:700;">CURRENT</span>')
+                hdr_bg = "#2ec4b620"
+                border_col = "#2ec4b6"
+            else:
+                badge = ""
+                hdr_bg = "#25252d"
+                border_col = "#3a3a46"
+
+            h.append(
+                '<div style="background:%s; border:1px solid %s; '
+                'border-radius:6px; margin-bottom:10px; overflow:hidden;">'
+                % (hdr_bg, border_col))
+
+            # version header
+            h.append(
+                '<div style="padding:8px 12px; border-bottom:1px solid #3a3a46; '
+                'font-weight:700; font-size:14px;">'
+                '%s %s '
+                '<span style="color:#888; font-weight:400; font-size:12px;">'
+                '(%d note%s)</span></div>'
+                % (ver_label, badge, len(notes), '' if len(notes) == 1 else 's'))
+
+            # individual notes
+            for note in notes:
+                author = note.get("author_name", "Unknown")
+                date_str = (note.get("created_at") or "")[:10]
+                subject = note.get("subject", "")
+                content = note.get("content", "")
+                note_type = note.get("note_type", "")
+                tasks = note.get("linked_tasks", [])
+                task_names = ", ".join(
+                    t.get("name", "") for t in tasks if t.get("name"))
+
+                # type badge
+                tc = {"Internal": "#4488cc", "Client": "#cc8844"}.get(
+                    note_type, "")
+                type_badge = (
+                    '&nbsp;<span style="background:%s; color:#fff; '
+                    'padding:1px 6px; border-radius:3px; font-size:10px;">'
+                    '%s</span>' % (tc, note_type)) if tc else ""
+
+                # task badge
+                task_badge = (
+                    '&nbsp;<span style="color:#2ec4b6; font-size:11px;">'
+                    '[%s]</span>' % task_names) if task_names else ""
+
+                h.append('<div style="padding:8px 12px; '
+                         'border-bottom:1px solid #2a2a36;">')
+                h.append(
+                    '<div style="font-size:12px; color:#aaa; '
+                    'margin-bottom:4px;">'
+                    '%s &mdash; %s%s%s</div>'
+                    % (self._esc(author), date_str, type_badge, task_badge))
+
+                if subject:
+                    h.append(
+                        '<div style="font-weight:600; margin-bottom:2px;">'
+                        '%s</div>' % self._esc(subject))
+                if content:
+                    safe = self._esc(content).replace('\n', '<br>')
+                    h.append(
+                        '<div style="font-size:13px; line-height:1.5;">'
+                        '%s</div>' % safe)
+                h.append('</div>')
+
+            h.append('</div>')  # end version section
+
+        h.append('</div>')
+        self._browser.setHtml(''.join(h))
+
+    @staticmethod
+    def _esc(text):
+        """Basic HTML entity escaping."""
+        return ((text or "")
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;"))
+
+
 class MediaVaultMode(rv.rvtypes.MinorMode):
     """
     Adds a MediaVault menu to OpenRV's menu bar.
@@ -848,6 +1131,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self._comfyui_cache    = {}     # {norm_key: meta_dict | False}
         self._cam_overlay_data = None   # cached preset-for-path response
         self._cam_overlay_path = None   # path the CAM overlay cache belongs to
+
+        # ── ShotGrid Notes side-panel ────────────────────────────
+        self._notes_panel = None         # ShotGridNotesPanel instance (lazy)
 
         # ── Compare / version cache ──────────────────────────────
         self._cached_data = None
@@ -947,6 +1233,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 ("Publish Frame", self.publishFrame, "alt+p", None),
                 ("Save Annotated Frame as Note", self.saveAnnotatedFrameAsNote, "alt+n", None),
                 ("Send Annotation to ShotGrid", self.sendAnnotationToShotGrid, "alt+shift+n", None),
+                ("ShotGrid Notes", self.showShotGridNotes, "alt+s",
+                 lambda *args, **kwargs: rvc.CheckedMenuState
+                         if self._notes_panel and self._notes_panel.isVisible()
+                         else rvc.UncheckedMenuState),
                 ("Add to Crate ...", self.addToCrateMenu, "alt+c", None),
                 ("_", None),
                 ("Toggle Overlay", self._toggleOverlay, "shift+o",
@@ -2508,6 +2798,42 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 except Exception:
                     pass
 
+    # ── ShotGrid notes viewer ─────────────────────────────────
+
+    def showShotGridNotes(self, event):
+        """Toggle the ShotGrid Notes side-panel.
+
+        First press opens the panel to the right of RV and loads notes
+        for the current clip.  Second press closes it.
+        """
+        if not HAS_QT:
+            rve.displayFeedback("Qt not available", 3.0)
+            return
+        if urllib is None:
+            rve.displayFeedback("urllib not available", 3.0)
+            return
+
+        # Toggle: if already visible, close it
+        if self._notes_panel and self._notes_panel.isVisible():
+            self._notes_panel.hide()
+            rve.displayFeedback("ShotGrid Notes: closed", 1.5)
+            return
+
+        filepath = self._getCurrentSourcePath()
+        if not filepath:
+            rve.displayFeedback("No source loaded", 3.0)
+            return
+
+        # Create panel on first use (lazy init)
+        if not self._notes_panel:
+            self._notes_panel = ShotGridNotesPanel()
+
+        self._notes_panel.positionBesideRV()
+        self._notes_panel.show()
+        self._notes_panel.raise_()
+        self._notes_panel.updateForPath(filepath)
+        rve.displayFeedback("ShotGrid Notes: open", 1.5)
+
     # ── add to crate ──────────────────────────────────────────
 
     def addToCrateMenu(self, event):
@@ -2883,6 +3209,13 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             cached = self._comfyui_cache.get(key)
             self._comfyui_meta = (
                 cached if cached is not False else None)
+
+        # Auto-refresh ShotGrid Notes panel if open
+        if (self._notes_panel and self._notes_panel.isVisible()):
+            try:
+                self._notes_panel.updateForPath(cur)
+            except Exception:
+                pass
 
     # ── ComfyUI metadata extraction ─────────────────────────────
 

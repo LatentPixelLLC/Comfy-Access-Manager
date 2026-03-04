@@ -334,6 +334,31 @@ function runMigrations(wrapper) {
     wrapper.exec('CREATE INDEX IF NOT EXISTS idx_flow_tasks_flow_id ON flow_tasks(flow_id)');
     wrapper.exec('CREATE INDEX IF NOT EXISTS idx_flow_tasks_entity ON flow_tasks(entity_type, entity_flow_id)');
 
+    // ─── Create flow_notes table for Flow/ShotGrid Note sync ───
+    wrapper.exec(`CREATE TABLE IF NOT EXISTS flow_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        flow_id INTEGER UNIQUE NOT NULL,
+        project_id INTEGER NOT NULL,
+        subject TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        status TEXT DEFAULT '',
+        note_type TEXT DEFAULT '',
+        author_name TEXT DEFAULT '',
+        author_flow_id INTEGER,
+        linked_shots TEXT DEFAULT '[]',
+        linked_versions TEXT DEFAULT '[]',
+        linked_tasks TEXT DEFAULT '[]',
+        addressees TEXT DEFAULT '[]',
+        reply_count INTEGER DEFAULT 0,
+        sg_created_at TEXT,
+        sg_updated_at TEXT,
+        created_at DATETIME DEFAULT (datetime('now')),
+        updated_at DATETIME DEFAULT (datetime('now')),
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+    )`);
+    wrapper.exec('CREATE INDEX IF NOT EXISTS idx_flow_notes_project ON flow_notes(project_id)');
+    wrapper.exec('CREATE INDEX IF NOT EXISTS idx_flow_notes_flow_id ON flow_notes(flow_id)');
+
     // ─── Add flow_status column to shots (ShotGrid shot-level status) ───
     try {
         const shotCols = [];

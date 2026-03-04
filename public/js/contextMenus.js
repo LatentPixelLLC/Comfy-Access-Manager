@@ -155,6 +155,15 @@ async function showContextMenu(event, assetIdx) {
     }
     html += `<div class="ctx-item" data-action="sync-review"> Start Sync Review${!isSingle ? ` (${count})` : ''}</div>`;
 
+    // Create Minicut — show for single assets; disabled if no shot assigned
+    if (isSingle) {
+        if (asset.shot_id) {
+            html += `<div class="ctx-item" data-action="createMinicut"> Create Minicut</div>`;
+        } else {
+            html += `<div class="ctx-item ctx-disabled" title="Asset must be assigned to a shot first"> Create Minicut</div>`;
+        }
+    }
+
     html += `<div class="ctx-separator"></div>`;
     html += `<div class="ctx-item" data-action="selectAll">[x] Select All</div>`;
     if (count > 0) {
@@ -264,6 +273,7 @@ async function showContextMenu(event, assetIdx) {
                 sendToComfyUI(ids);
                 break;
             }
+            case 'createMinicut': window.showMiniCutModal?.(asset); break;
             case 'delete': bulkDeleteAssets(); break;
             case 'removeDb': bulkDeleteAssets(true); break;
             default: {

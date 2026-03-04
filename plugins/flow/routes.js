@@ -163,6 +163,22 @@ router.post('/sync/tasks', async (req, res) => {
     }
 });
 
+// POST /api/flow/sync/notes — Fetch notes for a project
+// Body: { flowProjectId, localProjectId }
+router.post('/sync/notes', async (req, res) => {
+    const { flowProjectId, localProjectId } = req.body;
+    if (!flowProjectId || !localProjectId) {
+        return res.status(400).json({ error: 'flowProjectId and localProjectId required' });
+    }
+
+    try {
+        const result = await FlowService.syncNotes(flowProjectId, localProjectId);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // GET /api/flow/tasks/:projectId — Get locally synced tasks for a project
 router.get('/tasks/:projectId', (req, res) => {
     const { projectId } = req.params;
@@ -175,6 +191,22 @@ router.get('/tasks/:projectId', (req, res) => {
             status,
         });
         res.json(tasks);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/flow/notes/:projectId — Get locally synced notes for a project
+router.get('/notes/:projectId', (req, res) => {
+    const { projectId } = req.params;
+    const { shotFlowId, status } = req.query;
+
+    try {
+        const notes = FlowService.getNotes(parseInt(projectId), {
+            shotFlowId: shotFlowId ? parseInt(shotFlowId) : null,
+            status,
+        });
+        res.json(notes);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

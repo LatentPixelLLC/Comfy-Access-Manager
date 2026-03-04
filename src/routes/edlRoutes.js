@@ -405,8 +405,8 @@ router.post('/:projectId/minicut', (req, res) => {
     const { spawn, execFile } = require('child_process');
     const cwd = path.dirname(rvExe);
 
-    // RV args: [ sequence file1 file2 ... ] plays in sequence layout
-    const args = ['-network', ...filePaths];
+    // RV args: -l sequence tells RV to lay out clips sequentially (timeline)
+    const args = ['-l', 'sequence', ...filePaths];
 
     if (process.platform === 'darwin') {
         let appBundle = null;

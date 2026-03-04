@@ -275,6 +275,62 @@ def cmd_sync_tasks(sg, args):
     except Exception as e:
         error(f"Failed to fetch tasks: {str(e)}")
 
+def cmd_sync_notes(sg, args):
+    """Fetch Notes for a given project, including linked entities and replies."""
+    params = json.loads(args.json) if args.json else {}
+    project_id = params.get("project_id")
+    if not project_id:
+        error("project_id required in --json")
+
+    try:
+        filters = [["project", "is", {"type": "Project", "id": int(project_id)}]]
+
+        # Optional: delta sync — only notes updated since a timestamp
+        since = sanitize_sg_datetime(params.get("since"))
+        if since:
+            filters.append(["updated_at", "greater_than", since])
+
+        notes = sg.find("Note",
+            filters=filters,
+            fields=["subject", "content", "sg_status_list", "note_links",
+                    "user", "addressings_to", "tasks", "created_at",
+                    "updated_at", "sg_note_type", "replies", "id"],
+            order=[{"field_name": "created_at", "direction": "desc"}]
+        )
+
+        result = []
+        for note in notes:
+            user = note.get("user")
+            links = note.get("note_links") or []
+            addressees = note.get("addressings_to") or []
+            tasks = note.get("tasks") or []
+            replies = note.get("replies") or []
+
+            # Extract linked entities (Shots, Versions, etc.)
+            linked_shots = [l for l in links if l.get("type") == "Shot"]
+            linked_versions = [l for l in links if l.get("type") == "Version"]
+
+            result.append({
+                "flow_id": note["id"],
+                "subject": note.get("subject", "") or "",
+                "content": note.get("content", "") or "",
+                "status": note.get("sg_status_list", "") or "",
+                "note_type": note.get("sg_note_type", "") or "",
+                "author_id": user["id"] if user else None,
+                "author_name": user.get("name", "") if user else "",
+                "linked_shots": [{"id": s["id"], "name": s.get("name", "")} for s in linked_shots],
+                "linked_versions": [{"id": v["id"], "name": v.get("name", "")} for v in linked_versions],
+                "linked_tasks": [{"id": t["id"], "name": t.get("name", "")} for t in tasks],
+                "addressees": [{"id": a["id"], "name": a.get("name", ""), "type": a["type"]} for a in addressees],
+                "reply_count": len(replies),
+                "created_at": str(note.get("created_at", "")) if note.get("created_at") else "",
+                "updated_at": str(note.get("updated_at", "")) if note.get("updated_at") else "",
+            })
+
+        output({"success": True, "notes": result, "count": len(result)})
+    except Exception as e:
+        error(f"Failed to fetch notes: {str(e)}")
+
 def cmd_update_task_status(sg, args):
     """Update a Task's status in Flow."""
     params = json.loads(args.json) if args.json else {}
@@ -769,6 +825,7 @@ COMMANDS = {
     "sync_shots": cmd_sync_shots,
     "sync_steps": cmd_sync_steps,
     "sync_tasks": cmd_sync_tasks,
+    "sync_notes": cmd_sync_notes,
     "sync_versions": cmd_sync_versions,
     "sync_published_files": cmd_sync_published_files,
     "update_task_status": cmd_update_task_status,

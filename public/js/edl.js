@@ -390,6 +390,149 @@ function invalidateEdlCache() {
 //  EXPOSE ON WINDOW
 // ═══════════════════════════════════════════
 
+// ═══════════════════════════════════════════
+//  CREATE MINICUT MODAL
+// ═══════════════════════════════════════════
+
+/**
+ * Show the Create Minicut modal for a single asset.
+ * User picks how many shots before/after, then hits Make Minicut.
+ * @param {Object} asset - Asset object (must have shot_id)
+ */
+function showMiniCutModal(asset) {
+    if (!asset?.shot_id) return showToast('This asset is not assigned to a shot', 'error');
+
+    const project = state.currentProject;
+    if (!project) return showToast('Select a project first', 'error');
+
+    const shotLabel = asset.shot_name || asset.shot_code || `Shot #${asset.shot_id}`;
+
+    const mc = document.getElementById('modalContent');
+    mc.innerHTML = `
+        <h3>Create Minicut</h3>
+        <p style="color:var(--text-dim);font-size:.82rem;margin-bottom:16px;">
+            Build a minicut sequence in RV centered on <strong style="color:var(--text);">${esc(shotLabel)}</strong>
+            from the active EDL. Choose how many neighboring shots to include before and after.
+        </p>
+
+        <div class="minicut-config">
+            <div class="minicut-shot-info">
+                <div class="minicut-shot-label">Center Shot</div>
+                <div class="minicut-shot-name">${esc(shotLabel)}</div>
+                <div class="minicut-asset-name">${esc(asset.vault_name || asset.original_name || '')}</div>
+            </div>
+
+            <div class="minicut-neighbor-row">
+                <label for="minicutNeighbors">Shots before &amp; after:</label>
+                <div class="minicut-stepper">
+                    <button class="minicut-step-btn" onclick="window._minicutStep(-1)">-</button>
+                    <input type="number" id="minicutNeighbors" value="2" min="0" max="20" readonly>
+                    <button class="minicut-step-btn" onclick="window._minicutStep(1)">+</button>
+                </div>
+            </div>
+
+            <div class="minicut-diagram" id="minicutDiagram"></div>
+        </div>
+
+        <div id="minicutStatus" style="display:none;margin-top:12px;padding:10px;border-radius:var(--radius-sm);font-size:.82rem;"></div>
+
+        <div class="form-actions" style="margin-top:20px;">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-primary" id="minicutGoBtn" onclick="window._minicutGo()">Make Minicut</button>
+        </div>
+    `;
+
+    // Store context for the go handler
+    window._minicutContext = { shotId: asset.shot_id, projectId: project.id };
+
+    _renderMiniCutDiagram();
+    document.getElementById('modal').style.display = 'flex';
+}
+
+/** Stepper for neighbor count */
+window._minicutStep = function (delta) {
+    const input = document.getElementById('minicutNeighbors');
+    if (!input) return;
+    let val = parseInt(input.value) || 2;
+    val = Math.max(0, Math.min(20, val + delta));
+    input.value = val;
+    _renderMiniCutDiagram();
+};
+
+/** Visual diagram showing the shot neighborhood */
+function _renderMiniCutDiagram() {
+    const el = document.getElementById('minicutDiagram');
+    if (!el) return;
+    const n = parseInt(document.getElementById('minicutNeighbors')?.value) || 2;
+    const total = 1 + n * 2;
+
+    let blocks = '';
+    for (let i = 0; i < total; i++) {
+        const isCenter = i === n;
+        blocks += `<div class="minicut-block ${isCenter ? 'minicut-block-center' : ''}">${isCenter ? 'SEL' : i < n ? '-' + (n - i) : '+' + (i - n)}</div>`;
+    }
+    el.innerHTML = blocks;
+}
+
+/** Launch the minicut */
+window._minicutGo = async function () {
+    const ctx = window._minicutContext;
+    if (!ctx) return;
+
+    const neighbors = parseInt(document.getElementById('minicutNeighbors')?.value) || 2;
+    const btn = document.getElementById('minicutGoBtn');
+    const statusEl = document.getElementById('minicutStatus');
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Launching RV...'; }
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.style.background = 'var(--bg-input)'; statusEl.style.color = 'var(--text-dim)'; statusEl.textContent = 'Building minicut sequence...'; }
+
+    try {
+        const res = await api(`/api/edl/${ctx.projectId}/minicut`, {
+            method: 'POST',
+            body: { shotId: ctx.shotId, neighbors }
+        });
+
+        if (res.success) {
+            const played = res.playableFiles;
+            const total = res.totalEntries;
+            const missing = total - played;
+
+            if (statusEl) {
+                statusEl.style.background = 'rgba(100,180,100,0.12)';
+                statusEl.style.color = '#8c8';
+                let msg = `RV launched with ${played} of ${total} clips.`;
+                if (missing > 0) msg += ` (${missing} missing media)`;
+                statusEl.textContent = msg;
+            }
+
+            // Show summary details
+            if (res.summary?.length) {
+                const details = res.summary.map(s => {
+                    const icon = s.status === 'found' ? (s.isCurrent ? '>' : ' ') : '!  ';
+                    const name = s.assetName || s.reelName || '???';
+                    const note = s.status === 'found' ? '' : ` (${s.status.replace('_', ' ')})`;
+                    return `${icon} ${name}${note}`;
+                }).join('\n');
+                console.log('[Minicut] Sequence:\n' + details);
+            }
+
+            showToast(`Minicut: ${played} clips loaded in RV`);
+        } else {
+            throw new Error(res.error || 'Minicut launch failed');
+        }
+    } catch (err) {
+        if (statusEl) {
+            statusEl.style.background = 'rgba(180,80,80,0.12)';
+            statusEl.style.color = 'var(--danger)';
+            statusEl.textContent = err.message;
+        }
+        showToast('Minicut error: ' + err.message, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Make Minicut'; }
+    }
+};
+
+
 window.showEdlModal = showEdlModal;
 window.uploadEdl = uploadEdl;
 window.showEdlEntries = showEdlEntries;
@@ -399,5 +542,7 @@ window.deleteEdl = deleteEdl;
 window.linkEdlEntry = linkEdlEntry;
 window.unlinkEdlEntry = unlinkEdlEntry;
 window.playMinicut = playMinicut;
+window._loadEdlList = _loadEdlList;
+window.showMiniCutModal = showMiniCutModal;
 
-export { showEdlModal, playMinicut, hasActiveEdl, invalidateEdlCache };
+export { showEdlModal, playMinicut, hasActiveEdl, invalidateEdlCache, showMiniCutModal };

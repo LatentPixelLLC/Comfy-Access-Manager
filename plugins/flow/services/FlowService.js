@@ -486,6 +486,70 @@ class FlowService {
         return { success: true, created, updated, total: result.count };
     }
 
+    /**
+     * Sync Notes from Flow/ShotGrid for a project.
+     * Pulls all Note entities and upserts into flow_notes table.
+     */
+    static async syncNotes(flowProjectId, localProjectId, opts = {}) {
+        const params = { project_id: flowProjectId };
+        if (opts.since) params.since = opts.since;
+        const result = await this.execute('sync_notes', params);
+        const db = this._getDb();
+        let created = 0, updated = 0;
+
+        for (const note of result.notes) {
+            const existing = db.prepare(
+                'SELECT id FROM flow_notes WHERE flow_id = ?'
+            ).get(note.flow_id);
+
+            const linkedShotsJson = JSON.stringify(note.linked_shots || []);
+            const linkedVersionsJson = JSON.stringify(note.linked_versions || []);
+            const linkedTasksJson = JSON.stringify(note.linked_tasks || []);
+            const addresseesJson = JSON.stringify(note.addressees || []);
+
+            if (existing) {
+                db.prepare(`
+                    UPDATE flow_notes SET
+                        subject = ?, content = ?, status = ?, note_type = ?,
+                        author_name = ?, author_flow_id = ?,
+                        linked_shots = ?, linked_versions = ?,
+                        linked_tasks = ?, addressees = ?,
+                        reply_count = ?, sg_created_at = ?, sg_updated_at = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                `).run(
+                    note.subject, note.content, note.status, note.note_type,
+                    note.author_name, note.author_id,
+                    linkedShotsJson, linkedVersionsJson,
+                    linkedTasksJson, addresseesJson,
+                    note.reply_count, note.created_at, note.updated_at,
+                    existing.id
+                );
+                updated++;
+            } else {
+                db.prepare(`
+                    INSERT INTO flow_notes (
+                        flow_id, project_id, subject, content, status, note_type,
+                        author_name, author_flow_id,
+                        linked_shots, linked_versions,
+                        linked_tasks, addressees,
+                        reply_count, sg_created_at, sg_updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    note.flow_id, localProjectId, note.subject, note.content,
+                    note.status, note.note_type,
+                    note.author_name, note.author_id,
+                    linkedShotsJson, linkedVersionsJson,
+                    linkedTasksJson, addresseesJson,
+                    note.reply_count, note.created_at, note.updated_at
+                );
+                created++;
+            }
+        }
+
+        return { success: true, created, updated, total: result.count };
+    }
+
     static async fullSync(flowProjectId, localProjectId) {
         const results = {
             steps: await this.syncSteps(),
@@ -493,6 +557,7 @@ class FlowService {
         };
         results.shots = await this.syncShots(flowProjectId, localProjectId);
         results.tasks = await this.syncTasks(flowProjectId, localProjectId);
+        results.notes = await this.syncNotes(flowProjectId, localProjectId);
 
         return {
             success: true,
@@ -500,6 +565,7 @@ class FlowService {
             sequences: results.sequences,
             shots: results.shots,
             tasks: results.tasks,
+            notes: results.notes,
         };
     }
 
@@ -1460,6 +1526,38 @@ class FlowService {
         return tasks.map(t => ({
             ...t,
             assignees: JSON.parse(t.assignees || '[]'),
+        }));
+    }
+
+    /**
+     * Get locally synced notes for a project.
+     * @param {number} localProjectId — CAM project ID
+     * @param {object} [opts] — { shotFlowId, status }
+     */
+    static getNotes(localProjectId, opts = {}) {
+        const db = this._getDb();
+        let sql = 'SELECT * FROM flow_notes WHERE project_id = ?';
+        const params = [localProjectId];
+
+        if (opts.shotFlowId) {
+            // Filter notes linked to a specific shot (JSON array search)
+            sql += " AND linked_shots LIKE ?";
+            params.push(`%"id":${opts.shotFlowId}%`);
+        }
+        if (opts.status) {
+            sql += ' AND status = ?';
+            params.push(opts.status);
+        }
+
+        sql += ' ORDER BY sg_created_at DESC';
+
+        const notes = db.prepare(sql).all(...params);
+        return notes.map(n => ({
+            ...n,
+            linked_shots: JSON.parse(n.linked_shots || '[]'),
+            linked_versions: JSON.parse(n.linked_versions || '[]'),
+            linked_tasks: JSON.parse(n.linked_tasks || '[]'),
+            addressees: JSON.parse(n.addressees || '[]'),
         }));
     }
 }

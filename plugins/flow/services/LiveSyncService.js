@@ -169,6 +169,7 @@ class LiveSyncService {
             projects: projects.length,
             shots: { updated: 0, total: 0 },
             tasks: { created: 0, updated: 0, total: 0 },
+            notes: { created: 0, updated: 0, total: 0 },
             versions: { registered: 0, skipped: 0, missing: 0, total: 0 },
             thumbnails: { downloaded: 0, total: 0 },
             errors: [],
@@ -217,6 +218,24 @@ class LiveSyncService {
             }
         }
 
+        // Run all notes syncs in parallel
+        const notePromises = projects.map(project =>
+            FlowService.syncNotes(project.flowId, project.localId, { since })
+                .then(r => ({ project, result: r }))
+                .catch(err => ({ project, error: err }))
+        );
+        const noteResults = await Promise.all(notePromises);
+
+        for (const { project, result, error: err } of noteResults) {
+            if (err) {
+                results.errors.push(`notes/${project.name}: ${err.message}`);
+            } else {
+                results.notes.created += result.created || 0;
+                results.notes.updated += result.updated || 0;
+                results.notes.total += result.total || 0;
+            }
+        }
+
         // Version sync (new media discovery) is SKIPPED during delta refreshes.
         // It spawns 2 Python subprocesses per project and scans disk for files —
         // too slow for a quick status poll. Use the "Import Media from Flow"
@@ -249,7 +268,7 @@ class LiveSyncService {
         this._setSetting('flow_live_sync_last', now);
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`[LiveSync] Cycle complete in ${elapsed}s — shots:${results.shots.updated} tasks:${results.tasks.created}+${results.tasks.updated} versions:${results.versions.registered} thumbs:${results.thumbnails.downloaded} errors:${results.errors.length}`);
+        console.log(`[LiveSync] Cycle complete in ${elapsed}s \u2014 shots:${results.shots.updated} tasks:${results.tasks.created}+${results.tasks.updated} notes:${results.notes.created}+${results.notes.updated} versions:${results.versions.registered} thumbs:${results.thumbnails.downloaded} errors:${results.errors.length}`);
 
         _lastResult = { ...results, elapsed, timestamp: now };
         _running = false;

@@ -720,6 +720,157 @@ router.get('/overlay-info', (req, res) => {
 });
 
 
+// GET /api/assets/sg-notes-by-path — Fetch ShotGrid notes for the currently-viewed asset
+// Returns notes for the specific role/task, grouped by version (current + prior)
+// Used by RV plugin to show dailies review notes
+router.get('/sg-notes-by-path', (req, res) => {
+    const db = getDb();
+    const filePath = req.query.path;
+    const roleFilter = req.query.role; // optional: 'current' (default) or 'all'
+    if (!filePath) return res.status(400).json({ error: 'Provide ?path= parameter' });
+
+    // ── Step 1: Find asset by path (same pattern as overlay-info) ──
+    const variants = getAllPathVariants(filePath);
+    const stmt = db.prepare(`
+        SELECT a.id, a.vault_name, a.version, a.shot_id, a.role_id, a.project_id,
+               r.name AS role_name, r.code AS role_code,
+               sh.name AS shot_name, sh.code AS shot_code, sh.flow_id AS shot_flow_id,
+               p.name AS project_name, p.code AS project_code
+        FROM assets a
+        LEFT JOIN roles r ON a.role_id = r.id
+        LEFT JOIN shots sh ON a.shot_id = sh.id
+        LEFT JOIN projects p ON a.project_id = p.id
+        WHERE replace(a.file_path, '\\', '/') = ? COLLATE NOCASE
+        LIMIT 1
+    `);
+    let asset = null;
+    for (const variant of variants) {
+        asset = stmt.get(variant);
+        if (asset) break;
+    }
+    // Sequence fallback
+    if (!asset) {
+        const dirFwd = path.dirname(filePath).replace(/\\/g, '/');
+        const seqStmt = db.prepare(`
+            SELECT a.id, a.vault_name, a.version, a.shot_id, a.role_id, a.project_id,
+                   r.name AS role_name, r.code AS role_code,
+                   sh.name AS shot_name, sh.code AS shot_code, sh.flow_id AS shot_flow_id,
+                   p.name AS project_name, p.code AS project_code
+            FROM assets a
+            LEFT JOIN roles r ON a.role_id = r.id
+            LEFT JOIN shots sh ON a.shot_id = sh.id
+            LEFT JOIN projects p ON a.project_id = p.id
+            WHERE a.is_sequence = 1
+              AND replace(a.file_path, '\\', '/') LIKE ? COLLATE NOCASE
+            LIMIT 1
+        `);
+        for (const variant of getAllPathVariants(dirFwd + '/%')) {
+            asset = seqStmt.get(variant);
+            if (asset) break;
+        }
+    }
+    if (!asset) return res.status(404).json({ error: 'Asset not found in vault' });
+    if (!asset.shot_flow_id) return res.json({ found: true, notes: [], message: 'Shot has no ShotGrid link' });
+
+    // ── Step 2: Check if flow_notes table exists ──
+    const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='flow_notes'").get();
+    if (!tableCheck) return res.json({ found: true, notes: [], message: 'No ShotGrid notes synced yet' });
+
+    // ── Step 3: Query all notes linked to this shot ──
+    const shotFlowId = asset.shot_flow_id;
+    let allNotes = db.prepare(`
+        SELECT * FROM flow_notes
+        WHERE project_id = ?
+          AND linked_shots LIKE ?
+        ORDER BY sg_created_at DESC
+    `).all(asset.project_id, `%"id":${shotFlowId}%`);
+
+    // ── Step 4: Filter by role/task if requested (default = current role) ──
+    const roleName = (asset.role_name || asset.role_code || '').toLowerCase();
+    let currentRoleNotes = [];
+    let otherRoleNotes = [];
+
+    for (const note of allNotes) {
+        const tasks = JSON.parse(note.linked_tasks || '[]');
+        const taskNames = tasks.map(t => (t.name || '').toLowerCase());
+        // Match: task name starts with or equals the role name (comp matches comp, compB, etc.)
+        const matchesRole = taskNames.some(tn => tn === roleName || tn.startsWith(roleName));
+
+        if (matchesRole || taskNames.length === 0) {
+            currentRoleNotes.push(note);
+        } else {
+            otherRoleNotes.push(note);
+        }
+    }
+
+    // Use current role notes by default, or all if ?role=all
+    const notesToReturn = (roleFilter === 'all') ? allNotes : currentRoleNotes;
+
+    // ── Step 5: Group notes by version ──
+    // Match version name to note's linked_versions
+    const currentVersion = asset.version || 0;
+    const grouped = {};
+
+    for (const note of notesToReturn) {
+        const versions = JSON.parse(note.linked_versions || '[]');
+        const versionNames = versions.map(v => v.name || '');
+
+        // Extract version number from linked version names (e.g., "..._comp_v019" → 19)
+        let noteVersion = null;
+        for (const vn of versionNames) {
+            const m = vn.match(/[._]v(\d+)/i);
+            if (m) { noteVersion = parseInt(m[1], 10); break; }
+        }
+        const vKey = noteVersion != null ? noteVersion : 'unversioned';
+
+        if (!grouped[vKey]) {
+            grouped[vKey] = {
+                version: noteVersion,
+                version_label: noteVersion != null ? `v${String(noteVersion).padStart(3, '0')}` : 'General',
+                is_current: noteVersion === currentVersion,
+                notes: []
+            };
+        }
+        grouped[vKey].notes.push({
+            id: note.id,
+            flow_id: note.flow_id,
+            subject: note.subject,
+            content: note.content,
+            status: note.status,
+            note_type: note.note_type,
+            author_name: note.author_name,
+            linked_versions: versionNames,
+            linked_tasks: JSON.parse(note.linked_tasks || '[]'),
+            reply_count: note.reply_count,
+            created_at: note.sg_created_at,
+        });
+    }
+
+    // Sort groups: current version first, then descending version number
+    const sortedGroups = Object.values(grouped).sort((a, b) => {
+        if (a.is_current && !b.is_current) return -1;
+        if (!a.is_current && b.is_current) return 1;
+        if (a.version == null) return 1;
+        if (b.version == null) return -1;
+        return b.version - a.version;
+    });
+
+    res.json({
+        found: true,
+        asset_id: asset.id,
+        vault_name: asset.vault_name,
+        version: currentVersion,
+        shot_name: asset.shot_name || asset.shot_code,
+        role_name: asset.role_name || asset.role_code || 'Unknown',
+        project_name: asset.project_name,
+        total_notes: notesToReturn.length,
+        total_all_roles: allNotes.length,
+        other_role_count: otherRoleNotes.length,
+        groups: sortedGroups,
+    });
+});
+
+
 // GET /api/assets/:id — Single asset with full details
 router.get('/:id', (req, res) => {
     const db = getDb();

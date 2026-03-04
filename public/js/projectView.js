@@ -276,6 +276,26 @@ async function showEditProjectModal(projectId) {
             </div>
         </div>
 
+        <div class="ep-section" id="epEdlSection">
+            <div class="ep-section-hdr">
+                <span>EDL / Minicut</span>
+            </div>
+            <p style="color:var(--text-dim);font-size:.78rem;margin-bottom:10px;">
+                Upload a CMX3600 EDL for minicut playback. Right-click any shot and choose "Play Minicut" to view it in editorial context.
+            </p>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+                <input type="file" id="edlFileInput" accept=".edl,.txt" style="flex:1;min-width:120px;font-size:.8rem;">
+                <label style="font-size:.78rem;color:var(--text-dim);">FPS:</label>
+                <input type="number" id="edlFps" value="24" min="1" max="120" step="0.001"
+                       style="width:55px;padding:3px 5px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.8rem;">
+                <button class="btn-sm" onclick="uploadEdl()" style="font-size:.78rem;">Upload</button>
+            </div>
+            <div id="edlListContainer" style="min-height:40px;">
+                <div style="color:var(--text-dim);text-align:center;padding:12px;font-size:.8rem;">Loading...</div>
+            </div>
+            <div id="edlEntryContainer" style="display:none;margin-top:12px;"></div>
+        </div>
+
         <div class="ep-section" id="epTeamAccessSection" style="display:none;">
             <div class="ep-section-hdr">
                 <span> Hide from Users</span>
@@ -415,6 +435,11 @@ async function showEditProjectModal(projectId) {
     }
 
     _loadOverlayPresets();
+
+    // ── EDL / Minicut ──
+    if (typeof window._loadEdlList === 'function') {
+        window._loadEdlList(proj.id);
+    }
 
     document.getElementById('epAddOverlayBtn').addEventListener('click', () => {
         showOverlayEditor(null, null, () => _loadOverlayPresets(), {
