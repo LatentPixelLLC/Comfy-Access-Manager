@@ -1751,6 +1751,53 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             print("[MediaVault] _loadAsCompare error: %s" % e)
             rve.displayFeedback("Error: %s" % e, 5.0)
 
+    def _getActiveSourceGroup(self):
+        """Return the RVSourceGroup the playhead is currently on.
+
+        In A/B compare (sequence mode) there are multiple source groups.
+        This figures out which one the user is actually viewing so that
+        Switch replaces the right clip instead of always [0].
+
+        Falls back to sourceGroups[0] if detection fails.
+        """
+        sourceGroups = rvc.nodesOfType("RVSourceGroup")
+        if not sourceGroups:
+            return None
+        if len(sourceGroups) == 1:
+            return sourceGroups[0]
+
+        try:
+            frame = rvc.frame()
+
+            # Check viewNode first — PageUp/Down sets it to a source group
+            try:
+                vn = rvc.viewNode()
+                if vn and rvc.nodeType(vn) == "RVSourceGroup":
+                    return vn
+            except Exception:
+                pass
+
+            # In sequence mode, use sourcesAtFrame to find the active source
+            try:
+                saf = rvc.sourcesAtFrame(frame)
+                if saf:
+                    src = saf[-1]
+                    if isinstance(src, (list, tuple)):
+                        src = src[0]
+                    # Source node names look like "sourceGroup000001_source"
+                    # — match to its parent RVSourceGroup
+                    for sg in sourceGroups:
+                        if src.startswith(sg):
+                            return sg
+            except Exception:
+                pass
+
+        except Exception as e:
+            print("[MediaVault] _getActiveSourceGroup error: %s" % e)
+
+        # Fallback — first group
+        return sourceGroups[0]
+
     def _switchTo(self, filepath):
         """Replace the current source with filepath."""
         is_seq_notation = '#' in filepath
@@ -1758,13 +1805,14 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             rve.displayFeedback("File not found: %s" % os.path.basename(filepath), 4.0)
             return
         try:
-            # Find the RVFileSource node inside the first source group
-            sourceGroups = rvc.nodesOfType("RVSourceGroup")
-            if not sourceGroups:
+            # Find the RVFileSource node inside the ACTIVE source group
+            # (the one the playhead is on), not always [0].
+            active_sg = self._getActiveSourceGroup()
+            if not active_sg:
                 rve.displayFeedback("No source to replace", 3.0)
                 return
             file_source = None
-            for node in rvc.nodesInGroup(sourceGroups[0]):
+            for node in rvc.nodesInGroup(active_sg):
                 if rvc.nodeType(node) == "RVFileSource":
                     file_source = node
                     break
@@ -1777,7 +1825,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # Stripping ALL groups was a bug — it blanked other sources
             # (e.g., during A/B compare, switching one side would wipe
             # the other because its media path != intended_path).
-            self._stripAutoAudio(sourceGroups[0], filepath)
+            self._stripAutoAudio(active_sg, filepath)
 
             # Invalidate cache since we changed the source
             self._cached_data = None
