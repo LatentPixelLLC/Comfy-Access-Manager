@@ -204,7 +204,7 @@ async function showContextMenu(event, assetIdx) {
         // Only admins can remove from DB or delete from disk
         if (isAdmin) {
             // Check if ALL selected assets are registered-in-place (is_linked)
-            const allLinked = selectedIds.every(id => {
+            const allLinked = state.selectedAssets.every(id => {
                 const a = state.assets.find(a => a.id === id);
                 return a && a.is_linked;
             });
