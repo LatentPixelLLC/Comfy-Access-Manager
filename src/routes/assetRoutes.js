@@ -469,16 +469,20 @@ router.get('/compare-targets-by-path', (req, res) => {
     // Try all possible path variants (Mac path ↔ Windows path ↔ Linux path)
     const variants = getAllPathVariants(filePath);
     let asset = null;
+    // COLLATE NOCASE: Windows paths are case-insensitive; SQLite = is case-sensitive by default
     const stmt = db.prepare(`
         SELECT id, shot_id, sequence_id, project_id, role_id, vault_name
         FROM assets
-        WHERE replace(file_path, '\\', '/') = ?
+        WHERE replace(file_path, '\\', '/') = ? COLLATE NOCASE
     `);
     for (const variant of variants) {
         asset = stmt.get(variant);
         if (asset) break;
     }
-    if (!asset) return res.status(404).json({ error: 'Asset not found in vault' });
+    if (!asset) {
+        console.log('[compare-targets] Asset not found for path: %s (tried %d variants)', filePath, variants.length);
+        return res.status(404).json({ error: 'Asset not found in vault' });
+    }
 
     // Helper to group results by role — includes current asset marked with is_current
     function groupByRole(rows, currentId) {
@@ -582,6 +586,7 @@ router.get('/overlay-info', (req, res) => {
     if (!filePath) return res.status(400).json({ found: false, error: 'Provide ?path= parameter' });
 
     const variants = getAllPathVariants(filePath);
+    // COLLATE NOCASE: Windows paths are case-insensitive
     const stmt = db.prepare(`
         SELECT a.id, a.vault_name, a.original_name, a.version, a.file_ext,
                a.media_type, a.created_at, a.status,
@@ -594,7 +599,7 @@ router.get('/overlay-info', (req, res) => {
         LEFT JOIN projects p ON a.project_id = p.id
         LEFT JOIN sequences seq ON a.sequence_id = seq.id
         LEFT JOIN shots sh ON a.shot_id = sh.id
-        WHERE replace(a.file_path, '\\', '/') = ?
+        WHERE replace(a.file_path, '\\', '/') = ? COLLATE NOCASE
         LIMIT 1
     `);
 
