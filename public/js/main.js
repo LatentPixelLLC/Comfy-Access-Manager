@@ -372,7 +372,7 @@ async function updateFlowSyncStatus() {
             // Await tree rebuild first so DOM is settled before asset grid render
             if (_lastKnownSync && status.lastSync !== _lastKnownSync) {
                 await window.loadTree?.();
-                await window.loadProjectAssets?.(window.state?.currentProject?.id);
+                await window.loadProjectAssets?.(state.currentProject?.id);
             }
             _lastKnownSync = status.lastSync;
         } else {
@@ -413,7 +413,7 @@ async function triggerFlowSync() {
     try {
         // Only sync the project the user is currently viewing (fast: ~1s)
         const body = {};
-        const proj = window.state?.currentProject;
+        const proj = state.currentProject;
         if (proj?.id && proj?.flow_id) {
             body.localProjectId = proj.id;
         }
@@ -432,7 +432,7 @@ async function triggerFlowSync() {
             // Refresh the tree and grid to show new data
             // Await tree rebuild first so DOM is settled before asset grid render
             await window.loadTree?.();
-            await window.loadProjectAssets?.(window.state?.currentProject?.id);
+            await window.loadProjectAssets?.(state.currentProject?.id);
         }
     } catch (err) {
         window.showToast?.('Sync failed: ' + (err.message || 'Unknown error'), 5000);
