@@ -560,6 +560,34 @@ function runMigrations(wrapper) {
         }
         wrapper.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('purged_nonviewable', '1')").run();
     }
+
+    // ─── One-time fix: frame_pattern should be filename-only, not full path ───
+    // Flow sync (v1.7.8) stored full absolute paths in frame_pattern which broke
+    // RV sequence loading (only 1 frame loaded because the path doubled up).
+    const didFixPatterns = wrapper.prepare("SELECT value FROM settings WHERE key = 'fixed_frame_patterns'").get();
+    if (!didFixPatterns) {
+        const seqAssets = wrapper.prepare(
+            "SELECT id, frame_pattern FROM assets WHERE is_sequence = 1 AND frame_pattern IS NOT NULL"
+        ).all();
+        let fixed = 0;
+        const pathMod = require('path');
+        const updatePattern = wrapper.prepare('UPDATE assets SET frame_pattern = ? WHERE id = ?');
+        const fixTx = wrapper.transaction((rows) => {
+            for (const row of rows) {
+                // If pattern contains a directory separator, strip to filename only
+                const basename = pathMod.basename(row.frame_pattern);
+                if (basename !== row.frame_pattern) {
+                    updatePattern.run(basename, row.id);
+                    fixed++;
+                }
+            }
+        });
+        fixTx(seqAssets);
+        if (fixed > 0) {
+            console.log(`[DB] Fixed ${fixed} frame_pattern values (stripped directory prefix)`);
+        }
+        wrapper.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('fixed_frame_patterns', '1')").run();
+    }
 }
 
 // ─── Settings Helpers ───

@@ -784,9 +784,10 @@ class FlowService {
                                 flow_code: item.code,
                             });
 
-                            // frame_pattern: printf-style for FFmpeg/RV compatibility
+                            // frame_pattern: printf-style FILENAME only (no directory)
                             // e.g. "AL_049_GWH_0005_comp_v012.%04d.exr"
-                            const framePattern = path.join(dir, seq.ffmpegPattern);
+                            // rvFinder.js and reviewRoutes.js join this with path.dirname(file_path)
+                            const framePattern = seq.ffmpegPattern;
 
                             const result = insertSequenceAsset.run(
                                 localProjectId, sequenceId, shotId, roleId,
