@@ -121,10 +121,13 @@ async function showContextMenu(event, assetIdx) {
         html += `<div class="ctx-separator"></div>`;
     }
 
-    // Multi-asset actions (always available)
-    html += `<div class="ctx-item" data-action="move"> Move to Sequence${!isSingle ? ` (${count})` : ''}</div>`;
-    html += `<div class="ctx-item" data-action="role"> Set Role${!isSingle ? ` (${count})` : ''}</div>`;
-    html += `<div class="ctx-item" data-action="renameHierarchy"> Rename to Hierarchy${!isSingle ? ` (${count})` : ''}</div>`;
+    // Admin-only management actions
+    const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+    if (isAdmin) {
+        html += `<div class="ctx-item" data-action="move"> Move to Sequence${!isSingle ? ` (${count})` : ''}</div>`;
+        html += `<div class="ctx-item" data-action="role"> Set Role${!isSingle ? ` (${count})` : ''}</div>`;
+        html += `<div class="ctx-item" data-action="renameHierarchy"> Rename to Hierarchy${!isSingle ? ` (${count})` : ''}</div>`;
+    }
     html += `<div class="ctx-item" data-action="export"> Export${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="addToCrate"> Add to Crate${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="sendResolve"> Send to Resolve${!isSingle ? ` (${count})` : ''}</div>`;
@@ -177,11 +180,10 @@ async function showContextMenu(event, assetIdx) {
 
     // Hide destructive actions when inside a crate (user wants Remove, not Delete)
     if (!window.getActiveCrateId?.()) {
-        html += `<div class="ctx-separator"></div>`;
-        html += `<div class="ctx-item" data-action="removeDb"> Remove from DB${!isSingle ? ` (${count})` : ''}</div>`;
-        // Only admins can delete files from disk
-        const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+        // Only admins can remove from DB or delete from disk
         if (isAdmin) {
+            html += `<div class="ctx-separator"></div>`;
+            html += `<div class="ctx-item" data-action="removeDb"> Remove from DB${!isSingle ? ` (${count})` : ''}</div>`;
             html += `<div class="ctx-item ctx-danger" data-action="delete"> Delete files from disk${!isSingle ? ` (${count})` : ''}</div>`;
         }
     }

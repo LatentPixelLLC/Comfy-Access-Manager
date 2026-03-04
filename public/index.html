@@ -270,13 +270,13 @@ Import from Resolve</button>
                     <span id="selectionCount">0 selected</span>
                     <button class="btn-small" onclick="selectAllAssets()" title="Select all visible assets">Select All</button>
                     <button class="btn-small" onclick="clearAssetSelection()" title="Clear selection">Deselect All</button>
-                    <button class="btn-small btn-accent" onclick="showMoveToSequenceModal()" title="Move selected assets to a different sequence/shot">Move to Sequence</button>
-                    <button class="btn-small btn-role" onclick="showAssignRoleModal()" title="Assign a pipeline role (Comp, Light, Anim, etc.) to selected assets">Set Role</button>
+                    <button id="btnMoveToSeq" class="btn-small btn-accent" onclick="showMoveToSequenceModal()" title="Move selected assets to a different sequence/shot" style="display:none">Move to Sequence</button>
+                    <button id="btnSetRole" class="btn-small btn-role" onclick="showAssignRoleModal()" title="Assign a pipeline role (Comp, Light, Anim, etc.) to selected assets" style="display:none">Set Role</button>
                     <button class="btn-small btn-export" onclick="showExportModal()" title="Transcode/export selected assets via FFmpeg (GPU-accelerated)">Export</button>
                     <button class="btn-small" onclick="sendSelectedToRV('set')" title="Send selected clips to RV (replaces current media). If RV is running, clips load instantly without restarting." style="background:#334">Send to RV</button>
                     <button class="btn-small" onclick="sendSelectedToRV('merge')" title="Add selected clips to the running RV session (keeps existing sources)" style="background:#334">Add to RV</button>
                     <button class="btn-small" onclick="startSyncReviewFromSelection()" title="Start a synchronized RV review session that others can join" style="background:#2a4a3e"> Sync Review</button>
-                    <button class="btn-small" onclick="bulkDeleteAssets(true)" title="Remove from database only — files stay on disk">Remove from DB</button>
+                    <button id="btnRemoveFromDb" class="btn-small" onclick="bulkDeleteAssets(true)" title="Remove from database only — files stay on disk" style="display:none">Remove from DB</button>
                     <button id="btnDeleteFromDisk" class="btn-small btn-danger" onclick="bulkDeleteAssets()" title="Delete from database AND remove files from disk — cannot be undone" style="display:none">Delete from Disk</button>
                 </div>
               </div><!-- /.project-sticky-header -->

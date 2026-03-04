@@ -655,11 +655,12 @@ function updateSelectionToolbar() {
     document.getElementById('selectionCount').textContent =
         `${count} selected (${formatSize(state.assets.filter(a => state.selectedAssets.includes(a.id)).reduce((s, a) => s + (a.file_size || 0), 0))})`;
 
-    // Only show "Delete from Disk" button for admin users
-    const diskBtn = document.getElementById('btnDeleteFromDisk');
-    if (diskBtn) {
-        const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
-        diskBtn.style.display = isAdmin ? '' : 'none';
+    // Only show admin-only buttons for admin users
+    const isAdmin = state.currentUser?.is_admin || localStorage.getItem('cam_user_is_admin') === '1';
+    const adminBtns = ['btnMoveToSeq', 'btnSetRole', 'btnRemoveFromDb', 'btnDeleteFromDisk'];
+    for (const id of adminBtns) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = isAdmin ? '' : 'none';
     }
 }
 
