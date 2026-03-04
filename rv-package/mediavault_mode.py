@@ -753,15 +753,8 @@ class AssetPickerDialog(QDialog):
 
     def _applyFilters(self, _=None):
         """Re-filter table based on role checkboxes and tree selection."""
-        # Role filter
-        active_roles = set()
-        for rid, cb in self._role_checks.items():
-            if cb.isChecked():
-                active_roles.add(rid)
-
-        filtered = [a for a in self._all_assets if (a.get("_role_id") or 0) in active_roles]
-
-        # Tree filter (if a specific node is selected below project root)
+        # ── Step 1: determine tree scope ─────────────────────────
+        tree_scoped = list(self._all_assets)
         tree_item = self._tree.currentItem()
         if tree_item:
             meta = tree_item.data(0, Qt.UserRole) or {}
@@ -769,16 +762,31 @@ class AssetPickerDialog(QDialog):
 
             if level == "shot":
                 shot_name = tree_item.text(0)
-                filtered = [a for a in filtered if a.get("shot_name") == shot_name or
-                           (not a.get("shot_name") and self._data.get("scope") == "shot")]
+                tree_scoped = [a for a in tree_scoped if a.get("shot_name") == shot_name or
+                              (not a.get("shot_name") and self._data.get("scope") == "shot")]
             elif level == "sequence":
-                # Collect child shot names
                 child_shots = set()
                 for i in range(tree_item.childCount()):
                     child_shots.add(tree_item.child(i).text(0))
                 if child_shots:
-                    filtered = [a for a in filtered if a.get("shot_name") in child_shots or not a.get("shot_name")]
-            # "project" or "all" level = show everything (no additional filter)
+                    tree_scoped = [a for a in tree_scoped if a.get("shot_name") in child_shots or not a.get("shot_name")]
+            # "project" or "all" level = no narrowing
+
+        # ── Step 2: update role checkbox visibility ──────────────
+        # Hide roles that have zero assets in the current tree scope
+        roles_in_scope = set()
+        for a in tree_scoped:
+            roles_in_scope.add(a.get("_role_id") or 0)
+        for rid, cb in self._role_checks.items():
+            cb.setVisible(rid in roles_in_scope)
+
+        # ── Step 3: apply role filter ────────────────────────────
+        active_roles = set()
+        for rid, cb in self._role_checks.items():
+            if cb.isChecked() and cb.isVisible():
+                active_roles.add(rid)
+
+        filtered = [a for a in tree_scoped if (a.get("_role_id") or 0) in active_roles]
 
         self._populateTable(filtered)
 
@@ -1538,7 +1546,6 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             roles: [{ id, name, code, icon,
                        assets: [{ id, vault_name, version, file_ext, file_path,
                                   created_at, shot_name, seq_name, is_current }] }],
-            allRoles: [...],
             hierarchy: { id, name, code, sequences: [...] }
         }
         Falls back: shot -> sequence -> project if no siblings at narrower scope.

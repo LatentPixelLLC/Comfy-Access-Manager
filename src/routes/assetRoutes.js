@@ -524,8 +524,6 @@ router.get('/compare-targets-by-path', (req, res) => {
         };
     }
 
-    // All roles for filter panel
-    const allRoles = db.prepare('SELECT id, name, code, icon, color FROM roles ORDER BY sort_order, name').all();
     const hierarchy = asset.project_id ? buildHierarchy(asset.project_id) : null;
 
     const baseCols = `a.id, a.vault_name, a.version, a.file_ext, a.media_type, a.file_size, a.file_path, a.created_at,
@@ -542,7 +540,7 @@ router.get('/compare-targets-by-path', (req, res) => {
             ${baseOrder}
         `).all(asset.shot_id, asset.project_id);
         if (siblings.length > 0) {
-            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'shot', roles: groupByRole(siblings, asset.id), allRoles, hierarchy });
+            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'shot', roles: groupByRole(siblings, asset.id), hierarchy });
         }
     }
 
@@ -555,7 +553,7 @@ router.get('/compare-targets-by-path', (req, res) => {
             ${baseOrder}
         `).all(asset.sequence_id, asset.project_id);
         if (seqSiblings.length > 0) {
-            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'sequence', roles: groupByRole(seqSiblings, asset.id), allRoles, hierarchy });
+            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'sequence', roles: groupByRole(seqSiblings, asset.id), hierarchy });
         }
     }
 
@@ -569,7 +567,7 @@ router.get('/compare-targets-by-path', (req, res) => {
             ${baseOrder}
         `).all(asset.project_id);
         if (projSiblings.length > 0) {
-            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'project', roles: groupByRole(projSiblings, asset.id), allRoles, hierarchy });
+            return res.json({ asset: { id: asset.id, vault_name: asset.vault_name }, scope: 'project', roles: groupByRole(projSiblings, asset.id), hierarchy });
         }
     }
 
