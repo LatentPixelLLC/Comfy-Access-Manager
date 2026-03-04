@@ -2425,7 +2425,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 }
             """)
 
-            # Sort roles by name, skip the current role's entry
+            # Sort roles by name
             sorted_roles = sorted(roles, key=lambda r: (r.get("name") or "").lower())
             for role in sorted_roles:
                 role_name = role.get("name", "Unassigned")
@@ -2440,45 +2440,94 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     reverse=True
                 )
 
+                # Filter to assets that actually exist on disk
+                available = []
+                for a in sorted_assets:
+                    fp = a.get("file_path", "")
+                    if fp and os.path.exists(fp):
+                        available.append(a)
+                    elif not fp:
+                        continue
+
                 # Skip role if it only contains the current file for 'switch'
                 if role_id == current_role_id and mode == "switch":
-                    non_current = [a for a in sorted_assets if not a.get("is_current")]
+                    non_current = [a for a in available if not a.get("is_current")]
                     if not non_current:
-                        continue  # nothing else in this role to switch to
+                        continue
 
-                # Pick the latest asset that isn't the current file
-                target = None
-                for a in sorted_assets:
-                    if not a.get("is_current"):
-                        fp = a.get("file_path", "")
-                        if fp and os.path.exists(fp):
-                            target = a
-                            break
-                # If every asset is 'current' (single-version role in compare)
-                # use the first asset anyway for compare mode
-                if not target and mode == "compare" and sorted_assets:
-                    fp = sorted_assets[0].get("file_path", "")
-                    if fp and os.path.exists(fp):
-                        target = sorted_assets[0]
-
-                if not target:
+                if not available:
                     continue
 
-                # Build label: role name + version count hint
-                count = len(sorted_assets)
-                label = role_name
-                if count > 1:
-                    label += "  (%d versions)" % count
+                # Determine the extension of the currently loaded source
+                current_ext = ""
+                if filepath:
+                    _, current_ext = os.path.splitext(filepath)
+                    current_ext = current_ext.lower()
 
-                # Bold the current role
-                action = menu.addAction(label)
+                # --- Single version: flat action (no submenu needed) ---
+                if len(available) == 1:
+                    a = available[0]
+                    ver = self._extract_version(a.get("vault_name", ""))
+                    label = "%s  v%03d" % (role_name, ver) if ver else role_name
+                    action = menu.addAction(label)
+                    if role_id == current_role_id:
+                        font = action.font()
+                        font.setBold(True)
+                        action.setFont(font)
+                    if a.get("is_current"):
+                        action.setEnabled(mode != "switch")
+                    action.setData(self._assetToRvPath(a))
+                    continue
+
+                # --- Multiple versions: role becomes a submenu ---
+                sub = QMenu(role_name, menu)
+                sub.setStyleSheet(menu.styleSheet())
+
+                # Group by media type: prefer same ext as current source
+                same_type = [a for a in available
+                             if current_ext and
+                             (a.get("file_ext") or os.path.splitext(a.get("file_path", ""))[1]).lower().lstrip(".") == current_ext.lstrip(".")]
+                other_type = [a for a in available if a not in same_type]
+
+                # Show same-type versions first, then separator + others
+                groups = []
+                if same_type:
+                    groups.append(same_type)
+                if other_type:
+                    groups.append(other_type)
+
+                for gi, group in enumerate(groups):
+                    if gi > 0:
+                        sub.addSeparator()
+                    for a in group:
+                        ver = self._extract_version(a.get("vault_name", ""))
+                        ext = (a.get("file_ext") or os.path.splitext(a.get("file_path", ""))[1] or "").lstrip(".")
+                        # Build version label: "v003 (.exr)" or "v003 (.mov) *"
+                        vlabel = "v%03d" % ver if ver else a.get("vault_name", "unknown")
+                        if ext:
+                            vlabel += "  .%s" % ext
+                        if a.get("is_current"):
+                            vlabel += "  [current]"
+
+                        v_action = sub.addAction(vlabel)
+                        v_action.setData(self._assetToRvPath(a))
+
+                        # Disable clicking the currently loaded version in switch mode
+                        if a.get("is_current") and mode == "switch":
+                            v_action.setEnabled(False)
+
+                        # Bold the current version
+                        if a.get("is_current"):
+                            font = v_action.font()
+                            font.setBold(True)
+                            v_action.setFont(font)
+
+                # Bold the role submenu title if it's the current role
+                role_action = menu.addMenu(sub)
                 if role_id == current_role_id:
-                    font = action.font()
+                    font = role_action.font()
                     font.setBold(True)
-                    action.setFont(font)
-
-                # Store RV-loadable path (handles sequences with frame notation)
-                action.setData(self._assetToRvPath(target))
+                    role_action.setFont(font)
 
             if menu.isEmpty():
                 rve.displayFeedback("No roles with available files", 3.0)
