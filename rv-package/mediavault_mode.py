@@ -4811,6 +4811,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         # share the same cached preset instead of re-fetching on every
         # frame change.
         def _overlay_dir_key(p):
+            if not p:
+                return None
             return self._normKey(os.path.dirname(p))
 
         if (not force
