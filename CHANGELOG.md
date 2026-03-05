@@ -2,6 +2,14 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.9.3] - 2026-03-04
+
+### Fixed — RV OCIO: Single ocioUpdateConfig After All Properties Set
+- **Root Cause** — `ocioUpdateConfig()` validates ALL node properties regardless of `active` state. Calling it after setting only `ocio.config` (but before `outColorSpace`/`inColorSpace`) produced `empty destination color space` and `Cannot find source color space 'ACEScg'` errors.
+- **Fix** — Removed intermediate `ocioUpdateConfig()` calls. All properties (`config`, `function`, `inColorSpace`, `outColorSpace`, `look`, `display`, `view`) are now set while the node is disabled, then `ocioUpdateConfig` is called exactly **once** at the end when everything is populated.
+- Applied to both `OCIOLook` and `OCIODisplay` nodes.
+- Note: `ERROR: OCIO environment variable not set` is a harmless RV startup warning that appears when no global `$OCIO` env var is set — it does not affect per-node configs.
+
 ## [1.9.2] - 2026-03-04
 
 ### Fixed — RV OCIO Setup Ordering (Eliminates Transient Errors)
