@@ -148,14 +148,19 @@ class FlowService {
                 ).run(proj.name, proj.description, proj.flow_id);
                 updated++;
             } else {
+                // Check if a local project already exists by code OR name
                 const byCode = db.prepare(
                     'SELECT id FROM projects WHERE code = ?'
                 ).get(proj.code);
+                const byName = !byCode ? db.prepare(
+                    'SELECT id FROM projects WHERE name = ?'
+                ).get(proj.name) : null;
 
-                if (byCode) {
+                const match = byCode || byName;
+                if (match) {
                     db.prepare(
-                        "UPDATE projects SET flow_id = ?, description = ?, updated_at = datetime('now') WHERE id = ?"
-                    ).run(proj.flow_id, proj.description, byCode.id);
+                        "UPDATE projects SET flow_id = ?, name = ?, code = ?, description = ?, updated_at = datetime('now') WHERE id = ?"
+                    ).run(proj.flow_id, proj.name, proj.code, proj.description, match.id);
                     updated++;
                 } else {
                     db.prepare(
@@ -185,14 +190,19 @@ class FlowService {
                 ).run(seq.name, seq.code, seq.description, existing.id);
                 updated++;
             } else {
+                // Check if a local sequence already exists by code OR name within the same project
                 const byCode = db.prepare(
                     'SELECT id FROM sequences WHERE code = ? AND project_id = ?'
                 ).get(seq.code, localProjectId);
+                const byName = !byCode ? db.prepare(
+                    'SELECT id FROM sequences WHERE name = ? AND project_id = ?'
+                ).get(seq.name, localProjectId) : null;
 
-                if (byCode) {
+                const match = byCode || byName;
+                if (match) {
                     db.prepare(
-                        'UPDATE sequences SET flow_id = ?, description = ? WHERE id = ?'
-                    ).run(seq.flow_id, seq.description, byCode.id);
+                        'UPDATE sequences SET flow_id = ?, name = ?, code = ?, description = ? WHERE id = ?'
+                    ).run(seq.flow_id, seq.name, seq.code, seq.description, match.id);
                     updated++;
                 } else {
                     db.prepare(
@@ -232,14 +242,19 @@ class FlowService {
                 ).run(shot.name, shot.code, shot.description, localSeqId, shot.status || null, existing.id);
                 updated++;
             } else {
+                // Check if a local shot already exists by code OR name within the same project
                 const byCode = db.prepare(
                     'SELECT id FROM shots WHERE code = ? AND project_id = ?'
                 ).get(shot.code, localProjectId);
+                const byName = !byCode ? db.prepare(
+                    'SELECT id FROM shots WHERE name = ? AND project_id = ? AND sequence_id = ?'
+                ).get(shot.name, localProjectId, localSeqId) : null;
 
-                if (byCode) {
+                const match = byCode || byName;
+                if (match) {
                     db.prepare(
-                        'UPDATE shots SET flow_id = ?, description = ?, sequence_id = ?, flow_status = ? WHERE id = ?'
-                    ).run(shot.flow_id, shot.description, localSeqId, shot.status || null, byCode.id);
+                        'UPDATE shots SET flow_id = ?, name = ?, code = ?, description = ?, sequence_id = ?, flow_status = ? WHERE id = ?'
+                    ).run(shot.flow_id, shot.name, shot.code, shot.description, localSeqId, shot.status || null, match.id);
                     updated++;
                 } else {
                     if (!localSeqId) continue;
