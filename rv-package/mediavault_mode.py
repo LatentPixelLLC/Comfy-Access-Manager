@@ -29,10 +29,14 @@ except ImportError:
 
 # ─── OpenGL for overlay rendering ─────────────────────────────
 _HAS_GL = False
-_HAS_GL_SHADERS = False         # True once we have working glUseProgram + glGetIntegerv
-_glUseProgram = None            # ctypes or PyOpenGL function
-_glGetIntegerv_ct = None        # ctypes glGetIntegerv (PyOpenGL's wrapper is broken in RV)
-_GL_CURRENT_PROGRAM = 0x8B8D    # GL 2.0 enum constant
+_HAS_GL_SHADERS = False         # True once we have working glUseProgram/glGetIntegerv/glBindFramebuffer
+_glUseProgram = None            # ctypes function — PyOpenGL's wrapper is broken in RV
+_glBindFramebuffer = None       # ctypes function — needed to draw to screen when OCIO uses FBOs
+_glGetIntegerv_ct = None        # ctypes glGetIntegerv (PyOpenGL returns scalar, not array)
+_GL_CURRENT_PROGRAM = 0x8B8D   # GL 2.0 enum
+_GL_FRAMEBUFFER_BINDING = 0x8CA6  # GL 3.0 / ARB_framebuffer_object
+_GL_FRAMEBUFFER = 0x8D40        # target for glBindFramebuffer
+_GL_VIEWPORT = 0x0BA2           # glGetIntegerv query
 try:
     from OpenGL.GL import (
         glMatrixMode, glPushMatrix, glPopMatrix, glLoadIdentity,
@@ -4890,7 +4894,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     def render(self, event):
         """Called every frame by RV (auto-bound by MinorMode name convention).
         Draw overlay when enabled."""
-        global _HAS_GL_SHADERS, _glUseProgram, _glGetIntegerv_ct
+        global _HAS_GL_SHADERS, _glUseProgram, _glGetIntegerv_ct, _glBindFramebuffer
 
         # Apply pending LUT on main thread (deferred from source-load)
         if getattr(self, '_lut_pending', False):
@@ -4917,22 +4921,28 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     _wglGPA.restype = _ct.c_void_p
                     _wglGPA.argtypes = [_ct.c_char_p]
 
-                    # glUseProgram(GLuint program)
+                    # glUseProgram(GLuint program)  — GL 2.0 extension
                     _addr_use = _wglGPA(b"glUseProgram")
+                    # glBindFramebuffer(GLenum target, GLuint fb)  — GL 3.0 extension
+                    _addr_bind_fb = _wglGPA(b"glBindFramebuffer")
                     # glGetIntegerv — GL 1.0, always in opengl32.dll
                     _fn_getiv = _ogl32.glGetIntegerv
                     _fn_getiv.restype = None
                     _fn_getiv.argtypes = [_ct.c_uint, _ct.POINTER(_ct.c_int)]
 
                     print("[OVERLAY-DIAG] wglGetProcAddress('glUseProgram') = %s" % _addr_use)
+                    print("[OVERLAY-DIAG] wglGetProcAddress('glBindFramebuffer') = %s" % _addr_bind_fb)
 
                     if _addr_use:
                         _glUseProgram = _ct.CFUNCTYPE(None, _ct.c_uint)(_addr_use)
                         _glGetIntegerv_ct = _fn_getiv
                         _HAS_GL_SHADERS = True
                         print("[OVERLAY-DIAG] ctypes GL2.0 functions resolved OK")
+                    if _addr_bind_fb:
+                        _glBindFramebuffer = _ct.CFUNCTYPE(None, _ct.c_uint, _ct.c_uint)(_addr_bind_fb)
+                        print("[OVERLAY-DIAG] glBindFramebuffer resolved OK")
                     else:
-                        print("[OVERLAY-DIAG] wglGetProcAddress returned NULL")
+                        print("[OVERLAY-DIAG] glBindFramebuffer NOT available")
                 except Exception as e:
                     print("[OVERLAY-DIAG] ctypes init failed: %s" % e)
                     import traceback; traceback.print_exc()
@@ -4967,33 +4977,47 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # ── Save ALL GL state ──
             glPushAttrib(GL_ALL_ATTRIB_BITS)
 
-            # ── Disable active OCIO shader via ctypes ──
+            # ── Query current FBO + shader state ──
             _prev_prog = 0
-            if _HAS_GL_SHADERS and _glUseProgram:
+            _prev_fbo = 0
+            if _glGetIntegerv_ct is not None:
+                import ctypes as _ct
+                _buf = _ct.c_int(0)
                 try:
-                    if _glGetIntegerv_ct is not None:
-                        # ctypes path (Windows) — call raw C API
-                        import ctypes as _ct
-                        _buf = _ct.c_int(0)
-                        _glGetIntegerv_ct(_GL_CURRENT_PROGRAM, _ct.byref(_buf))
-                        _prev_prog = _buf.value
-                    else:
-                        # PyOpenGL path (macOS/Linux)
-                        from OpenGL.GL import glGetIntegerv as _pygl_getiv
-                        _prev_prog = int(_pygl_getiv(_GL_CURRENT_PROGRAM))
-                    _glUseProgram(0)
-                    if _do_diag:
-                        print("[OVERLAY-DIAG] Frame %d: disabled shader %d -> 0" %
-                              (_diag_count, _prev_prog))
-                except Exception as e:
-                    if _do_diag:
-                        print("[OVERLAY-DIAG] Frame %d: shader disable error: %s" %
-                              (_diag_count, e))
-                    _prev_prog = 0
-            else:
+                    _glGetIntegerv_ct(_GL_FRAMEBUFFER_BINDING, _ct.byref(_buf))
+                    _prev_fbo = _buf.value
+                except Exception:
+                    pass
+                try:
+                    _buf2 = _ct.c_int(0)
+                    _glGetIntegerv_ct(_GL_CURRENT_PROGRAM, _ct.byref(_buf2))
+                    _prev_prog = _buf2.value
+                except Exception:
+                    pass
+
+            if _do_diag:
+                # Also query viewport for diagnostic
+                _vp = 'unknown'
+                if _glGetIntegerv_ct is not None:
+                    try:
+                        _vp_buf = (_ct.c_int * 4)()
+                        _glGetIntegerv_ct(_GL_VIEWPORT, _ct.cast(_vp_buf, _ct.POINTER(_ct.c_int)))
+                        _vp = '%d,%d,%d,%d' % (_vp_buf[0], _vp_buf[1], _vp_buf[2], _vp_buf[3])
+                    except Exception:
+                        pass
+                print("[OVERLAY-DIAG] Frame %d: FBO=%d  shader=%d  viewport=%s  domain=%dx%d" %
+                      (_diag_count, _prev_fbo, _prev_prog, _vp, w, h))
+
+            # ── Switch to default framebuffer (screen) if OCIO is using an FBO ──
+            if _prev_fbo != 0 and _glBindFramebuffer is not None:
+                _glBindFramebuffer(_GL_FRAMEBUFFER, 0)
                 if _do_diag:
-                    print("[OVERLAY-DIAG] Frame %d: no shader control (shaders=%s)" %
-                          (_diag_count, _HAS_GL_SHADERS))
+                    print("[OVERLAY-DIAG] Frame %d: switched FBO %d -> 0 (screen)" %
+                          (_diag_count, _prev_fbo))
+
+            # ── Disable active shader ──
+            if _HAS_GL_SHADERS and _glUseProgram and _prev_prog:
+                _glUseProgram(0)
 
             # ── Clean fixed-function state ──
             glDisable(GL_DEPTH_TEST)
@@ -5029,12 +5053,14 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             glPopMatrix()
             glMatrixMode(GL_MODELVIEW)
 
-            # ── Restore shader + GL state ──
+            # ── Restore shader + FBO + GL state ──
             if _HAS_GL_SHADERS and _glUseProgram and _prev_prog:
                 try:
                     _glUseProgram(_prev_prog)
                 except Exception:
                     pass
+            if _prev_fbo != 0 and _glBindFramebuffer is not None:
+                _glBindFramebuffer(_GL_FRAMEBUFFER, _prev_fbo)
 
             glPopAttrib()
 
