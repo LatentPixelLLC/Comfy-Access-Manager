@@ -4806,8 +4806,15 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             return
 
         # Already cached for this path (skip if force=True)
+        # For EXR frame sequences, normalize the cache key to the
+        # DIRECTORY so different frame numbers (0993.exr vs 0994.exr)
+        # share the same cached preset instead of re-fetching on every
+        # frame change.
+        def _overlay_dir_key(p):
+            return self._normKey(os.path.dirname(p))
+
         if (not force
-                and self._normKey(filepath) == self._normKey(self._cam_overlay_path)
+                and _overlay_dir_key(filepath) == _overlay_dir_key(self._cam_overlay_path)
                 and self._cam_overlay_data):
             if _VERBOSE:
                 print("[MediaVault] CAM Overlay fetch: using cache for %s" %
@@ -5283,15 +5290,16 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # Try Qt TrueType rendering first (anti-aliased, real fonts)
             qt_result = _render_text_qt(text, font_family, font_size_px,
                                         font_color_hex, font_opacity)
+            # Always compute bitmap scale so the FBO fallback renders
+            # the correct size even when Qt pre-render succeeds.
+            bmp_scale = max(1, int(round((font_size / 14.0) * vp_scale)))
             if qt_result:
                 qt_bytes, tw, th = qt_result
                 use_qt = True
-                scale = 1  # not used, but define for bg_padding
             else:
                 # Fall back to bitmap font
-                scale = max(1, int(round((font_size / 14.0) * vp_scale)))
-                char_w = _GLYPH_W * scale
-                char_h = _GLYPH_H * scale
+                char_w = _GLYPH_W * bmp_scale
+                char_h = _GLYPH_H * bmp_scale
                 tw = len(text) * char_w
                 th = char_h
                 use_qt = False
@@ -5335,18 +5343,32 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     glRasterPos2f(float(int(tx)), float(int(ty)))
                     glDrawPixels(tw, th, GL_RGBA, GL_UNSIGNED_BYTE, qt_bytes)
                 else:
-                    # Fall back to bitmap font inside FBO
+                    # Fall back to bitmap font inside FBO —
+                    # recalculate tw/th for bitmap sizing so the bounding
+                    # box lines up correctly.
+                    char_w = _GLYPH_W * bmp_scale
+                    char_h = _GLYPH_H * bmp_scale
+                    bmp_tw = len(text) * char_w
+                    bmp_th = char_h
+                    # Re-anchor with bitmap dimensions
+                    btx, bty = self._anchorToGL(anchor, w, h, bmp_tw, bmp_th,
+                                                bg_padding, ox, oy,
+                                                vp_scale=vp_scale)
+                    if bg_enabled:
+                        bbw = bmp_tw + bg_padding * 2
+                        bbh = bmp_th + bg_padding * 2
+                        self._box(btx - bg_padding, bty - bg_padding, bbw, bbh, bg_color)
                     glColor4f(*font_color)
-                    if scale <= 1:
-                        self._glText(int(tx), int(ty), text)
+                    if bmp_scale <= 1:
+                        self._glText(int(btx), int(bty), text)
                     else:
-                        self._glTextScaled(int(tx), int(ty), text, scale)
+                        self._glTextScaled(int(btx), int(bty), text, bmp_scale)
             else:
                 glColor4f(*font_color)
-                if scale <= 1:
+                if bmp_scale <= 1:
                     self._glText(int(tx), int(ty), text)
                 else:
-                    self._glTextScaled(int(tx), int(ty), text, scale)
+                    self._glTextScaled(int(tx), int(ty), text, bmp_scale)
 
     @staticmethod
     def _resolveOverlayText(etype, elem, hierarchy, frame_str):

@@ -389,8 +389,29 @@ router.get('/preset-for-path', (req, res) => {
         // --- Find asset by path (try all platform variants) ---
         const variants = getAllPathVariants(filePath);
         let asset = null;
+        const assetStmt = db.prepare(`
+            SELECT a.*, r.name AS role_name, r.code AS role_code,
+                   p.name AS project_name, p.code AS project_code,
+                   seq.name AS sequence_name, seq.code AS sequence_code,
+                   sh.name AS shot_name, sh.code AS shot_code
+            FROM assets a
+            LEFT JOIN roles r ON a.role_id = r.id
+            LEFT JOIN projects p ON a.project_id = p.id
+            LEFT JOIN sequences seq ON a.sequence_id = seq.id
+            LEFT JOIN shots sh ON a.shot_id = sh.id
+            WHERE replace(a.file_path, '\\', '/') = ? COLLATE NOCASE
+            LIMIT 1
+        `);
         for (const v of variants) {
-            asset = db.prepare(`
+            asset = assetStmt.get(v);
+            if (asset) break;
+        }
+
+        // Sequence fallback: RV returns current frame number but DB stores
+        // the first frame — match any file in the same directory with is_sequence=1
+        if (!asset) {
+            const dirFwd = path.dirname(filePath).replace(/\\/g, '/');
+            const seqStmt = db.prepare(`
                 SELECT a.*, r.name AS role_name, r.code AS role_code,
                        p.name AS project_name, p.code AS project_code,
                        seq.name AS sequence_name, seq.code AS sequence_code,
@@ -400,9 +421,14 @@ router.get('/preset-for-path', (req, res) => {
                 LEFT JOIN projects p ON a.project_id = p.id
                 LEFT JOIN sequences seq ON a.sequence_id = seq.id
                 LEFT JOIN shots sh ON a.shot_id = sh.id
-                WHERE a.file_path = ?
-            `).get(v);
-            if (asset) break;
+                WHERE a.is_sequence = 1
+                  AND replace(a.file_path, '\\', '/') LIKE ? COLLATE NOCASE
+                LIMIT 1
+            `);
+            for (const v of getAllPathVariants(dirFwd + '/%')) {
+                asset = seqStmt.get(v);
+                if (asset) break;
+            }
         }
 
         if (!asset) return res.json({ found: false });
