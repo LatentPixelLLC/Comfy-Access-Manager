@@ -4919,11 +4919,15 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         if not self._overlay_enabled or not _HAS_GL:
             return
 
+        # ── Frame counter for diagnostics ──
+        _diag_count = getattr(self, '_render_diag_count', 0)
+        self._render_diag_count = _diag_count + 1
+        _do_diag = (_diag_count < 10)  # log first 10 frames
+
         # ── Lazy init: resolve glUseProgram via ctypes on Windows ──
-        # PyOpenGL may not expose GL 2.0 functions.  wglGetProcAddress
-        # requires an active GL context, which exists here in render().
         if not _HAS_GL_SHADERS and not getattr(self, '_gl_ctypes_tried', False):
             self._gl_ctypes_tried = True
+            print("[OVERLAY-DIAG] Attempting ctypes glUseProgram (sys.platform=%s)" % sys.platform)
             if sys.platform == 'win32':
                 try:
                     import ctypes as _ct
@@ -4932,41 +4936,58 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     _wglGPA.restype = _ct.c_void_p
                     _wglGPA.argtypes = [_ct.c_char_p]
                     _addr = _wglGPA(b"glUseProgram")
+                    print("[OVERLAY-DIAG] wglGetProcAddress('glUseProgram') = %s" % _addr)
                     if _addr:
                         _glUseProgram = _ct.CFUNCTYPE(None, _ct.c_uint)(_addr)
                         _HAS_GL_SHADERS = True
-                        print("[MediaVault] glUseProgram resolved via ctypes/WGL")
+                        print("[OVERLAY-DIAG] glUseProgram resolved via ctypes OK")
                     else:
-                        print("[MediaVault] WARNING: wglGetProcAddress('glUseProgram') returned NULL")
+                        print("[OVERLAY-DIAG] wglGetProcAddress returned NULL!")
                 except Exception as e:
-                    print("[MediaVault] WARNING: ctypes glUseProgram failed: %s" % e)
+                    print("[OVERLAY-DIAG] ctypes failed: %s" % e)
+                    import traceback; traceback.print_exc()
 
-        # One-time diagnostic
-        if not hasattr(self, '_render_logged'):
-            self._render_logged = True
-            print("[MediaVault] First overlay render: HAS_GL_SHADERS=%s" % _HAS_GL_SHADERS)
+        if _do_diag and _diag_count == 0:
+            print("[OVERLAY-DIAG] === FIRST RENDER ===")
+            print("[OVERLAY-DIAG] _HAS_GL=%s  _HAS_GL_SHADERS=%s  _glUseProgram=%s" %
+                  (_HAS_GL, _HAS_GL_SHADERS, _glUseProgram))
+            print("[OVERLAY-DIAG] overlay_enabled=%s  show_metadata=%s  show_status=%s" %
+                  (self._overlay_enabled, self._show_metadata, self._show_status))
+            print("[OVERLAY-DIAG] overlay_meta=%s" % (self._overlay_meta is not None))
 
         try:
             domain = event.domain()
             w = int(domain[0])
             h = int(domain[1])
             if w < 100 or h < 100:
+                if _do_diag:
+                    print("[OVERLAY-DIAG] Frame %d: skipped (too small %dx%d)" % (_diag_count, w, h))
                 return
 
-            # ── Save ALL GL state (nuclear option) ──
-            # OCIO can leave shaders, textures, depth test, scissor,
-            # FBO bindings, etc. in arbitrary states.  glPushAttrib
-            # saves all fixed-function state.  We handle the shader
-            # program separately since push/pop doesn't cover GL 2.0+.
+            if _do_diag:
+                print("[OVERLAY-DIAG] Frame %d: size=%dx%d" % (_diag_count, w, h))
+
+            # ── Query current GL state before we touch anything ──
+            _prev_prog = 0
+            if _do_diag:
+                try:
+                    _cur_prog_raw = glGetIntegerv(_GL_CURRENT_PROGRAM)
+                    if hasattr(_cur_prog_raw, '__getitem__'):
+                        _cur_prog_val = int(_cur_prog_raw[0])
+                    elif _cur_prog_raw is not None:
+                        _cur_prog_val = int(_cur_prog_raw)
+                    else:
+                        _cur_prog_val = -1
+                    print("[OVERLAY-DIAG] Frame %d: GL_CURRENT_PROGRAM=%d  (raw=%s type=%s)" %
+                          (_diag_count, _cur_prog_val, _cur_prog_raw, type(_cur_prog_raw).__name__))
+                except Exception as e:
+                    print("[OVERLAY-DIAG] Frame %d: glGetIntegerv(CURRENT_PROGRAM) failed: %s" %
+                          (_diag_count, e))
+
+            # ── Save ALL GL state ──
             glPushAttrib(GL_ALL_ATTRIB_BITS)
 
-            # ── Disable active OCIO shader ──
-            # After OCIO renders a color-managed EXR, its GL shader
-            # stays bound.  Fixed-function calls (glColor4f, glBitmap)
-            # go through it and produce invisible output.  Save the
-            # active program, switch to fixed-function (0), draw
-            # overlays, then restore.
-            _prev_prog = 0
+            # ── Disable active shader ──
             if _HAS_GL_SHADERS and _glUseProgram:
                 try:
                     _result = glGetIntegerv(_GL_CURRENT_PROGRAM)
@@ -4974,16 +4995,17 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         _prev_prog = int(_result[0])
                     elif _result is not None:
                         _prev_prog = int(_result)
-                    if _prev_prog:
-                        if not hasattr(self, '_shader_diag_done'):
-                            self._shader_diag_done = True
-                            print("[MediaVault] Disabling active shader %d for overlay" % _prev_prog)
                     _glUseProgram(0)
+                    if _do_diag:
+                        print("[OVERLAY-DIAG] Frame %d: glUseProgram(0) called, was=%d" %
+                              (_diag_count, _prev_prog))
                 except Exception as e:
-                    if not hasattr(self, '_shader_err_logged'):
-                        self._shader_err_logged = True
-                        print("[MediaVault] glUseProgram error: %s" % e)
+                    print("[OVERLAY-DIAG] Frame %d: glUseProgram FAILED: %s" % (_diag_count, e))
                     _prev_prog = 0
+            else:
+                if _do_diag:
+                    print("[OVERLAY-DIAG] Frame %d: SKIPPING glUseProgram (shaders=%s fn=%s)" %
+                          (_diag_count, _HAS_GL_SHADERS, _glUseProgram))
 
             # ── Clean fixed-function state ──
             glDisable(GL_DEPTH_TEST)
@@ -5002,16 +5024,25 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
+            _drew = []
             if self._show_metadata:
                 self._drawMetadataBurnIn(w, h)
+                _drew.append('metadata')
             if self._show_status:
                 self._drawStatusStamp(w, h)
+                _drew.append('status')
             if self._show_watermark:
                 self._drawWatermarkText(w, h)
+                _drew.append('watermark')
             if self._show_cam_overlay:
                 self._drawCAMOverlay(w, h)
+                _drew.append('cam')
             if self._show_comfyui:
                 self._drawComfyUIOverlay(w, h)
+                _drew.append('comfyui')
+
+            if _do_diag:
+                print("[OVERLAY-DIAG] Frame %d: drew=[%s]" % (_diag_count, ','.join(_drew)))
 
             glDisable(GL_BLEND)
             glPopMatrix()
@@ -5026,12 +5057,11 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 except Exception:
                     pass
 
-            glPopAttrib()   # restore all fixed-function state
+            glPopAttrib()
 
         except Exception as e:
-            if not hasattr(self, '_render_err_logged'):
-                self._render_err_logged = True
-                print("[MediaVault] render() error: %s" % e)
+            print("[OVERLAY-DIAG] render() EXCEPTION on frame %d: %s" % (_diag_count, e))
+            import traceback; traceback.print_exc()
 
     # ── GL drawing helpers ───────────────────────────────────────
 
