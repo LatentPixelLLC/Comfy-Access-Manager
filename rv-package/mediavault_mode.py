@@ -3342,12 +3342,19 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         except Exception:
             return
 
+        print("[LUT-DIAG] === _applyProjectLUTs called ===")
+        print("[LUT-DIAG] Source groups found: %d" % len(source_groups))
+        print("[LUT-DIAG] Already processed: %s" % list(self._lut_applied_sgs))
+
         for sg in source_groups:
             if sg in self._lut_applied_sgs:
+                print("[LUT-DIAG] Skipping %s (already processed)" % sg)
                 continue
 
             filepath = self._pathFromSourceGroup(sg)
+            print("[LUT-DIAG] SG=%s  filepath=%s" % (sg, filepath))
             if not filepath:
+                print("[LUT-DIAG] No filepath for %s, skipping" % sg)
                 continue
 
             norm = self._normKey(filepath)
@@ -3355,21 +3362,25 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # Check cache first
             if norm not in self._lut_cache:
                 self._lut_cache[norm] = self._fetchLUTForPath(filepath)
+            else:
+                print("[LUT-DIAG] Using cached LUT info for %s" % norm)
 
             lut_info = self._lut_cache[norm]
             if not lut_info:
+                print("[LUT-DIAG] No LUT info returned for %s" % sg)
                 self._lut_applied_sgs.add(sg)
                 continue
 
             lut_path = lut_info.get("lut_path", "")
             download_url = lut_info.get("download_url")
             match_type = lut_info.get("match_type", "unknown")
-            if _VERBOSE:
-                print("[MediaVault] LUT match for %s: type=%s, path=%s"
-                      % (sg, match_type, lut_path))
+            print("[LUT-DIAG] LUT match for %s: type=%s, path=%s"
+                  % (sg, match_type, lut_path))
 
             # Try disk path first — resolve cross-platform if needed
             resolved = lut_path
+            print("[LUT-DIAG] Checking disk path: '%s'  exists=%s"
+                  % (resolved, os.path.isfile(resolved)))
             if not os.path.isfile(resolved):
                 # Try path swap (same env vars as RV network sync)
                 for i in range(20):
@@ -3383,20 +3394,25 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                             resolved.replace("\\", "/").lower().startswith(
                                 win_prefix.replace("\\", "/").lower()):
                         resolved = mac_prefix + resolved[len(win_prefix):]
+                        print("[LUT-DIAG] Path-swapped (win->mac): %s" % resolved)
                         break
                     elif sys.platform == "win32" and mac_prefix and \
                             resolved.startswith(mac_prefix):
                         resolved = win_prefix + resolved[len(mac_prefix):]
                         resolved = resolved.replace("/", "\\")
+                        print("[LUT-DIAG] Path-swapped (mac->win): %s" % resolved)
                         break
 
             # Fall back to downloading from the CAM server
             if not os.path.isfile(resolved) and download_url:
+                print("[LUT-DIAG] File not on disk, downloading from: %s%s"
+                      % (DMV_URL, download_url))
                 resolved = self._downloadLUT(download_url, lut_info)
+                print("[LUT-DIAG] Downloaded to: '%s'  exists=%s"
+                      % (resolved, os.path.isfile(resolved) if resolved else False))
 
             if not os.path.isfile(resolved):
-                if _VERBOSE:
-                    print("[MediaVault] LUT file not found: %s" % lut_path)
+                print("[LUT-DIAG] FAILED — LUT file not found anywhere: %s" % lut_path)
                 self._lut_applied_sgs.add(sg)
                 continue
 
@@ -3413,16 +3429,18 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         try:
             encoded = urllib.parse.quote(filepath, safe="")
             url = "%s/api/assets/lut-for-path?path=%s" % (DMV_URL, encoded)
+            print("[LUT-DIAG] Fetching LUT from: %s" % url)
             req = urllib.request.Request(url,
                                          headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
+            print("[LUT-DIAG] Server response: %s" % json.dumps(data, indent=2))
             if data.get("found"):
                 return data
+            print("[LUT-DIAG] Server said found=false, no LUT for this path")
             return None
         except Exception as e:
-            if _VERBOSE:
-                print("[MediaVault] LUT fetch failed: %s" % e)
+            print("[LUT-DIAG] LUT fetch FAILED: %s" % e)
             return None
 
     def _downloadLUT(self, download_url, lut_info):
@@ -3461,22 +3479,63 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # even on Windows for LUT file paths.
             norm_path = lut_file.replace("\\", "/")
 
-            for node in rvc.nodesInGroup(sg):
+            nodes_in_sg = rvc.nodesInGroup(sg)
+            print("[LUT-DIAG] _setLUTOnSourceGroup: sg=%s  file='%s'" % (sg, norm_path))
+            print("[LUT-DIAG]   nodes in group: %s" % [(n, rvc.nodeType(n)) for n in nodes_in_sg])
+
+            for node in nodes_in_sg:
                 ntype = rvc.nodeType(node)
                 if ntype == "RVLookLUT":
+                    # Check file exists one final time
+                    print("[LUT-DIAG]   Found RVLookLUT node: %s" % node)
+                    print("[LUT-DIAG]   File exists check: %s" % os.path.isfile(norm_path))
+                    # Also check with original backslash path on Windows
+                    if not os.path.isfile(norm_path) and os.path.isfile(lut_file):
+                        print("[LUT-DIAG]   Forward-slash path not found but backslash works")
+
+                    # Read first few bytes to verify file is non-empty
+                    try:
+                        fsize = os.path.getsize(lut_file)
+                        print("[LUT-DIAG]   LUT file size: %d bytes" % fsize)
+                    except Exception:
+                        print("[LUT-DIAG]   Could not stat LUT file")
+
+                    # Try current props before we set
+                    try:
+                        cur_file = rvc.getStringProperty(node + ".lut.file")
+                        cur_active = rvc.getIntProperty(node + ".lut.active")
+                        print("[LUT-DIAG]   BEFORE: .lut.file=%s  .lut.active=%s"
+                              % (cur_file, cur_active))
+                    except Exception:
+                        print("[LUT-DIAG]   (could not read current LUT props)")
+
                     # readLUT actually parses the .cube/.3dl/etc file and
                     # populates the LUT data in the pipeline.  Just setting
                     # .lut.file alone does NOT load the LUT data.
+                    print("[LUT-DIAG]   Calling rvc.readLUT('%s', '%s') ..." % (norm_path, node))
                     rvc.readLUT(norm_path, node)
+                    print("[LUT-DIAG]   readLUT returned OK")
+
                     rvc.setIntProperty(node + ".lut.active", [1], True)
-                    print("[MediaVault] Applied LUT '%s' to %s (%s)"
-                          % (lut_name, sg, os.path.basename(lut_file)))
+
+                    # Verify props after setting
+                    try:
+                        new_file = rvc.getStringProperty(node + ".lut.file")
+                        new_active = rvc.getIntProperty(node + ".lut.active")
+                        print("[LUT-DIAG]   AFTER: .lut.file=%s  .lut.active=%s"
+                              % (new_file, new_active))
+                    except Exception:
+                        pass
+
+                    print("[LUT-DIAG]   SUCCESS: Applied LUT '%s' to %s"
+                          % (lut_name, sg))
                     return
-            # If no RVLookLUT node found (shouldn't happen normally)
-            if _VERBOSE:
-                print("[MediaVault] No RVLookLUT node in %s" % sg)
+
+            print("[LUT-DIAG] WARNING: No RVLookLUT node found in %s" % sg)
         except Exception as e:
-            print("[MediaVault] Error setting LUT on %s: %s" % (sg, e))
+            import traceback
+            print("[LUT-DIAG] ERROR setting LUT on %s: %s" % (sg, e))
+            traceback.print_exc()
 
     def _setComfyUIPointersFromCache(self, hint_path=None):
         """Set _comfyui_path and _comfyui_meta from the cache.
