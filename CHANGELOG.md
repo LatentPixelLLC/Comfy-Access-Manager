@@ -2,6 +2,12 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.9.0] - 2026-03-04
+
+### Fixed — RV OCIO Node Initialization
+- **Critical Crash Fix** — Fixed `invalid property name ...ocio.config` error by manually creating missing OCIO properties (`ocio.config`, `ocio.function`, etc.) on `OCIOLook` and `OCIODisplay` nodes if they don't exist after swapping pipelines.
+- **Robustness** — Prevents crashes when standard RV OCIO packages are not fully initialized or when the environment variable `OCIO` is missing.
+
 ## [1.8.9] - 2026-03-04
 
 ### Fixed — RV Display Output Transform (ODT)

@@ -3699,6 +3699,22 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             print("[LUT] OCIOLook node: %s" % ocio_look)
 
             # Step 5: Set OCIO properties
+            # Ensure properties exist - if node was swapped in without OCIO
+            # setup, they may be missing.
+            for (prop, val_type) in (
+                ("ocio.active", rvc.IntType),
+                ("ocio.config", rvc.StringType),
+                ("ocio.function", rvc.StringType),
+                ("ocio.inColorSpace", rvc.StringType),
+                ("ocio_look.look", rvc.StringType),
+                ("ocio_look.direction", rvc.StringType),
+                ("ocio.outColorSpace", rvc.StringType)
+            ):
+                full_prop = ocio_look + "." + prop
+                if not rvc.propertyExists(full_prop):
+                    print("[LUT] Creating property: %s" % full_prop)
+                    rvc.newProperty(full_prop, val_type, 1)
+
             # Disable during property changes to prevent premature
             # shader rebuild while config/function/colorspace are
             # still being set.
@@ -3751,6 +3767,20 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                                 break
                     
                     if ocio_disp:
+                        # Ensure properties exist on OCIODisplay too
+                        for (prop, val_type) in (
+                            ("ocio.active", rvc.IntType),
+                            ("ocio.config", rvc.StringType),
+                            ("ocio.function", rvc.StringType),
+                            ("ocio.inColorSpace", rvc.StringType),
+                            ("ocio_display.display", rvc.StringType),
+                            ("ocio_display.view", rvc.StringType)
+                        ):
+                             full_prop = ocio_disp + "." + prop
+                             if not rvc.propertyExists(full_prop):
+                                 print("[LUT] Creating display property: %s" % full_prop)
+                                 rvc.newProperty(full_prop, val_type, 1)
+
                         # Use the same config so definitions match
                         rvc.setStringProperty(
                             ocio_disp + ".ocio.config", [config_path], True)
