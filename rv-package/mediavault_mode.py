@@ -3561,32 +3561,116 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         except Exception as e:
             print("[LUT-DIAG]   Could not enumerate: %s" % e)
 
-    # Domain max for ACEScct shaper — 16 covers ~7 stops above mid-gray
+    # Domain max for baked LUT — 16 covers ~7 stops above mid-gray
     _LUT_DOMAIN_MAX = 16.0
 
-    def _createShaperCubeFile(self, original_cube_path):
-        """Create a combined 1D+3D .cube file with ACEScct shaper.
+    @staticmethod
+    def _lin2acescct(x):
+        """Convert a single linear ACES value to ACEScct."""
+        import math
+        CUT = 0.0078125  # 2^-7
+        if x <= 0.0:
+            return 10.5402377416545 * 0.0 + 0.0729055341958355
+        elif x < CUT:
+            return 10.5402377416545 * x + 0.0729055341958355
+        else:
+            return (math.log2(x) + 9.72) / 17.52
 
-        The .cube format supports both LUT_1D_SIZE and LUT_3D_SIZE in one
-        file.  The 1D section acts as a shaper (prelut) applied before the
-        3D lookup.
+    @staticmethod
+    def _acescct2lin(y):
+        """Convert a single ACEScct value back to linear ACES.
 
-        Think of it like a funnel: the 1D part squishes the wide linear
-        range into the narrow 0-1 window, then the 3D cube does the grading.
-
-        Returns the path to the combined .cube file (cached in temp dir).
+        Inverse of _lin2acescct.  The grade LUT outputs ACEScct values,
+        so we need to convert back to linear for RV's display pipeline.
         """
-        import math, hashlib, tempfile
+        import math
+        CUT_OUT = 0.155251141552511  # lin2acescct(2^-7) = (2.72/17.52)
+        if y <= CUT_OUT:
+            return (y - 0.0729055341958355) / 10.5402377416545
+        else:
+            return math.pow(2.0, y * 17.52 - 9.72)
 
-        # Cache key based on original path
+    def _trilinearLookup(self, cube_data, size, r, g, b):
+        """Trilinear interpolation into a 3D LUT.
+
+        cube_data is a flat list of (r,g,b) tuples, indexed in standard
+        .cube order: R varies fastest, then G, then B.
+        r, g, b are in [0, 1] range.
+        """
+        # Clamp inputs
+        r = max(0.0, min(1.0, r))
+        g = max(0.0, min(1.0, g))
+        b = max(0.0, min(1.0, b))
+
+        # Scale to grid
+        fr = r * (size - 1)
+        fg = g * (size - 1)
+        fb = b * (size - 1)
+
+        r0 = min(int(fr), size - 2)
+        g0 = min(int(fg), size - 2)
+        b0 = min(int(fb), size - 2)
+
+        dr = fr - r0
+        dg = fg - g0
+        db = fb - b0
+
+        def idx(ri, gi, bi):
+            return bi * size * size + gi * size + ri
+
+        # 8 corner lookups
+        c000 = cube_data[idx(r0,     g0,     b0)]
+        c100 = cube_data[idx(r0 + 1, g0,     b0)]
+        c010 = cube_data[idx(r0,     g0 + 1, b0)]
+        c110 = cube_data[idx(r0 + 1, g0 + 1, b0)]
+        c001 = cube_data[idx(r0,     g0,     b0 + 1)]
+        c101 = cube_data[idx(r0 + 1, g0,     b0 + 1)]
+        c011 = cube_data[idx(r0,     g0 + 1, b0 + 1)]
+        c111 = cube_data[idx(r0 + 1, g0 + 1, b0 + 1)]
+
+        out = [0.0, 0.0, 0.0]
+        for ch in range(3):
+            # Interpolate along R
+            c00 = c000[ch] * (1 - dr) + c100[ch] * dr
+            c01 = c001[ch] * (1 - dr) + c101[ch] * dr
+            c10 = c010[ch] * (1 - dr) + c110[ch] * dr
+            c11 = c011[ch] * (1 - dr) + c111[ch] * dr
+            # Interpolate along G
+            c0 = c00 * (1 - dg) + c10 * dg
+            c1 = c01 * (1 - dg) + c11 * dg
+            # Interpolate along B
+            out[ch] = c0 * (1 - db) + c1 * db
+
+        return out
+
+    def _bakeShaperIntoCube(self, original_cube_path):
+        """Bake ACEScct shaper directly into a new 3D LUT.
+
+        Since RV's readLUT ignores 1D shaper sections, we pre-compute
+        a new 3D cube where each grid point already includes the
+        linear → ACEScct conversion.  Think of it like pre-rendering
+        the shaper into every cell of the cube.
+
+        For each grid point at position (r, g, b) in linear domain [0, 16]:
+          1. Convert (r, g, b) from linear to ACEScct  (0-1 log range)
+          2. Look up the original grade cube at the ACEScct position
+          3. Store the graded output
+
+        Result: a single 3D cube that takes linear input (domain 0-16)
+        and outputs graded values.  No shaper needed.
+
+        Returns the path to the baked .cube file (cached in temp dir).
+        """
+        import hashlib, tempfile
+
         md5 = hashlib.md5(original_cube_path.encode()).hexdigest()[:8]
-        combined_path = os.path.join(tempfile.gettempdir(),
-                                     "cam_shaped_%s.cube" % md5)
-        if os.path.isfile(combined_path):
-            print("[LUT-DIAG]   Using cached combined .cube: %s" % combined_path)
-            return combined_path
+        baked_path = os.path.join(tempfile.gettempdir(),
+                                  "cam_baked_%s.cube" % md5)
+        if os.path.isfile(baked_path):
+            print("[LUT-DIAG]   Using cached baked .cube: %s" % baked_path)
+            return baked_path
 
-        # ---- Parse the original .cube to extract 3D data ----
+        # ---- Parse the original .cube to get 3D data ----
         try:
             with open(original_cube_path, 'r') as f:
                 original_lines = f.readlines()
@@ -3594,86 +3678,98 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             print("[LUT-DIAG]   Cannot read original cube: %s" % e)
             return original_cube_path
 
-        three_d_size = None
-        three_d_data = []
+        src_size = None
+        src_data = []  # list of (r, g, b) tuples
         in_data = False
         for line in original_lines:
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
                 continue
             if stripped.startswith('LUT_3D_SIZE'):
-                three_d_size = int(stripped.split()[-1])
+                src_size = int(stripped.split()[-1])
                 in_data = True
                 continue
-            # Skip metadata headers once we're looking for data
             if stripped.startswith(('TITLE', 'DOMAIN_', 'LUT_1D')):
                 continue
             if in_data:
                 parts = stripped.split()
                 if len(parts) >= 3:
                     try:
-                        float(parts[0])
-                        three_d_data.append(stripped)
+                        src_data.append((float(parts[0]),
+                                         float(parts[1]),
+                                         float(parts[2])))
                     except ValueError:
                         pass
 
-        if not three_d_size:
-            print("[LUT-DIAG]   WARNING: No LUT_3D_SIZE found in original")
+        if not src_size or len(src_data) < src_size ** 3:
+            print("[LUT-DIAG]   WARNING: Could not parse original cube "
+                  "(size=%s, data=%d)" % (src_size, len(src_data)))
             return original_cube_path
 
-        print("[LUT-DIAG]   Parsed original: %dx%dx%d cube, %d data lines"
-              % (three_d_size, three_d_size, three_d_size, len(three_d_data)))
+        print("[LUT-DIAG]   Parsed original: %d^3 cube, %d entries"
+              % (src_size, len(src_data)))
 
-        # ---- Build the 1D ACEScct shaper section ----
-        SHAPER_SIZE = 4096
+        # ---- Bake: new cube with linear input domain [0, DOMAIN_MAX] ----
+        # Use same size as original — RV upsamples to 64^3 internally anyway,
+        # and matching source resolution avoids unnecessary computation.
+        OUT_SIZE = src_size  # typically 33
         DOMAIN_MAX = self._LUT_DOMAIN_MAX
-        CUT = 0.0078125  # 2^-7
+        total = OUT_SIZE ** 3
+
+        print("[LUT-DIAG]   Baking %d^3=%d points (domain 0-%.0f) ..."
+              % (OUT_SIZE, total, DOMAIN_MAX))
 
         out_lines = [
-            'TITLE "ACEScct Shaped + Grade (MediaVault)"',
-            '',
-            '# 1D ACEScct shaper: linear 0-%.0f -> ACEScct 0-1' % DOMAIN_MAX,
-            'LUT_1D_SIZE %d' % SHAPER_SIZE,
+            'TITLE "Baked ACEScct + Grade (MediaVault auto-gen)"',
             'DOMAIN_MIN 0.0 0.0 0.0',
             'DOMAIN_MAX %.1f %.1f %.1f' % (DOMAIN_MAX, DOMAIN_MAX, DOMAIN_MAX),
+            'LUT_3D_SIZE %d' % OUT_SIZE,
         ]
 
-        for i in range(SHAPER_SIZE):
-            x = float(i) / (SHAPER_SIZE - 1) * DOMAIN_MAX
-            if x <= 0.0:
-                y = 10.5402377416545 * 0.0 + 0.0729055341958355
-            elif x < CUT:
-                y = 10.5402377416545 * x + 0.0729055341958355
-            else:
-                y = (math.log2(x) + 9.72) / 17.52
-            y = max(0.0, min(1.0, y))
-            out_lines.append('%.10f %.10f %.10f' % (y, y, y))
+        count = 0
+        # .cube order: R fastest, then G, then B
+        for bi in range(OUT_SIZE):
+            b_lin = float(bi) / (OUT_SIZE - 1) * DOMAIN_MAX
+            b_cct = self._lin2acescct(b_lin)
+            for gi in range(OUT_SIZE):
+                g_lin = float(gi) / (OUT_SIZE - 1) * DOMAIN_MAX
+                g_cct = self._lin2acescct(g_lin)
+                for ri in range(OUT_SIZE):
+                    r_lin = float(ri) / (OUT_SIZE - 1) * DOMAIN_MAX
+                    r_cct = self._lin2acescct(r_lin)
 
-        # ---- Append the 3D grade LUT section ----
-        out_lines.append('')
-        out_lines.append('# 3D grade LUT from: %s'
-                         % os.path.basename(original_cube_path))
-        out_lines.append('LUT_3D_SIZE %d' % three_d_size)
-        out_lines.extend(three_d_data)
+                    # Look up original grade cube at ACEScct position
+                    # Output is in ACEScct space — convert back to linear
+                    graded_cct = self._trilinearLookup(
+                        src_data, src_size, r_cct, g_cct, b_cct)
+                    graded_lin = [
+                        max(0.0, self._acescct2lin(graded_cct[0])),
+                        max(0.0, self._acescct2lin(graded_cct[1])),
+                        max(0.0, self._acescct2lin(graded_cct[2])),
+                    ]
 
-        with open(combined_path, 'w') as f:
+                    out_lines.append('%.10f %.10f %.10f'
+                                     % (graded_lin[0], graded_lin[1],
+                                        graded_lin[2]))
+                    count += 1
+
+        with open(baked_path, 'w') as f:
             f.write('\n'.join(out_lines) + '\n')
 
-        fsize = os.path.getsize(combined_path)
-        print("[LUT-DIAG]   Created combined .cube: %s (%d bytes, "
-              "1D=%d entries domain 0-%.0f + 3D=%d^3)"
-              % (combined_path, fsize, SHAPER_SIZE, DOMAIN_MAX, three_d_size))
-        return combined_path
+        fsize = os.path.getsize(baked_path)
+        print("[LUT-DIAG]   Baked cube: %s (%d bytes, %d^3=%d entries, "
+              "domain 0-%.0f, ACEScct shaper pre-computed)"
+              % (baked_path, fsize, OUT_SIZE, count, DOMAIN_MAX))
+        return baked_path
 
     def _setLUTOnSourceGroup(self, sg, lut_file, lut_name):
-        """Apply a grade LUT via combined 1D shaper + 3D cube file.
+        """Apply a grade LUT with baked-in ACEScct shaper.
 
-        Creates a temp .cube file that has:
-          - LUT_1D_SIZE 4096: ACEScct encoding (linear 0-16 -> log 0-1)
-          - LUT_3D_SIZE N:    the original grade cube (0-1 -> graded output)
-
-        readLUT() parses BOTH sections and sets up the GPU pipeline
-        natively — no manual prelut/scale manipulation needed.
+        Since RV's readLUT() ignores 1D shaper sections in combined .cube
+        files, we bake the linear→ACEScct conversion directly into a new
+        3D cube.  Each grid point maps linear ACES (0-16) through ACEScct
+        encoding then through the original grade, producing a single 3D
+        LUT that readLUT() can handle natively.
         """
         try:
             norm_path = lut_file.replace("\\", "/")
@@ -3715,13 +3811,13 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 except Exception as e:
                     print("[LUT-DIAG]   Could not clear RVLinearize: %s" % e)
 
-            # ---- Step 2: Create combined 1D+3D cube ----
-            combined_path = self._createShaperCubeFile(norm_path)
+            # ---- Step 2: Bake ACEScct shaper into the 3D cube ----
+            baked_path = self._bakeShaperIntoCube(norm_path)
 
-            # ---- Step 3: Load combined cube into RVLookLUT ----
-            print("[LUT-DIAG]   Loading combined cube into RVLookLUT via "
-                  "readLUT('%s', '%s') ..." % (combined_path, look_node))
-            rvc.readLUT(combined_path, look_node)
+            # ---- Step 3: Load baked cube into RVLookLUT ----
+            print("[LUT-DIAG]   Loading baked cube into RVLookLUT via "
+                  "readLUT('%s', '%s') ..." % (baked_path, look_node))
+            rvc.readLUT(baked_path, look_node)
             rvc.setIntProperty(look_node + ".lut.active", [1], True)
             print("[LUT-DIAG]   readLUT OK")
 
@@ -3735,9 +3831,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             except Exception:
                 pass
             rvc.redraw()
-            rve.displayFeedback("LUT: %s  [ACEScct shaped]" % lut_name, 3.0)
+            rve.displayFeedback("LUT: %s  [baked ACEScct]" % lut_name, 3.0)
 
-            print("[LUT-DIAG]   SUCCESS: shaped LUT '%s' on %s"
+            print("[LUT-DIAG]   SUCCESS: baked LUT '%s' on %s"
                   % (lut_name, sg))
 
         except Exception as e:
