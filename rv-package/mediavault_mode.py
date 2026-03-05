@@ -3302,25 +3302,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         # Auto-apply project LUTs to newly loaded sources.
         # DEFERRED: We must wait until source_setup.py and other
         # source-group-complete handlers finish setting up the color
-        # pipeline — otherwise our LUT gets overwritten.  A short
-        # timer (0.5s) ensures we run AFTER all synchronous handlers.
-        self._scheduleLUTApplication()
-
-    def _scheduleLUTApplication(self):
-        """Schedule LUT application after a short delay.
-
-        This ensures the color pipeline (linearize, look, display) is
-        fully configured by RV's source_setup before we inject our LUT.
-        """
-        import threading
-        def _deferred():
-            try:
-                self._applyProjectLUTs()
-            except Exception as e:
-                print("[LUT-DIAG] Deferred LUT application error: %s" % e)
-        t = threading.Timer(0.5, _deferred)
-        t.daemon = True
-        t.start()
+        # pipeline — otherwise our LUT gets overwritten.
+        # Use RV's native afterProgressiveLoading event binding to
+        # re-apply on next idle, NOT threading.Timer (deadlocks RV).
+        self._lut_pending = True
 
     def _onViewChanged(self, event):
         """Handle source switching (PageUp/Down, timeline click, etc.).
@@ -4617,6 +4602,16 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     def render(self, event):
         """Called every frame by RV (auto-bound by MinorMode name convention).
         Draw overlay when enabled."""
+
+        # Apply pending LUT on main thread (deferred from source-load)
+        if getattr(self, '_lut_pending', False):
+            self._lut_pending = False
+            try:
+                print("[LUT-DIAG] Applying deferred LUT from render() ...")
+                self._applyProjectLUTs()
+            except Exception as e:
+                print("[LUT-DIAG] Deferred LUT error: %s" % e)
+
         if not self._overlay_enabled or not _HAS_GL:
             return
 
