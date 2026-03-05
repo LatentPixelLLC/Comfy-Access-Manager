@@ -3457,11 +3457,17 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     def _setLUTOnSourceGroup(self, sg, lut_file, lut_name):
         """Apply a LUT file to the RVLookLUT node inside a source group."""
         try:
+            # Normalize path to forward slashes — RV expects forward slashes
+            # even on Windows for LUT file paths.
+            norm_path = lut_file.replace("\\", "/")
+
             for node in rvc.nodesInGroup(sg):
                 ntype = rvc.nodeType(node)
                 if ntype == "RVLookLUT":
-                    rvc.setStringProperty(node + ".lut.file",
-                                          [lut_file], True)
+                    # readLUT actually parses the .cube/.3dl/etc file and
+                    # populates the LUT data in the pipeline.  Just setting
+                    # .lut.file alone does NOT load the LUT data.
+                    rvc.readLUT(norm_path, node)
                     rvc.setIntProperty(node + ".lut.active", [1], True)
                     print("[MediaVault] Applied LUT '%s' to %s (%s)"
                           % (lut_name, sg, os.path.basename(lut_file)))
