@@ -12,9 +12,9 @@ echo ""
 echo "  Sit back — this installs everything you need."
 echo ""
 
-# ─── [1/7] Homebrew (macOS only) ───
+# ─── [1/8] Homebrew (macOS only) ───
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "  [1/7] Checking Homebrew..."
+    echo "  [1/8] Checking Homebrew..."
     if command -v brew &>/dev/null; then
         echo "         ✓ Homebrew ready."
     else
@@ -29,11 +29,11 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         echo "         ✓ Homebrew installed."
     fi
 else
-    echo "  [1/7] Linux detected — using apt."
+    echo "  [1/8] Linux detected — using apt."
 fi
 
-# ─── [2/7] Node.js (need v18+) ───
-echo "  [2/7] Checking Node.js..."
+# ─── [2/8] Node.js (need v18+) ───
+echo "  [2/8] Checking Node.js..."
 NEED_NODE=false
 if command -v node &>/dev/null; then
     NODE_VER_FULL=$(node --version)
@@ -65,8 +65,8 @@ if [ "$NEED_NODE" = true ]; then
     echo "         ✓ Node.js $(node --version)"
 fi
 
-# ─── [3/7] Git ───
-echo "  [3/7] Checking Git..."
+# ─── [3/8] Git ───
+echo "  [3/8] Checking Git..."
 if command -v git &>/dev/null; then
     echo "         ✓ Git ready."
 else
@@ -79,8 +79,8 @@ else
     echo "         ✓ Git installed."
 fi
 
-# ─── [4/7] Python3 + ShotGrid SDK ───
-echo "  [4/7] Checking Python3..."
+# ─── [4/8] Python3 + ShotGrid SDK ───
+echo "  [4/8] Checking Python3..."
 if command -v python3 &>/dev/null; then
     echo "         ✓ Python3 $(python3 --version 2>&1 | cut -d' ' -f2)"
 else
@@ -103,8 +103,8 @@ if command -v python3 &>/dev/null; then
         echo "         NOTE: pip install failed. Run: pip3 install shotgun_api3"
 fi
 
-# ─── [5/7] FFmpeg ───
-echo "  [5/7] Checking FFmpeg..."
+# ─── [5/8] FFmpeg ───
+echo "  [5/8] Checking FFmpeg..."
 if command -v ffmpeg &>/dev/null; then
     echo "         ✓ FFmpeg ready."
 else
@@ -117,14 +117,41 @@ else
     echo "         ✓ FFmpeg installed."
 fi
 
-# ─── [6/7] App dependencies ───
-echo "  [6/7] Installing app dependencies..."
+# ─── [6/8] oiiotool (OpenImageIO) ───
+# oiiotool is needed for full-resolution DWAB EXR proxy compression.
+# FFmpeg's EXR encoder only supports none/rle/zip1/zip16 — no DWA/DWAB.
+echo "  [6/8] Checking oiiotool (OpenImageIO)..."
+if command -v oiiotool &>/dev/null; then
+    echo "         ✓ oiiotool ready."
+else
+    echo "         Installing oiiotool (for DWAB EXR proxy)..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS: brew has openimageio, pip is a fallback
+        brew install openimageio 2>&1 | tail -1 || \
+            python3 -m pip install OpenImageIO --quiet 2>/dev/null || \
+            echo "         NOTE: install failed. Run: brew install openimageio"
+    else
+        # Linux: apt has openimageio-tools, pip is a fallback
+        sudo apt install -y openimageio-tools 2>/dev/null || \
+            python3 -m pip install OpenImageIO --quiet 2>/dev/null || \
+            echo "         NOTE: install failed. Try: sudo apt install openimageio-tools"
+    fi
+    if command -v oiiotool &>/dev/null; then
+        echo "         ✓ oiiotool installed."
+    else
+        echo "         NOTE: oiiotool not available — half-res proxy via FFmpeg still works."
+        echo "         Full-res DWAB proxy requires oiiotool: pip install OpenImageIO"
+    fi
+fi
+
+# ─── [7/8] App dependencies ───
+echo "  [7/8] Installing app dependencies..."
 echo "         This may take a minute on first install..."
 npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -1 || true
 echo "         ✓ Dependencies ready."
 
-# ─── [7/7] RV / OpenRV (optional) ───
-echo "  [7/7] Checking RV / OpenRV..."
+# ─── [8/8] RV / OpenRV (optional) ───
+echo "  [8/8] Checking RV / OpenRV..."
 RV_BUNDLED=false
 RV_SYSTEM=false
 if [[ "$OSTYPE" == "darwin"* ]]; then

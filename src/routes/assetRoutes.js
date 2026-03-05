@@ -2203,11 +2203,12 @@ function launchInRV(exePath, filePaths) {
 }
 
 // POST /api/assets/rv-push — Push files to a running RV session (or start one)
-// Body: { ids: [assetId, ...], mode: 'set'|'merge' }
+// Body: { ids: [assetId, ...], mode: 'set'|'merge', useProxy: bool }
 //   mode 'set' = replace current media, 'merge' = add to sources
+//   useProxy: true = prefer half-res proxy if available
 router.post('/rv-push', (req, res) => {
     const db = getDb();
-    const { ids, mode } = req.body || {};
+    const { ids, mode, useProxy } = req.body || {};
     if (!ids || !Array.isArray(ids) || ids.length < 1) {
         return res.status(400).json({ error: 'Provide an array of asset ids' });
     }
@@ -2220,11 +2221,28 @@ router.post('/rv-push', (req, res) => {
 
     // Resolve file paths (apply cross-platform path mappings; handle sequences)
     const filePaths = [];
+    let usedProxy = false;
     for (const id of ids) {
         const asset = db.prepare(
-            'SELECT file_path, is_sequence, frame_pattern, frame_start, frame_end, frame_count FROM assets WHERE id = ?'
+            'SELECT file_path, is_sequence, frame_pattern, frame_start, frame_end, frame_count, proxy_path FROM assets WHERE id = ?'
         ).get(id);
         if (asset) {
+            // If useProxy requested and proxy exists, build RV path from proxy dir
+            if (useProxy && asset.proxy_path && asset.is_sequence && asset.frame_pattern) {
+                const proxyRvPath = resolveAssetRvPath({
+                    file_path: path.join(asset.proxy_path, path.basename(asset.file_path || '')),
+                    is_sequence: asset.is_sequence,
+                    frame_pattern: asset.frame_pattern,
+                    frame_start: asset.frame_start,
+                    frame_end: asset.frame_end,
+                    frame_count: asset.frame_count,
+                });
+                if (proxyRvPath) {
+                    filePaths.push(proxyRvPath);
+                    usedProxy = true;
+                    continue;
+                }
+            }
             const rvPath = resolveAssetRvPath(asset);
             if (rvPath) filePaths.push(rvPath);
         }
@@ -2234,6 +2252,7 @@ router.post('/rv-push', (req, res) => {
     }
 
     const pushMode = mode === 'merge' ? 'merge' : 'set';
+    const proxyLabel = usedProxy ? ' (proxy)' : '';
 
     // Try rvpush first
     if (pushExe) {
@@ -2244,9 +2263,10 @@ router.post('/rv-push', (req, res) => {
                 count: filePaths.length,
                 mode: pushMode,
                 started: result.started,
+                usedProxy,
                 message: result.started
-                    ? `Started RV with ${filePaths.length} file(s)`
-                    : `Pushed ${filePaths.length} file(s) to running RV (${pushMode})`
+                    ? `Started RV with ${filePaths.length} file(s)${proxyLabel}`
+                    : `Pushed ${filePaths.length} file(s) to running RV (${pushMode})${proxyLabel}`
             });
         }
     }
@@ -2259,7 +2279,8 @@ router.post('/rv-push', (req, res) => {
             count: filePaths.length,
             mode: pushMode,
             started: true,
-            message: `Launched new RV session with ${filePaths.length} file(s)`
+            usedProxy,
+            message: `Launched new RV session with ${filePaths.length} file(s)${proxyLabel}`
         });
     }
 

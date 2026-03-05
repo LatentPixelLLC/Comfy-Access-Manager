@@ -67,8 +67,8 @@ echo.
 cd /d "%~dp0"
 if not exist "tools" mkdir tools
 
-:: ─── [1/6] Check / Install Node.js ───
-echo  [1/6] Checking Node.js...
+:: ─── [1/7] Check / Install Node.js ───
+echo  [1/7] Checking Node.js...
 where node >nul 2>&1
 if errorlevel 1 (
     echo         Node.js not found. Installing automatically...
@@ -124,8 +124,8 @@ if errorlevel 1 (
     for /f "tokens=*" %%v in ('node --version') do echo         Found Node.js %%v
 )
 
-:: ─── [2/6] Check / Install Git ───
-echo  [2/6] Checking Git...
+:: ─── [2/7] Check / Install Git ───
+echo  [2/7] Checking Git...
 where git >nul 2>&1
 if errorlevel 1 (
     echo         Git not found. Installing automatically...
@@ -168,13 +168,13 @@ if errorlevel 1 (
     for /f "tokens=*" %%v in ('git --version') do echo         Found %%v
 )
 
-:: ─── [3/6] Install npm packages ───
-echo  [3/6] Installing npm packages...
+:: ─── [3/7] Install npm packages ───
+echo  [3/7] Installing npm packages...
 call npm install --no-audit --no-fund
 echo         Done.
 
-:: ─── [4/6] Python + ShotGrid SDK ───
-echo  [4/6] Checking Python...
+:: ─── [4/7] Python + ShotGrid SDK ───
+echo  [4/7] Checking Python...
 where python >nul 2>&1
 if not errorlevel 1 (
     for /f "tokens=*" %%v in ('python --version') do echo         Found %%v
@@ -193,8 +193,8 @@ if not errorlevel 1 (
     echo         Then run:  python -m pip install shotgun_api3
 )
 
-:: ─── [5/6] Download FFmpeg ───
-echo  [5/6] Checking FFmpeg...
+:: ─── [5/7] Download FFmpeg ───
+echo  [5/7] Checking FFmpeg...
 
 :: Check if FFmpeg is already on PATH
 where ffmpeg >nul 2>&1
@@ -239,8 +239,71 @@ if exist "tools\ffmpeg\bin\ffmpeg.exe" (
 
 :done_ffmpeg
 
-:: ─── [6/6] Check RV / OpenRV ───
-echo  [6/6] Checking RV / OpenRV...
+:: ─── [6/7] Install oiiotool (OpenImageIO) ───
+echo  [6/7] Checking oiiotool (OpenImageIO)...
+
+:: oiiotool is needed for full-resolution DWAB EXR proxy compression.
+:: FFmpeg's EXR encoder only supports none/rle/zip1/zip16 — no DWA/DWAB.
+:: The official PyPI wheel includes oiiotool.exe (pip install OpenImageIO).
+
+:: Check if oiiotool is already on PATH
+where oiiotool >nul 2>&1
+if not errorlevel 1 (
+    echo         oiiotool already on PATH — skipping install.
+    goto :done_oiio
+)
+
+:: Check if we already downloaded it locally
+if exist "tools\oiio\bin\oiiotool.exe" (
+    echo         oiiotool already in tools\ — skipping install.
+    goto :done_oiio
+)
+
+:: Check Houdini (ships with oiiotool)
+for /d %%%%d in ("C:\Program Files\Side Effects Software\Houdini*") do (
+    if exist "%%%%d\bin\oiiotool.exe" (
+        echo         oiiotool found in Houdini: %%%%d\bin\
+        goto :done_oiio
+    )
+)
+
+:: Try pip install (requires Python, which was checked in step 4)
+where python >nul 2>&1
+if errorlevel 1 (
+    echo         Python not found — cannot install oiiotool.
+    echo         Full-res DWAB proxy requires: pip install OpenImageIO
+    echo         Half-res proxy via FFmpeg still works without it.
+    goto :done_oiio
+)
+
+echo         Installing via pip...
+python -m pip install OpenImageIO --quiet 2>nul
+
+:: Verify it installed
+where oiiotool >nul 2>&1
+if not errorlevel 1 (
+    echo         oiiotool installed successfully!
+    goto :done_oiio
+)
+
+:: pip may have installed it but Python Scripts dir is not on PATH
+:: Check common Python Scripts locations
+for /f "delims=" %%%%p in ('python -c "import sys; print(sys.prefix)" 2^>nul') do (
+    if exist "%%%%p\Scripts\oiiotool.exe" (
+        echo         oiiotool installed to: %%%%p\Scripts\
+        echo         NOTE: Add %%%%p\Scripts\ to your PATH for best results.
+        goto :done_oiio
+    )
+)
+
+echo         NOTE: oiiotool install may have failed.
+echo         Full-res DWAB proxy requires: pip install OpenImageIO
+echo         Half-res proxy via FFmpeg still works without it.
+
+:done_oiio
+
+:: ─── [7/7] Check RV / OpenRV ───
+echo  [7/7] Checking RV / OpenRV...
 set "RV_FOUND=0"
 if exist "tools\rv\bin\rv.exe" set "RV_FOUND=1"
 if exist "C:\OpenRV\_build\stage\app\bin\rv.exe" set "RV_FOUND=1"

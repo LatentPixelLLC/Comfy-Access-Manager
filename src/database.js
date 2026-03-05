@@ -592,6 +592,15 @@ function runMigrations(wrapper) {
         }
     } catch (e) { /* table might not exist yet */ }
 
+    // proxy_path column on assets (path to half-res EXR proxy directory)
+    try {
+        const cols = wrapper.pragma('table_info(assets)');
+        if (!cols.find(c => c.name === 'proxy_path')) {
+            wrapper.exec(`ALTER TABLE assets ADD COLUMN proxy_path TEXT`);
+            console.log('[DB] Added proxy_path column to assets');
+        }
+    } catch (e) { /* table might not exist yet */ }
+
     // Seed default Admin user if users table is empty
     const userCount = wrapper.prepare('SELECT COUNT(*) as count FROM users').get();
     if (userCount.count === 0) {

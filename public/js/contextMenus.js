@@ -141,6 +141,18 @@ async function showContextMenu(event, assetIdx) {
         html += `<div class="ctx-item" data-action="renameHierarchy"> Rename to Hierarchy${!isSingle ? ` (${count})` : ''}</div>`;
     }
     html += `<div class="ctx-item" data-action="export"> Export${!isSingle ? ` (${count})` : ''}</div>`;
+
+    // Proxy generation — only for single EXR sequences
+    if (isSingle && asset.is_sequence) {
+        if (asset.proxy_path) {
+            html += `<div class="ctx-item" data-action="deleteProxy"> Delete Proxy</div>`;
+            html += `<div class="ctx-item" data-action="rvProxy"> RV (proxy)</div>`;
+        } else {
+            html += `<div class="ctx-item" data-action="generateProxyHalfres"> Proxy (half-res ZIP16)</div>`;
+            html += `<div class="ctx-item" data-action="generateProxyFullres"> Proxy (full-res DWAB)</div>`;
+        }
+    }
+
     html += `<div class="ctx-item" data-action="addToCrate"> Add to Crate${!isSingle ? ` (${count})` : ''}</div>`;
     html += `<div class="ctx-item" data-action="sendResolve"> Send to Resolve${!isSingle ? ` (${count})` : ''}</div>`;
 
@@ -275,6 +287,10 @@ async function showContextMenu(event, assetIdx) {
                 break;
             }
             case 'createMinicut': window.showMiniCutModal?.(asset); break;
+            case 'generateProxyHalfres': generateProxy(asset.id, asset.vault_name, 'halfres'); break;
+            case 'generateProxyFullres': generateProxy(asset.id, asset.vault_name, 'fullres'); break;
+            case 'deleteProxy': deleteProxy(asset.id, asset.vault_name); break;
+            case 'rvProxy': openInRVProxy(asset.id); break;
             case 'delete': bulkDeleteAssets(); break;
             case 'removeDb': bulkDeleteAssets(true); break;
             default: {
@@ -1702,6 +1718,102 @@ async function executeReorganizeAndRelink(projectId, resolveConnected) {
         if (statusEl) statusEl.innerHTML = `<span style="color:#a66;"> ${esc(e.message)}</span>`;
         if (btn) { btn.disabled = false; btn.textContent = ' Retry'; }
         showToast('Reorganize error: ' + e.message, 5000);
+    }
+}
+
+
+// ===========================================
+//  EXR PROXY GENERATION
+// ===========================================
+
+/**
+ * Start proxy generation for an EXR sequence asset.
+ * Shows a toast with progress polling until complete.
+ * @param {number} assetId
+ * @param {string} assetName
+ * @param {'halfres'|'fullres'} mode - 'halfres' = FFmpeg half-res ZIP16, 'fullres' = oiiotool full-res DWAB
+ */
+async function generateProxy(assetId, assetName, mode = 'halfres') {
+    const modeLabel = mode === 'fullres' ? 'full-res DWAB' : 'half-res';
+    showToast(`Starting ${modeLabel} proxy for ${assetName || assetId}...`, 3000);
+
+    try {
+        const res = await api(`/api/proxy/generate/${assetId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+        });
+        if (res.status === 'exists') {
+            showToast('Proxy already exists', 3000);
+            return;
+        }
+        if (!res.jobId) {
+            showToast('Failed to start proxy generation', 5000);
+            return;
+        }
+
+        // Poll progress
+        const jobId = res.jobId;
+        const pollInterval = setInterval(async () => {
+            try {
+                const status = await api(`/api/proxy/status/${jobId}`);
+                if (status.status === 'completed') {
+                    clearInterval(pollInterval);
+                    showToast(`Proxy ready: ${assetName || assetId}`, 5000);
+                    // Update the local asset cache so context menu reflects new state
+                    const cached = state.assets?.find(a => a.id === assetId);
+                    if (cached) cached.proxy_path = 'exists';
+                } else if (status.status === 'failed') {
+                    clearInterval(pollInterval);
+                    showToast(`Proxy failed: ${status.error || 'Unknown error'}`, 8000);
+                } else {
+                    // Show progress toast (replace current)
+                    showToast(status.progressText || `Proxy: ${status.progress}%`, 2000);
+                }
+            } catch {
+                clearInterval(pollInterval);
+            }
+        }, 2000);
+
+    } catch (e) {
+        showToast('Proxy generation error: ' + e.message, 5000);
+    }
+}
+
+/**
+ * Delete an existing proxy for an asset.
+ */
+async function deleteProxy(assetId, assetName) {
+    if (!confirm(`Delete proxy for "${assetName || assetId}"? The original files are not affected.`)) return;
+
+    try {
+        await api(`/api/proxy/${assetId}`, { method: 'DELETE' });
+        showToast('Proxy deleted', 3000);
+        // Update local cache
+        const cached = state.assets?.find(a => a.id === assetId);
+        if (cached) cached.proxy_path = null;
+    } catch (e) {
+        showToast('Delete proxy error: ' + e.message, 5000);
+    }
+}
+
+/**
+ * Open the proxy version of an EXR sequence in RV.
+ */
+async function openInRVProxy(assetId) {
+    try {
+        const res = await api(`/api/assets/rv-push`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: [assetId], mode: 'set', useProxy: true }),
+        });
+        if (res.success) {
+            showToast(res.message || 'Sent proxy to RV', 3000);
+        } else {
+            showToast(res.error || 'Failed to open proxy in RV', 5000);
+        }
+    } catch (e) {
+        showToast('RV proxy error: ' + e.message, 5000);
     }
 }
 
