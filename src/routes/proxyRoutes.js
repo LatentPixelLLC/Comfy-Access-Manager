@@ -291,7 +291,7 @@ async function processNext() {
                     continue;
                 }
 
-                const oiioArgs = [inputPath, '--compression', 'dwab', '-o', outputPath];
+                const oiioArgs = [inputPath, '--attrib:type=int', 'openexr:strict_aces', '0', '--compression', 'dwab', '-o', outputPath];
                 await runProcess(oiioPath, oiioArgs);
 
                 const done = frame - startFrame + 1;
