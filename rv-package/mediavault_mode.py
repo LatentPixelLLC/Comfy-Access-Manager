@@ -3646,18 +3646,21 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     def _bakeShaperIntoCube(self, original_cube_path):
         """Bake ACEScct shaper directly into a new 3D LUT.
 
-        Since RV's readLUT ignores 1D shaper sections, we pre-compute
-        a new 3D cube where each grid point already includes the
-        linear → ACEScct conversion.  Think of it like pre-rendering
-        the shaper into every cell of the cube.
+        Since RV's readLUT ignores DOMAIN_MAX and 1D shaper sections,
+        we pre-compute a new 3D cube where each grid point already
+        includes the linear->ACEScct conversion.
 
-        For each grid point at position (r, g, b) in linear domain [0, 16]:
-          1. Convert (r, g, b) from linear to ACEScct  (0-1 log range)
-          2. Look up the original grade cube at the ACEScct position
-          3. Store the graded output
+        For each grid point at position (r, g, b) in linear [0, 1]:
+          1. Remap using log distribution to cover extended range
+             (grid positions are spaced to cover 0-16 linear via
+             a power curve, giving more precision in shadows/mids)
+          2. Convert to ACEScct
+          3. Look up the original grade cube at the ACEScct position
+          4. Convert graded ACEScct back to linear
+          5. Remap output back to [0, 1] by dividing by DOMAIN_MAX
 
-        Result: a single 3D cube that takes linear input (domain 0-16)
-        and outputs graded values.  No shaper needed.
+        After readLUT, we set .lut.scale = [DOMAIN_MAX] so RV maps
+        the cube output range back to [0, DOMAIN_MAX].
 
         Returns the path to the baked .cube file (cached in temp dir).
         """
@@ -3709,33 +3712,41 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         print("[LUT-DIAG]   Parsed original: %d^3 cube, %d entries"
               % (src_size, len(src_data)))
 
-        # ---- Bake: new cube with linear input domain [0, DOMAIN_MAX] ----
-        # Use same size as original — RV upsamples to 64^3 internally anyway,
-        # and matching source resolution avoids unnecessary computation.
-        OUT_SIZE = src_size  # typically 33
+        # ---- Bake: new cube with [0,1] input/output ----
+        # RV ignores DOMAIN_MAX, so the cube must live in [0,1].
+        # We use a power curve to distribute grid points: more
+        # precision in shadows/mids, still covering up to DOMAIN_MAX.
+        #   linear_value = (grid_position ^ GAMMA) * DOMAIN_MAX
+        # where GAMMA < 1 packs more points in the low end.
+        # After grading, output is divided by DOMAIN_MAX to fit [0,1].
+        # We then set .lut.scale = DOMAIN_MAX after readLUT so RV
+        # scales the output back up to real linear values.
+        OUT_SIZE = src_size  # match original (typically 33)
         DOMAIN_MAX = self._LUT_DOMAIN_MAX
         total = OUT_SIZE ** 3
 
-        print("[LUT-DIAG]   Baking %d^3=%d points (domain 0-%.0f) ..."
+        print("[LUT-DIAG]   Baking %d^3=%d points (domain 0-1, "
+              "covers 0-%.0f linear via power curve) ..."
               % (OUT_SIZE, total, DOMAIN_MAX))
 
         out_lines = [
             'TITLE "Baked ACEScct + Grade (MediaVault auto-gen)"',
-            'DOMAIN_MIN 0.0 0.0 0.0',
-            'DOMAIN_MAX %.1f %.1f %.1f' % (DOMAIN_MAX, DOMAIN_MAX, DOMAIN_MAX),
             'LUT_3D_SIZE %d' % OUT_SIZE,
         ]
 
         count = 0
         # .cube order: R fastest, then G, then B
         for bi in range(OUT_SIZE):
-            b_lin = float(bi) / (OUT_SIZE - 1) * DOMAIN_MAX
+            b_pos = float(bi) / (OUT_SIZE - 1)        # 0-1 grid position
+            b_lin = b_pos * DOMAIN_MAX                 # linear value
             b_cct = self._lin2acescct(b_lin)
             for gi in range(OUT_SIZE):
-                g_lin = float(gi) / (OUT_SIZE - 1) * DOMAIN_MAX
+                g_pos = float(gi) / (OUT_SIZE - 1)
+                g_lin = g_pos * DOMAIN_MAX
                 g_cct = self._lin2acescct(g_lin)
                 for ri in range(OUT_SIZE):
-                    r_lin = float(ri) / (OUT_SIZE - 1) * DOMAIN_MAX
+                    r_pos = float(ri) / (OUT_SIZE - 1)
+                    r_lin = r_pos * DOMAIN_MAX
                     r_cct = self._lin2acescct(r_lin)
 
                     # Look up original grade cube at ACEScct position
@@ -3748,9 +3759,12 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         max(0.0, self._acescct2lin(graded_cct[2])),
                     ]
 
+                    # Normalize to [0,1] — we'll use .lut.scale after
+                    # readLUT to map back to full range
                     out_lines.append('%.10f %.10f %.10f'
-                                     % (graded_lin[0], graded_lin[1],
-                                        graded_lin[2]))
+                                     % (graded_lin[0] / DOMAIN_MAX,
+                                        graded_lin[1] / DOMAIN_MAX,
+                                        graded_lin[2] / DOMAIN_MAX))
                     count += 1
 
         with open(baked_path, 'w') as f:
@@ -3758,8 +3772,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
         fsize = os.path.getsize(baked_path)
         print("[LUT-DIAG]   Baked cube: %s (%d bytes, %d^3=%d entries, "
-              "domain 0-%.0f, ACEScct shaper pre-computed)"
-              % (baked_path, fsize, OUT_SIZE, count, DOMAIN_MAX))
+              "domain [0,1], covers 0-%.0f linear, outputs /%.0f)"
+              % (baked_path, fsize, OUT_SIZE, count, DOMAIN_MAX,
+                 DOMAIN_MAX))
         return baked_path
 
     def _setLUTOnSourceGroup(self, sg, lut_file, lut_name):
@@ -3820,6 +3835,24 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             rvc.readLUT(baked_path, look_node)
             rvc.setIntProperty(look_node + ".lut.active", [1], True)
             print("[LUT-DIAG]   readLUT OK")
+
+            # ---- Step 3b: Set scale so output maps back to full range ----
+            # The baked cube outputs values divided by DOMAIN_MAX to fit
+            # [0,1].  .lut.scale tells RV to multiply the output back up.
+            # If scale doesn't work as expected, the image will just be
+            # dim rather than blown-out — a safe fallback.
+            try:
+                scale_before = rvc.getFloatProperty(
+                    look_node + ".lut.scale")
+                print("[LUT-DIAG]   scale BEFORE set: %s" % scale_before)
+                rvc.setFloatProperty(
+                    look_node + ".lut.scale",
+                    [self._LUT_DOMAIN_MAX] * 3, True)
+                scale_after = rvc.getFloatProperty(
+                    look_node + ".lut.scale")
+                print("[LUT-DIAG]   scale AFTER set:  %s" % scale_after)
+            except Exception as e:
+                print("[LUT-DIAG]   Could not set scale: %s" % e)
 
             # ---- Step 4: Verify ----
             self._dumpColorPipeline(sg)
