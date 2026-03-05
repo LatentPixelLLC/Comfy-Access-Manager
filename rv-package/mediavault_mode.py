@@ -3698,29 +3698,50 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 return
             print("[LUT] OCIOLook node: %s" % ocio_look)
 
-            # Step 5: Set OCIO properties
-            # Ensure properties exist - if node was swapped in without OCIO
-            # setup, they may be missing.
+            # Step 5: Set OCIO properties on the OCIOLook node.
+            #
+            # CRITICAL ORDERING:  RV's render thread validates OCIO
+            # nodes on every property change.  To avoid transient
+            # "empty destination" / "Cannot find source color space"
+            # errors we must:
+            #   a) Disable the node FIRST (before any newProperty)
+            #   b) Load the config via ocioUpdateConfig BEFORE setting
+            #      any color-space names, so ACEScg exists to validate
+            #   c) Set function, colorspaces, look, direction
+            #   d) Re-enable
+
+            # 5a — Ensure ocio.active exists and DISABLE immediately
+            active_prop = ocio_look + ".ocio.active"
+            if not rvc.propertyExists(active_prop):
+                rvc.newProperty(active_prop, rvc.IntType, 1)
+            rvc.setIntProperty(active_prop, [0], True)
+
+            # 5b — Create any other missing properties (node is disabled
+            #      so the render thread won't try to evaluate empties)
             for (prop, val_type) in (
-                ("ocio.active", rvc.IntType),
                 ("ocio.config", rvc.StringType),
                 ("ocio.function", rvc.StringType),
                 ("ocio.inColorSpace", rvc.StringType),
+                ("ocio.outColorSpace", rvc.StringType),
                 ("ocio_look.look", rvc.StringType),
                 ("ocio_look.direction", rvc.StringType),
-                ("ocio.outColorSpace", rvc.StringType)
             ):
                 full_prop = ocio_look + "." + prop
                 if not rvc.propertyExists(full_prop):
                     print("[LUT] Creating property: %s" % full_prop)
                     rvc.newProperty(full_prop, val_type, 1)
 
-            # Disable during property changes to prevent premature
-            # shader rebuild while config/function/colorspace are
-            # still being set.
-            rvc.setIntProperty(ocio_look + ".ocio.active", [0], True)
+            # 5c — Set config path and LOAD it before referencing
+            #      any color-space names that live inside it.
             rvc.setStringProperty(
                 ocio_look + ".ocio.config", [config_path], True)
+            try:
+                rvc.ocioUpdateConfig(ocio_look)
+                print("[LUT] ocioUpdateConfig (post-config) OK")
+            except Exception as e:
+                print("[LUT] ocioUpdateConfig (post-config) note: %s" % e)
+
+            # 5d — Now ACEScg/ACEScct are resolvable inside the config.
             rvc.setStringProperty(
                 ocio_look + ".ocio.function", ["look"], True)
             rvc.setStringProperty(
@@ -3729,16 +3750,17 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 ocio_look + ".ocio.outColorSpace", ["ACEScg"], True)
             rvc.setStringProperty(
                 ocio_look + ".ocio_look.look", ["shot_grade"], True)
-            # Re-enable -- this triggers the OCIO shader build
+
+            # 5e — Re-enable → triggers the final OCIO shader build.
             rvc.setIntProperty(ocio_look + ".ocio.active", [1], True)
             print("[LUT] OCIO properties set on %s" % ocio_look)
 
-            # Step 6: Tell OCIO node to pick up the new config
+            # 5f — Final config refresh
             try:
                 rvc.ocioUpdateConfig(ocio_look)
-                print("[LUT] ocioUpdateConfig OK")
+                print("[LUT] ocioUpdateConfig (final) OK")
             except Exception as e:
-                print("[LUT] ocioUpdateConfig skipped: %s" % e)
+                print("[LUT] ocioUpdateConfig (final) note: %s" % e)
 
             # Step 7: Redraw
             rvc.redraw()
@@ -3769,9 +3791,16 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                                 break
                     
                     if ocio_disp:
-                        # Ensure properties exist on OCIODisplay too
+                        # Same disable-first strategy as OCIOLook above.
+                        # Disable BEFORE creating any properties so the
+                        # render thread doesn't validate empty strings.
+                        disp_active = ocio_disp + ".ocio.active"
+                        if not rvc.propertyExists(disp_active):
+                            rvc.newProperty(disp_active, rvc.IntType, 1)
+                        rvc.setIntProperty(disp_active, [0], True)
+
+                        # Create missing properties (node is disabled)
                         for (prop, val_type) in (
-                            ("ocio.active", rvc.IntType),
                             ("ocio.config", rvc.StringType),
                             ("ocio.function", rvc.StringType),
                             ("ocio.inColorSpace", rvc.StringType),
@@ -3783,13 +3812,15 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                                  print("[LUT] Creating display property: %s" % full_prop)
                                  rvc.newProperty(full_prop, val_type, 1)
 
-                        # Disable momentarily to prevent "Cannot find source color space" errors
-                        # while we switch the config and colorspace strings.
-                        rvc.setIntProperty(ocio_disp + ".ocio.active", [0], True)
-
-                        # Use the same config so definitions match
+                        # Load config FIRST so ACEScg is resolvable
                         rvc.setStringProperty(
                             ocio_disp + ".ocio.config", [config_path], True)
+                        try:
+                            rvc.ocioUpdateConfig(ocio_disp)
+                        except Exception:
+                            pass
+
+                        # Now set function + colorspaces (ACEScg exists)
                         rvc.setStringProperty(
                             ocio_disp + ".ocio.function", ["display"], True)
                         rvc.setStringProperty(
@@ -3801,8 +3832,12 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         rvc.setStringProperty(
                             ocio_disp + ".ocio_display.view", ["ACES 1.0 - SDR Video"], True)
                         
-                        rvc.setIntProperty(ocio_disp + ".ocio.active", [1], True)
-                        rvc.ocioUpdateConfig(ocio_disp)
+                        # Re-enable and finalize
+                        rvc.setIntProperty(disp_active, [1], True)
+                        try:
+                            rvc.ocioUpdateConfig(ocio_disp)
+                        except Exception:
+                            pass
                         print("[LUT] Enforced ACES Display on %s" % ocio_disp)
             except Exception as e:
                 print("[LUT] Error enforcing Display ODT: %s" % e)

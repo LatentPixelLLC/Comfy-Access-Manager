@@ -2,6 +2,13 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.9.2] - 2026-03-04
+
+### Fixed — RV OCIO Setup Ordering (Eliminates Transient Errors)
+- **Disable-Before-Create** — `ocio.active` is now set to `0` *before* creating any new OCIO properties on the node. Previously, creating properties like `ocio.outColorSpace` while the node was still active caused RV's render thread to validate empty strings — producing `LookTransform: empty destination color space name` errors.
+- **Load Config Before Referencing Color Spaces** — `ocioUpdateConfig` is now called immediately after setting `ocio.config`, *before* setting `inColorSpace`/`outColorSpace` to `ACEScg`. This ensures the ACES studio config is loaded and `ACEScg` is resolvable when those properties are set, eliminating `Cannot find source color space named 'ACEScg'` errors.
+- Same fix applied to both `OCIOLook` (grade pipeline) and `OCIODisplay` (output pipeline) nodes.
+
 ## [1.9.1] - 2026-03-04
 
 ### Fixed — RV OCIO Pipeline Stability
