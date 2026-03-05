@@ -276,6 +276,16 @@ async function showEditProjectModal(projectId) {
             </div>
         </div>
 
+        <div class="ep-section" id="epLutSection">
+            <div class="ep-section-hdr">
+                <span>Show LUTs</span>
+                <span style="font-size:0.72rem;color:var(--text-muted);">Auto-applied in RV per media type</span>
+            </div>
+            <div id="epLutList" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+                <span style="color:var(--text-dim);font-size:.8rem;">Loading...</span>
+            </div>
+        </div>
+
         <div class="ep-section" id="epEdlSection">
             <div class="ep-section-hdr">
                 <span>EDL / Minicut</span>
@@ -435,6 +445,63 @@ async function showEditProjectModal(projectId) {
     }
 
     _loadOverlayPresets();
+
+    // ── Show LUTs ──
+    async function _loadProjectLUTs() {
+        const container = document.getElementById('epLutList');
+        if (!container) return;
+        try {
+            const luts = await fetch('/api/projects/' + proj.id + '/luts').then(r => r.json());
+            const lutMap = {};
+            for (const l of luts) lutMap[l.media_category] = l;
+
+            const categories = [
+                { key: 'exr', label: 'EXR / HDR / DPX' },
+                { key: 'video', label: 'Video (MOV, MP4...)' },
+                { key: 'image', label: 'Image (JPG, PNG...)' },
+            ];
+
+            container.innerHTML = categories.map(cat => {
+                const existing = lutMap[cat.key];
+                const val = existing ? esc(existing.lut_path || '') : '';
+                const name = existing ? esc(existing.lut_name || '') : '';
+                return `<div style="display:flex;gap:6px;align-items:center;">
+                    <label style="min-width:120px;font-size:.78rem;color:var(--text-dim);">${cat.label}</label>
+                    <input type="text" class="lut-path-input" data-cat="${cat.key}"
+                        value="${val}" placeholder="Path to LUT file (.cube, .3dl, ...)"
+                        style="flex:1;font-size:.78rem;padding:4px 6px;">
+                    <button class="btn-sm lut-save-btn" data-cat="${cat.key}"
+                        style="font-size:.72rem;">Set</button>
+                    ${existing ? '<button class="btn-sm lut-clear-btn" data-cat="' + cat.key + '" style="font-size:.72rem;color:#c66;">Clear</button>' : ''}
+                </div>`;
+            }).join('');
+
+            // Set button handlers
+            container.querySelectorAll('.lut-save-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const cat = btn.dataset.cat;
+                    const input = container.querySelector('.lut-path-input[data-cat="' + cat + '"]');
+                    const lutPath = input.value.trim();
+                    if (!lutPath) return;
+                    await fetch('/api/projects/' + proj.id + '/luts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ media_category: cat, lut_path: lutPath })
+                    });
+                    _loadProjectLUTs();
+                });
+            });
+            container.querySelectorAll('.lut-clear-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    await fetch('/api/projects/' + proj.id + '/luts/' + btn.dataset.cat, { method: 'DELETE' });
+                    _loadProjectLUTs();
+                });
+            });
+        } catch (e) {
+            container.innerHTML = '<span style="color:#c66;font-size:.8rem;">Failed to load LUTs</span>';
+        }
+    }
+    _loadProjectLUTs();
 
     // ── EDL / Minicut ──
     if (typeof window._loadEdlList === 'function') {

@@ -11,7 +11,9 @@
 
 const express = require('express');
 const router = express.Router();
-const { getDb, logActivity } = require('../database');
+const path = require('path');
+const fs = require('fs');
+const { getDb, logActivity, DATA_DIR } = require('../database');
 const FileService = require('../services/FileService');
 const { resolveUserAccess } = require('../utils/userAccess');
 const AIService = require('../services/AIService');
@@ -648,5 +650,104 @@ router.delete('/:projectId/sequences/:seqId/shots/:shotId', (req, res) => {
 
     res.json({ success: true });
 });
+
+
+// ═══════════════════════════════════════════
+//  PROJECT LUTs (per-project, per-media-category)
+// ═══════════════════════════════════════════
+
+const VALID_LUT_CATEGORIES = ['exr', 'video', 'image'];
+const multer = require('multer');
+const lutUpload = multer({ dest: path.join(DATA_DIR, 'uploads') });
+
+// GET /api/projects/:id/luts — List all LUT assignments for a project
+router.get('/:id/luts', (req, res) => {
+    const db = getDb();
+    const luts = db.prepare('SELECT * FROM project_luts WHERE project_id = ?').all(req.params.id);
+    res.json(luts);
+});
+
+// POST /api/projects/:id/luts — Set/update a LUT for a media category
+// Body: { media_category: 'exr'|'video'|'image', lut_path: '/path/to/lut.cube' }
+// Optional multipart: attach a LUT file for server-side caching (field: "lut_file")
+router.post('/:id/luts', lutUpload.single('lut_file'), (req, res) => {
+    const db = getDb();
+    const projectId = req.params.id;
+    const { media_category, lut_path } = req.body;
+
+    if (!media_category || !VALID_LUT_CATEGORIES.includes(media_category)) {
+        return res.status(400).json({ error: `media_category must be one of: ${VALID_LUT_CATEGORIES.join(', ')}` });
+    }
+    if (!lut_path && !req.file) {
+        return res.status(400).json({ error: 'Provide lut_path or upload a lut_file' });
+    }
+
+    const lutName = lut_path ? path.basename(lut_path) : (req.file ? req.file.originalname : null);
+    const finalPath = lut_path || (req.file ? req.file.originalname : null);
+
+    // If a file was uploaded, cache it on the server for download fallback
+    if (req.file) {
+        const lutDir = path.join(DATA_DIR, 'luts', String(projectId));
+        if (!fs.existsSync(lutDir)) fs.mkdirSync(lutDir, { recursive: true });
+        const ext = path.extname(req.file.originalname) || '.cube';
+        const dest = path.join(lutDir, `${media_category}${ext}`);
+        fs.renameSync(req.file.path, dest);
+    }
+
+    db.prepare(`
+        INSERT INTO project_luts (project_id, media_category, lut_path, lut_name)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(project_id, media_category) DO UPDATE SET
+            lut_path = excluded.lut_path,
+            lut_name = excluded.lut_name
+    `).run(projectId, media_category, finalPath, lutName);
+
+    logActivity('lut_set', 'project', projectId, { media_category, lut_name: lutName });
+
+    req.app.locals.broadcastChange?.('project_luts', 'insert', {
+        record: { project_id: Number(projectId), media_category, lut_path: finalPath, lut_name: lutName }
+    });
+
+    res.json({ success: true, media_category, lut_path: finalPath, lut_name: lutName });
+});
+
+// DELETE /api/projects/:id/luts/:category — Remove a LUT assignment
+router.delete('/:id/luts/:category', (req, res) => {
+    const db = getDb();
+    const { id, category } = req.params;
+
+    if (!VALID_LUT_CATEGORIES.includes(category)) {
+        return res.status(400).json({ error: `Invalid category: ${category}` });
+    }
+
+    db.prepare('DELETE FROM project_luts WHERE project_id = ? AND media_category = ?').run(id, category);
+
+    // Clean up cached file
+    const lutDir = path.join(DATA_DIR, 'luts', String(id));
+    try {
+        const files = fs.existsSync(lutDir) ? fs.readdirSync(lutDir) : [];
+        for (const f of files) {
+            if (f.startsWith(category)) fs.unlinkSync(path.join(lutDir, f));
+        }
+    } catch {}
+
+    req.app.locals.broadcastChange?.('project_luts', 'delete', { project_id: Number(id), media_category: category });
+
+    res.json({ success: true });
+});
+
+// GET /api/projects/:id/luts/:category/file — Serve cached LUT file (download fallback for RV)
+router.get('/:id/luts/:category/file', (req, res) => {
+    const { id, category } = req.params;
+    const lutDir = path.join(DATA_DIR, 'luts', String(id));
+
+    if (!fs.existsSync(lutDir)) return res.status(404).json({ error: 'No cached LUT file' });
+
+    const files = fs.readdirSync(lutDir).filter(f => f.startsWith(category));
+    if (files.length === 0) return res.status(404).json({ error: 'No cached LUT file' });
+
+    res.sendFile(path.join(lutDir, files[0]));
+});
+
 
 module.exports = router;

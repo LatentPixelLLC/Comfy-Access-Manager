@@ -1132,6 +1132,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self._cam_overlay_data = None   # cached preset-for-path response
         self._cam_overlay_path = None   # path the CAM overlay cache belongs to
 
+        # ── Project LUT cache ────────────────────────────────────
+        self._lut_cache        = {}     # {norm_key: lut_info_dict | False}
+        self._lut_applied_sgs  = set()  # source groups that already have LUT applied
+
         # ── ShotGrid Notes side-panel ────────────────────────────
         self._notes_panel = None         # ShotGridNotesPanel instance (lazy)
 
@@ -3294,6 +3298,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         except Exception as e:
             print("[MediaVault] Pre-cache roles failed: %s" % e)
 
+        # Auto-apply project LUTs to newly loaded sources
+        self._applyProjectLUTs()
+
     def _onViewChanged(self, event):
         """Handle source switching (PageUp/Down, timeline click, etc.).
 
@@ -3315,6 +3322,149 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         event.reject()
         if len(self._comfyui_cache) > 1 or self._overlay_enabled:
             self._syncCurrentSource()
+
+    # ── Project LUT auto-application ─────────────────────────
+    def _applyProjectLUTs(self):
+        """Fetch and apply project LUTs to all source groups.
+
+        Called once per source-load event.  For each RVSourceGroup that
+        hasn't been processed yet, resolve its file path, ask the CAM
+        server which LUT applies (if any), and set it on the
+        RVLookLUT node inside that source group.
+
+        Uses a per-session cache (_lut_cache) keyed by normalised path
+        so multiple sources in the same project/media-category don't
+        re-fetch.
+        """
+        try:
+            source_groups = rvc.nodesOfType("RVSourceGroup")
+        except Exception:
+            return
+
+        for sg in source_groups:
+            if sg in self._lut_applied_sgs:
+                continue
+
+            filepath = self._pathFromSourceGroup(sg)
+            if not filepath:
+                continue
+
+            norm = self._normKey(filepath)
+
+            # Check cache first
+            if norm not in self._lut_cache:
+                self._lut_cache[norm] = self._fetchLUTForPath(filepath)
+
+            lut_info = self._lut_cache[norm]
+            if not lut_info:
+                self._lut_applied_sgs.add(sg)
+                continue
+
+            lut_path = lut_info.get("lut_path", "")
+            download_url = lut_info.get("download_url")
+
+            # Try disk path first — resolve cross-platform if needed
+            resolved = lut_path
+            if not os.path.isfile(resolved):
+                # Try path swap (same env vars as RV network sync)
+                for i in range(20):
+                    key_win = "RV_OS_PATH_WINDOWS_%d" % i
+                    key_mac = "RV_OS_PATH_OSX_%d" % i
+                    win_prefix = os.environ.get(key_win, "")
+                    mac_prefix = os.environ.get(key_mac, "")
+                    if not win_prefix and not mac_prefix:
+                        break
+                    if sys.platform == "darwin" and win_prefix and \
+                            resolved.replace("\\", "/").lower().startswith(
+                                win_prefix.replace("\\", "/").lower()):
+                        resolved = mac_prefix + resolved[len(win_prefix):]
+                        break
+                    elif sys.platform == "win32" and mac_prefix and \
+                            resolved.startswith(mac_prefix):
+                        resolved = win_prefix + resolved[len(mac_prefix):]
+                        resolved = resolved.replace("/", "\\")
+                        break
+
+            # Fall back to downloading from the CAM server
+            if not os.path.isfile(resolved) and download_url:
+                resolved = self._downloadLUT(download_url, lut_info)
+
+            if not os.path.isfile(resolved):
+                if _VERBOSE:
+                    print("[MediaVault] LUT file not found: %s" % lut_path)
+                self._lut_applied_sgs.add(sg)
+                continue
+
+            # Find the RVLookLUT node inside this source group and apply
+            self._setLUTOnSourceGroup(sg, resolved, lut_info.get("lut_name", ""))
+            self._lut_applied_sgs.add(sg)
+
+    def _fetchLUTForPath(self, filepath):
+        """Ask the CAM server for the LUT config for a given file path.
+
+        Returns dict with {lut_path, lut_name, download_url, ...} or None.
+        """
+        try:
+            encoded = urllib.parse.quote(filepath, safe="")
+            url = "%s/api/assets/lut-for-path?path=%s" % (DMV_URL, encoded)
+            req = urllib.request.Request(url,
+                                         headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if data.get("found"):
+                return data
+            return None
+        except Exception as e:
+            if _VERBOSE:
+                print("[MediaVault] LUT fetch failed: %s" % e)
+            return None
+
+    def _downloadLUT(self, download_url, lut_info):
+        """Download a LUT file from the CAM server to a temp location.
+
+        Returns the local path to the downloaded file.
+        """
+        try:
+            url = "%s%s" % (DMV_URL, download_url)
+            ext = os.path.splitext(lut_info.get("lut_path", ".cube"))[1] or ".cube"
+            # Use a stable temp path so we don't re-download on every load
+            import hashlib
+            h = hashlib.md5(url.encode()).hexdigest()[:12]
+            import tempfile
+            temp_path = os.path.join(tempfile.gettempdir(),
+                                     "cam_lut_%s%s" % (h, ext))
+            if os.path.isfile(temp_path):
+                return temp_path
+
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+            with open(temp_path, "wb") as f:
+                f.write(data)
+            if _VERBOSE:
+                print("[MediaVault] Downloaded LUT to: %s" % temp_path)
+            return temp_path
+        except Exception as e:
+            print("[MediaVault] LUT download failed: %s" % e)
+            return ""
+
+    def _setLUTOnSourceGroup(self, sg, lut_file, lut_name):
+        """Apply a LUT file to the RVLookLUT node inside a source group."""
+        try:
+            for node in rvc.nodesInGroup(sg):
+                ntype = rvc.nodeType(node)
+                if ntype == "RVLookLUT":
+                    rvc.setStringProperty(node + ".lut.file",
+                                          [lut_file], True)
+                    rvc.setIntProperty(node + ".lut.active", [1], True)
+                    print("[MediaVault] Applied LUT '%s' to %s (%s)"
+                          % (lut_name, sg, os.path.basename(lut_file)))
+                    return
+            # If no RVLookLUT node found (shouldn't happen normally)
+            if _VERBOSE:
+                print("[MediaVault] No RVLookLUT node in %s" % sg)
+        except Exception as e:
+            print("[MediaVault] Error setting LUT on %s: %s" % (sg, e))
 
     def _setComfyUIPointersFromCache(self, hint_path=None):
         """Set _comfyui_path and _comfyui_meta from the cache.

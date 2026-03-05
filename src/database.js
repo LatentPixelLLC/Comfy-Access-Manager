@@ -548,6 +548,21 @@ function runMigrations(wrapper) {
         CREATE INDEX IF NOT EXISTS idx_edit_entries_shot ON edit_entries(shot_id);
     `);
 
+    // ─── Project LUTs (per-project, per-media-category) ───
+    wrapper.exec(`
+        CREATE TABLE IF NOT EXISTS project_luts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            media_category TEXT NOT NULL,
+            lut_path TEXT,
+            lut_name TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(project_id, media_category),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_luts_project ON project_luts(project_id);
+    `);
+
     // ─── Migrations: add columns to existing tables ───
     // annotation_image column for review_notes (stores annotated frame snapshot path)
     try {

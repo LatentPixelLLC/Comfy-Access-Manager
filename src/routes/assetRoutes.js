@@ -641,6 +641,69 @@ router.get('/compare-targets-by-path', (req, res) => {
 });
 
 
+// GET /api/assets/lut-for-path — Returns LUT config for an asset by file path
+// Used by RV plugin to auto-apply show LUTs on source load
+router.get('/lut-for-path', (req, res) => {
+    const db = getDb();
+    const filePath = req.query.path;
+    if (!filePath) return res.status(400).json({ error: 'Provide ?path= parameter' });
+
+    const variants = getAllPathVariants(filePath);
+    const stmt = db.prepare(`
+        SELECT a.project_id, a.media_type
+        FROM assets a
+        WHERE replace(a.file_path, '\\\\', '/') = ? COLLATE NOCASE
+        LIMIT 1
+    `);
+
+    let asset = null;
+    for (const v of variants) {
+        asset = stmt.get(v);
+        if (asset) break;
+    }
+    // Sequence fallback
+    if (!asset) {
+        const dirFwd = path.dirname(filePath).replace(/\\/g, '/');
+        const seqStmt = db.prepare(`
+            SELECT a.project_id, a.media_type FROM assets a
+            WHERE a.is_sequence = 1
+              AND replace(a.file_path, '\\\\', '/') LIKE ? COLLATE NOCASE
+            LIMIT 1
+        `);
+        for (const v of getAllPathVariants(dirFwd + '/%')) {
+            asset = seqStmt.get(v);
+            if (asset) break;
+        }
+    }
+
+    if (!asset) return res.json({ found: false });
+
+    // Map media_type to LUT category
+    const category = asset.media_type === 'exr' ? 'exr'
+                   : asset.media_type === 'video' ? 'video'
+                   : 'image';
+
+    const lut = db.prepare(
+        'SELECT lut_path, lut_name FROM project_luts WHERE project_id = ? AND media_category = ?'
+    ).get(asset.project_id, category);
+
+    if (!lut || !lut.lut_path) return res.json({ found: false });
+
+    // Check if a server-cached copy exists for download fallback
+    const DATA_DIR = require('../database').DATA_DIR;
+    const cachedFile = path.join(DATA_DIR, 'luts', `${asset.project_id}`, `${category}${path.extname(lut.lut_path)}`);
+    const hasDownload = fs.existsSync(cachedFile);
+
+    res.json({
+        found: true,
+        lut_path: lut.lut_path,
+        lut_name: lut.lut_name,
+        media_category: category,
+        download_url: hasDownload ? `/api/projects/${asset.project_id}/luts/${category}/file` : null,
+    });
+});
+
+
 // GET /api/assets/overlay-info — Lightweight metadata for RV overlay burn-in
 // Used by RV plugin to show filename, version, role, project/shot info on screen
 router.get('/overlay-info', (req, res) => {
