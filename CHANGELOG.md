@@ -2,6 +2,12 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.9.1] - 2026-03-04
+
+### Fixed — RV OCIO Pipeline Stability
+- **Fixed "Cannot find source color space" Crash** — The plugin now temporarily disables the `OCIODisplay` node (`ocio.active=0`) before setting its configuration and input color space. This prevents RV from validating `ACEScg` against the default (potentially empty) config before the new config is loaded.
+- **Fixed Empty Destination Space Error** — Explicitly sets `ocio.outColorSpace` to `ACEScg` on `OCIOLook` nodes to ensure the color pipeline is fully defined.
+
 ## [1.9.0] - 2026-03-04
 
 ### Fixed — RV OCIO Node Initialization

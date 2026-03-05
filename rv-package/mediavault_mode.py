@@ -3726,6 +3726,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             rvc.setStringProperty(
                 ocio_look + ".ocio.inColorSpace", ["ACEScg"], True)
             rvc.setStringProperty(
+                ocio_look + ".ocio.outColorSpace", ["ACEScg"], True)
+            rvc.setStringProperty(
                 ocio_look + ".ocio_look.look", ["shot_grade"], True)
             # Re-enable -- this triggers the OCIO shader build
             rvc.setIntProperty(ocio_look + ".ocio.active", [1], True)
@@ -3780,6 +3782,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                              if not rvc.propertyExists(full_prop):
                                  print("[LUT] Creating display property: %s" % full_prop)
                                  rvc.newProperty(full_prop, val_type, 1)
+
+                        # Disable momentarily to prevent "Cannot find source color space" errors
+                        # while we switch the config and colorspace strings.
+                        rvc.setIntProperty(ocio_disp + ".ocio.active", [0], True)
 
                         # Use the same config so definitions match
                         rvc.setStringProperty(
