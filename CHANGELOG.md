@@ -2,6 +2,14 @@
 
 All notable changes to Comfy Asset Manager (CAM) will be documented in this file.
 
+## [1.9.43] - 2026-03-05
+
+### Fixed — RV Overlay Invisible After Frame 1 on EXR Sequences
+- **Root Cause** — The OCIO color pipeline uses GL shader programs to apply color transforms (ACEScg -> ACEScct -> LUT -> display). After RV renders an EXR frame with OCIO, the shader stays bound. On frame 2+, the overlay's fixed-function GL calls (`glColor4f`, `glVertex2f`, `glBitmap`) went through the OCIO shader instead of the normal pipeline, making the overlay invisible. Frame 1 worked because the OCIO shader wasn't compiled/bound yet during that first render pass.
+- **Fix** — `render()` now saves the active GL program, calls `glUseProgram(0)` to switch to the fixed-function pipeline before drawing overlays, then restores the original program afterward. This ensures overlay drawing is always independent of the OCIO color pipeline.
+- MOV files were unaffected because they don't go through the OCIO LUT pipeline.
+- Added `glUseProgram`, `glGetIntegerv`, `GL_CURRENT_PROGRAM` imports (with graceful fallback via `_HAS_GL_SHADERS` flag).
+
 ## [1.9.42] - 2026-03-04
 
 ### Fixed — RV OCIO: Correct Display Name for ACES Studio Config

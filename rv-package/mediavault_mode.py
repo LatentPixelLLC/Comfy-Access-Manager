@@ -28,6 +28,7 @@ except ImportError:
 
 # ─── OpenGL for overlay rendering ─────────────────────────────
 _HAS_GL = False
+_HAS_GL_SHADERS = False
 try:
     from OpenGL.GL import (
         glMatrixMode, glPushMatrix, glPopMatrix, glLoadIdentity,
@@ -41,6 +42,11 @@ try:
     )
     from OpenGL.GLU import gluOrtho2D
     _HAS_GL = True
+    try:
+        from OpenGL.GL import glUseProgram, glGetIntegerv, GL_CURRENT_PROGRAM
+        _HAS_GL_SHADERS = True
+    except ImportError:
+        pass
 except ImportError:
     pass
 
@@ -4898,6 +4904,22 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # (_onSourceLoaded, _onViewChanged) — NOT here.
             # The render loop is 100% non-blocking: pure display only.
 
+            # ── Disable active shaders ──
+            # The OCIO color pipeline uses GL shaders to apply color
+            # transforms.  After RV renders an EXR with OCIO, the
+            # shader stays bound.  Fixed-function GL calls (glColor4f,
+            # glVertex2f, glBitmap) go through that shader instead of
+            # the normal pipeline, making the overlay invisible.
+            # Save the active program, switch to fixed-function (0),
+            # draw overlays, then restore.
+            _prev_prog = None
+            if _HAS_GL_SHADERS:
+                try:
+                    _prev_prog = int(glGetIntegerv(GL_CURRENT_PROGRAM))
+                    glUseProgram(0)
+                except Exception:
+                    _prev_prog = None
+
             # ── Set up 2D ortho projection ──
             glMatrixMode(GL_PROJECTION)
             glPushMatrix()
@@ -4926,6 +4948,13 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             glMatrixMode(GL_PROJECTION)
             glPopMatrix()
             glMatrixMode(GL_MODELVIEW)
+
+            # ── Restore shader program ──
+            if _HAS_GL_SHADERS and _prev_prog is not None:
+                try:
+                    glUseProgram(_prev_prog)
+                except Exception:
+                    pass
 
         except Exception:
             pass  # never crash RV's render loop
