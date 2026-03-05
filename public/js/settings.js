@@ -379,7 +379,8 @@ async function fpNavigate(dir) {
 
         if (data.parent || dir) {
             const parentPath = data.parent || '';
-            html += `<div class="fp-entry fp-entry-up" ondblclick="fpNavigate('${escAttr(parentPath)}')">
+            const parentEnc = encodeURIComponent(parentPath);
+            html += `<div class="fp-entry fp-entry-up" ondblclick="fpNavigate(decodeURIComponent('${parentEnc}'))">
                 <span class="fp-icon">Up</span>
                 <span class="fp-name">..</span>
             </div>`;
@@ -393,7 +394,8 @@ async function fpNavigate(dir) {
             html += `<div class="fp-section-header" style="padding:6px 12px;font-size:0.75rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border-color, #333);">Network Drives</div>`;
             for (const entry of networkDrives) {
                 const subtitle = entry.server ? `<span class="fp-subtitle" style="font-size:0.72rem;color:var(--text-muted);margin-left:8px;">${esc(entry.server)}</span>` : '';
-                html += `<div class="fp-entry fp-entry-network" onclick="fpNavigate('${escAttr(entry.path)}')" style="background:rgba(59,130,246,0.06);">
+                const enc = encodeURIComponent(entry.path);
+                html += `<div class="fp-entry fp-entry-network" onclick="fpNavigate(decodeURIComponent('${enc}'))" style="background:rgba(59,130,246,0.06);">
                     <span class="fp-icon">${entry.icon || ''}</span>
                     <span class="fp-name">${esc(entry.name)}${subtitle}</span>
                 </div>`;
@@ -405,11 +407,12 @@ async function fpNavigate(dir) {
 
         const mainEntries = networkDrives.length > 0 && !dir ? otherEntries : data.entries.filter(e => e.isDirectory);
         for (const entry of mainEntries) {
+            const enc = encodeURIComponent(entry.path);
             // At root level (drive list): single-click navigates into the drive
             // Inside a directory: single-click selects, double-click navigates
             const clickAction = !dir
-                ? `onclick="fpNavigate('${escAttr(entry.path)}')"`
-                : `onclick="fpSelectEntry('${escAttr(entry.path)}')" ondblclick="fpNavigate('${escAttr(entry.path)}')"`;
+                ? `onclick="fpNavigate(decodeURIComponent('${enc}'))"`
+                : `onclick="fpSelectEntry(decodeURIComponent('${enc}'))" ondblclick="fpNavigate(decodeURIComponent('${enc}'))"`;
             html += `<div class="fp-entry" ${clickAction}>
                 <span class="fp-icon">${entry.icon || '[Folder]'}</span>
                 <span class="fp-name">${esc(entry.name)}</span>
@@ -422,7 +425,8 @@ async function fpNavigate(dir) {
             for (const entry of files) {
                 const ext = (entry.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
                 if (fpFileExtFilter && !fpFileExtFilter.includes(ext)) continue;
-                html += `<div class="fp-entry fp-entry-file" onclick="fpSelectEntry('${escAttr(entry.path)}')" ondblclick="fpSelectAndConfirm('${escAttr(entry.path)}')">
+                const enc = encodeURIComponent(entry.path);
+                html += `<div class="fp-entry fp-entry-file" onclick="fpSelectEntry(decodeURIComponent('${enc}'))" ondblclick="fpSelectAndConfirm(decodeURIComponent('${enc}'))">
                     <span class="fp-icon">[F]</span>
                     <span class="fp-name">${esc(entry.name)}</span>
                 </div>`;
