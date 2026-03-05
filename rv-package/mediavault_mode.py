@@ -1135,6 +1135,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         # ── Project LUT cache ────────────────────────────────────
         self._lut_cache        = {}     # {norm_key: lut_info_dict | False}
         self._lut_applied_sgs  = set()  # source groups that already have LUT applied
+        self._lut_name_by_sg   = {}     # {source_group: lut_filename} for overlay display
 
         # ── ShotGrid Notes side-panel ────────────────────────────
         self._notes_panel = None         # ShotGridNotesPanel instance (lazy)
@@ -3401,6 +3402,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
             # Find the RVLookLUT node inside this source group and apply
             self._setLUTOnSourceGroup(sg, resolved, lut_info.get("lut_name", ""))
+            self._lut_name_by_sg[sg] = lut_info.get("lut_name", os.path.basename(resolved))
             self._lut_applied_sgs.add(sg)
 
     def _fetchLUTForPath(self, filepath):
@@ -4615,6 +4617,24 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             pass
 
         label = "%s  %s" % (shot, frame_str)
+
+        # Append LUT name if one was applied to the current source group
+        lut_label = None
+        try:
+            sgs = rvc.nodesOfType("RVSourceGroup")
+            cur_path = self._getCurrentSourcePath()
+            if cur_path:
+                cur_norm = self._normKey(cur_path)
+                for sg in sgs:
+                    fp = self._pathFromSourceGroup(sg)
+                    if fp and self._normKey(fp) == cur_norm:
+                        lut_label = self._lut_name_by_sg.get(sg)
+                        break
+        except Exception:
+            pass
+
+        if lut_label:
+            label += "  LUT: %s" % lut_label
 
         padding = 8
         tw = self._textW(label)
