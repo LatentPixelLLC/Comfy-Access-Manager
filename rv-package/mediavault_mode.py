@@ -3561,8 +3561,11 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         except Exception as e:
             print("[LUT-DIAG]   Could not enumerate: %s" % e)
 
-    # Domain max for baked LUT — 16 covers ~7 stops above mid-gray
-    _LUT_DOMAIN_MAX = 16.0
+    # Linear range covered by the baked LUT.
+    # 4.0 covers highlights well (user confirmed max EXR values < 3).
+    # .lut.scale = 1/RANGE is set after readLUT as an input divider
+    # so pixels 0-4 map to cube positions 0-1.
+    _LUT_BAKE_RANGE = 4.0
 
     @staticmethod
     def _lin2acescct(x):
@@ -3650,16 +3653,16 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         we pre-compute a new 3D cube where each grid point already
         includes the linear->ACEScct conversion.
 
-        For each grid point at position (r, g, b) in linear [0, 1]:
-          1. Convert to ACEScct
-          2. Look up the original grade cube at the ACEScct position
-          3. Convert graded ACEScct back to linear
+        Grid position p represents linear value (p * _LUT_BAKE_RANGE).
+        After readLUT, .lut.scale is set to 1/RANGE so that:
+          pixel_value * (1/RANGE) = grid_position
+        This maps pixel range [0, RANGE] into cube [0, 1].
 
-        Highlights above 1.0 linear will clip to the grade at 1.0,
-        but the visible range (shadows through mid-tones) will be
-        correctly graded.  Since RV ignores DOMAIN_MAX and .lut.scale
-        is an input multiplier that causes blowout, we keep everything
-        in the native [0,1] domain.
+        For each grid point p:
+          1. linear = p * RANGE
+          2. ACEScct = lin2acescct(linear)
+          3. graded_cct = lookup original cube at ACEScct position
+          4. output = acescct2lin(graded_cct)
 
         Returns the path to the baked .cube file (cached in temp dir).
         """
@@ -3711,16 +3714,16 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         print("[LUT-DIAG]   Parsed original: %d^3 cube, %d entries"
               % (src_size, len(src_data)))
 
-        # ---- Bake: [0,1] linear domain ----
-        # RV ignores DOMAIN_MAX and .lut.scale is an input multiplier
-        # that blows things out.  So we stay purely in [0,1].
-        # Grid position p = linear value p.
-        # Highlights > 1.0 clamp to the grade at linear 1.0.
+        # ---- Bake: grid pos p = linear (p * RANGE) ----
+        # .lut.scale = 1/RANGE is set after readLUT to map
+        # pixel range [0, RANGE] into cube positions [0, 1].
         OUT_SIZE = src_size  # match original (typically 33)
+        RANGE = self._LUT_BAKE_RANGE
         total = OUT_SIZE ** 3
 
-        print("[LUT-DIAG]   Baking %d^3=%d points (domain [0,1] linear) ..."
-              % (OUT_SIZE, total))
+        print("[LUT-DIAG]   Baking %d^3=%d points (covers 0-%.1f linear, "
+              "scale will be %.4f) ..."
+              % (OUT_SIZE, total, RANGE, 1.0 / RANGE))
 
         out_lines = [
             'TITLE "Baked ACEScct + Grade (MediaVault auto-gen)"',
@@ -3730,13 +3733,13 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         count = 0
         # .cube order: R fastest, then G, then B
         for bi in range(OUT_SIZE):
-            b_lin = float(bi) / (OUT_SIZE - 1)  # 0-1 linear
+            b_lin = float(bi) / (OUT_SIZE - 1) * RANGE
             b_cct = self._lin2acescct(b_lin)
             for gi in range(OUT_SIZE):
-                g_lin = float(gi) / (OUT_SIZE - 1)
+                g_lin = float(gi) / (OUT_SIZE - 1) * RANGE
                 g_cct = self._lin2acescct(g_lin)
                 for ri in range(OUT_SIZE):
-                    r_lin = float(ri) / (OUT_SIZE - 1)
+                    r_lin = float(ri) / (OUT_SIZE - 1) * RANGE
                     r_cct = self._lin2acescct(r_lin)
 
                     # Look up original grade cube at ACEScct position
@@ -3759,8 +3762,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
         fsize = os.path.getsize(baked_path)
         print("[LUT-DIAG]   Baked cube: %s (%d bytes, %d^3=%d entries, "
-              "domain [0,1] linear, ACEScct baked in)"
-              % (baked_path, fsize, OUT_SIZE, count))
+              "range 0-%.1f linear, needs scale=%.4f)"
+              % (baked_path, fsize, OUT_SIZE, count, RANGE,
+                 1.0 / RANGE))
         return baked_path
 
     def _setLUTOnSourceGroup(self, sg, lut_file, lut_name):
@@ -3820,7 +3824,23 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                   "readLUT('%s', '%s') ..." % (baked_path, look_node))
             rvc.readLUT(baked_path, look_node)
             rvc.setIntProperty(look_node + ".lut.active", [1], True)
-            print("[LUT-DIAG]   readLUT OK — no scale/domain tricks")
+            print("[LUT-DIAG]   readLUT OK")
+
+            # ---- Step 3b: Set scale to compress input range ----
+            # .lut.scale is an INPUT multiplier.  scale = 1/RANGE means
+            # pixel 3.0 * 0.25 = 0.75 -> cube pos 0.75 -> baked from
+            # linear 3.0.  This extends coverage to [0, RANGE].
+            inv_range = 1.0 / self._LUT_BAKE_RANGE
+            try:
+                rvc.setFloatProperty(
+                    look_node + ".lut.scale",
+                    [inv_range, inv_range, inv_range], True)
+                print("[LUT-DIAG]   Set scale = [%.4f, %.4f, %.4f] "
+                      "(range 0-%.1f)"
+                      % (inv_range, inv_range, inv_range,
+                         self._LUT_BAKE_RANGE))
+            except Exception as e:
+                print("[LUT-DIAG]   Could not set scale: %s" % e)
 
             # ---- Step 4: Verify ----
             self._dumpColorPipeline(sg)
