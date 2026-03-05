@@ -138,6 +138,7 @@ router.get('/status/:jobId', (req, res) => {
         status: job.status,
         progress: job.progress,
         progressText: job.progressText,
+        proxyPath: job.proxyPath || null,
         error: job.error,
         createdAt: job.createdAt,
         startedAt: job.startedAt,
@@ -338,6 +339,7 @@ async function processNext() {
 
         job.status = 'completed';
         job.progress = 100;
+        job.proxyPath = proxyDir;
         job.progressText = `Proxy ready: ${outputFiles.length} frames (${formatBytes(totalSize)})`;
         console.log(`[Proxy] Job #${jobId} completed: ${outputFiles.length} frames, ${formatBytes(totalSize)}`);
 

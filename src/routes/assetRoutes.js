@@ -33,6 +33,28 @@ const upload = multer({
 
 
 // ═══════════════════════════════════════════
+//  PROXY PATH HELPER
+// ═══════════════════════════════════════════
+
+/**
+ * When RV loads a proxy EXR, the file path is inside data/proxies/<assetId>/.
+ * Path-based lookups (lut-for-path, overlay-info, compare-targets) will fail
+ * because the DB stores the original file_path, not the proxy path.
+ * This helper detects proxy paths and extracts the asset ID directly.
+ * Returns the asset row or null.
+ */
+function resolveAssetFromProxyPath(filePath) {
+    // Proxy paths look like: .../data/proxies/25439/filename.exr
+    // or on Windows: ...\data\proxies\25439\filename.exr
+    const normalized = filePath.replace(/\\/g, '/');
+    const proxyMatch = normalized.match(/\/proxies\/(\d+)\//);
+    if (!proxyMatch) return null;
+    const assetId = parseInt(proxyMatch[1], 10);
+    const db = getDb();
+    return db.prepare('SELECT * FROM assets WHERE id = ?').get(assetId) || null;
+}
+
+// ═══════════════════════════════════════════
 //  POLL (lightweight check for new assets)
 // ═══════════════════════════════════════════
 
@@ -539,6 +561,14 @@ router.get('/compare-targets-by-path', (req, res) => {
             if (asset) break;
         }
     }
+    // Proxy path fallback: if file is inside data/proxies/<id>/, resolve original asset
+    if (!asset) {
+        const proxyAsset = resolveAssetFromProxyPath(filePath);
+        if (proxyAsset) {
+            asset = { id: proxyAsset.id, shot_id: proxyAsset.shot_id, sequence_id: proxyAsset.sequence_id,
+                      project_id: proxyAsset.project_id, role_id: proxyAsset.role_id, vault_name: proxyAsset.vault_name };
+        }
+    }
     if (!asset) {
         console.log('[compare-targets] Asset not found for path: %s (tried %d variants)', filePath, variants.length);
         return res.status(404).json({ error: 'Asset not found in vault' });
@@ -687,6 +717,22 @@ router.get('/lut-for-path', (req, res) => {
         for (const v of getAllPathVariants(dirFwd + '/%')) {
             asset = seqStmt.get(v);
             if (asset) break;
+        }
+    }
+    // Proxy path fallback: if file is inside data/proxies/<id>/, resolve original asset
+    if (!asset) {
+        const proxyAsset = resolveAssetFromProxyPath(filePath);
+        if (proxyAsset) {
+            const pa = db.prepare(`
+                SELECT a.project_id, a.media_type, a.shot_id,
+                       sh.name AS shot_name, sh.code AS shot_code,
+                       p.lut_folder
+                FROM assets a
+                LEFT JOIN shots sh ON a.shot_id = sh.id
+                LEFT JOIN projects p ON a.project_id = p.id
+                WHERE a.id = ?
+            `).get(proxyAsset.id);
+            if (pa) asset = pa;
         }
     }
 
@@ -860,6 +906,27 @@ router.get('/overlay-info', (req, res) => {
         for (const variant of getAllPathVariants(dirFwd + '/%')) {
             asset = seqOvStmt.get(variant);
             if (asset) break;
+        }
+    }
+    // Proxy path fallback: if file is inside data/proxies/<id>/, resolve original asset
+    if (!asset) {
+        const proxyAsset = resolveAssetFromProxyPath(filePath);
+        if (proxyAsset) {
+            const pa = db.prepare(`
+                SELECT a.id, a.vault_name, a.original_name, a.version, a.file_ext,
+                       a.media_type, a.created_at, a.status,
+                       r.name AS role_name, r.code AS role_code,
+                       p.name AS project_name, p.code AS project_code,
+                       seq.name AS sequence_name, seq.code AS sequence_code,
+                       sh.name AS shot_name, sh.code AS shot_code
+                FROM assets a
+                LEFT JOIN roles r ON a.role_id = r.id
+                LEFT JOIN projects p ON a.project_id = p.id
+                LEFT JOIN sequences seq ON a.sequence_id = seq.id
+                LEFT JOIN shots sh ON a.shot_id = sh.id
+                WHERE a.id = ?
+            `).get(proxyAsset.id);
+            if (pa) asset = pa;
         }
     }
 

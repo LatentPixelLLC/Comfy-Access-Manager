@@ -1762,7 +1762,7 @@ async function generateProxy(assetId, assetName, mode = 'halfres') {
                     showToast(`Proxy ready: ${assetName || assetId}`, 5000);
                     // Update the local asset cache so context menu reflects new state
                     const cached = state.assets?.find(a => a.id === assetId);
-                    if (cached) cached.proxy_path = 'exists';
+                    if (cached) cached.proxy_path = status.proxyPath || 'exists';
                 } else if (status.status === 'failed') {
                     clearInterval(pollInterval);
                     showToast(`Proxy failed: ${status.error || 'Unknown error'}`, 8000);
