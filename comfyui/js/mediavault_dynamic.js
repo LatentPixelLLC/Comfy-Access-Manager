@@ -20,6 +20,8 @@ const MV_NODES = [
     "SaveToMediaVault",
 ];
 
+const SAVE_PREVIEW_NODES = ["SaveToMediaVault"];
+
 // Nodes that should show an asset thumbnail preview
 const PREVIEW_NODES = ["LoadFromMediaVault", "LoadVideoFrameFromMediaVault", "LoadVideoFromMediaVault"];
 
@@ -50,6 +52,42 @@ async function mvFetch(path) {
         console.warn("[MediaVault] fetch error:", path, e);
         return [];
     }
+}
+
+async function mvPost(path, body) {
+    try {
+        const res = await fetch(path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return { error: data?.error || `HTTP ${res.status}` };
+        return data ?? {};
+    } catch (e) {
+        console.warn("[MediaVault] post error:", path, e);
+        return { error: e?.message || "Request failed" };
+    }
+}
+
+function chunkText(text, maxChars = 44) {
+    if (!text) return [""];
+    const normalized = String(text).replace(/\\/g, "\\");
+    const parts = normalized.split(/(\\|\/)/).filter(Boolean);
+    const lines = [];
+    let line = "";
+
+    for (const part of parts) {
+        if ((line + part).length > maxChars && line) {
+            lines.push(line);
+            line = part;
+        } else {
+            line += part;
+        }
+    }
+
+    if (line) lines.push(line);
+    return lines.length ? lines : [normalized];
 }
 
 // ── Update helpers ──────────────────────────────────────
@@ -446,6 +484,364 @@ async function updateVideoInfo(node) {
     node.setDirtyCanvas?.(true, true);
 }
 
+// ── Save Preview Widget ─────────────────────────────────
+
+function setWidgetValue(node, widgetName, value) {
+    const widget = findWidget(node, widgetName);
+    if (!widget) return;
+
+    if (widget.options?.values && !widget.options.values.includes(value)) {
+        widget.options.values.push(value);
+    }
+
+    widget.value = value;
+    if (typeof widget.callback === "function") {
+        widget.callback.call(widget, value);
+    }
+}
+
+function buildSavePreviewLines(preview) {
+    if (!preview) return [];
+    if (preview.error) return [`Preview error: ${preview.error}`];
+
+    const lines = ["Save Preview"];
+    lines.push(...chunkText(`Folder: ${preview.directory || ""}`, 42));
+    lines.push(...chunkText(`Name: ${preview.filename || ""}`, 42));
+
+    if (preview.auto_publish) {
+        const taskLabel = preview.flow_task_name ? ` -> ${preview.flow_task_name}` : "";
+        lines.push(`Flow: auto-publish on${taskLabel}`);
+    } else if (preview.flow_linked) {
+        lines.push("Flow: linked project (auto-publish off)");
+    }
+
+    return lines;
+}
+
+function addSavePreviewWidget(node) {
+    if (!SAVE_PREVIEW_NODES.includes(node.comfyClass)) return;
+    if (node.widgets?.find(w => w.name === "mv_save_preview")) return;
+
+    const widget = {
+        name: "mv_save_preview",
+        type: "MEDIAVAULT_SAVE_PREVIEW",
+        value: "",
+        serialize: false,
+        options: { serialize: false },
+
+        draw(ctx, _node, widgetWidth, y) {
+            const lines = _node._mvSavePreviewLines || ["Resolving save preview..."];
+            const pad = 8;
+            const boxW = widgetWidth - pad * 2;
+            const lineH = 13;
+            const boxH = Math.max(40, lines.length * lineH + 12);
+            const top = y + 2;
+
+            ctx.fillStyle = "#1d1d1d";
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, boxW, boxH, 4);
+                ctx.fill();
+            } else {
+                ctx.fillRect(pad, top, boxW, boxH);
+            }
+
+            ctx.strokeStyle = _node._mvSavePreview?.error ? "#8a4f4f" : "#4f5f6a";
+            ctx.lineWidth = 1;
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, boxW, boxH, 4);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(pad, top, boxW, boxH);
+            }
+
+            ctx.font = "11px monospace";
+            ctx.textAlign = "left";
+
+            lines.forEach((line, idx) => {
+                ctx.fillStyle = idx === 0
+                    ? "#d8d8d8"
+                    : (_node._mvSavePreview?.error ? "#ff9a9a" : "#aeb8c2");
+                ctx.fillText(line, pad + 8, top + 15 + idx * lineH);
+            });
+        },
+
+        computeSize(width) {
+            const lines = node._mvSavePreviewLines || ["Resolving save preview..."];
+            return [width, Math.max(44, lines.length * 13 + 16)];
+        },
+    };
+
+    node.widgets = node.widgets || [];
+    const refreshIdx = node.widgets.findIndex(w => w.name === REFRESH_BTN_NAME);
+    if (refreshIdx >= 0) {
+        node.widgets.splice(refreshIdx, 0, widget);
+    } else {
+        node.widgets.push(widget);
+    }
+}
+
+async function updateSavePreview(node) {
+    if (!SAVE_PREVIEW_NODES.includes(node.comfyClass)) return;
+
+    const projectW = findWidget(node, "project");
+    if (!projectW || !projectW.value || projectW.value.startsWith("(Load")) {
+        node._mvSavePreview = null;
+        node._mvSavePreviewLines = ["Save Preview", "Pick a project to resolve the path."];
+        node.setDirtyCanvas?.(true, true);
+        return;
+    }
+
+    const sequenceW = findWidget(node, "sequence");
+    const shotW = findWidget(node, "shot");
+    const roleW = findWidget(node, "role");
+    const customNameW = findWidget(node, "custom_name");
+    const formatW = findWidget(node, "format");
+
+    const projectId = await resolveId("/mediavault/projects", projectW.value);
+    const sequenceId = sequenceW ? await resolveId("/mediavault/sequences", sequenceW.value) : "0";
+    const shotId = shotW ? await resolveId("/mediavault/shots", shotW.value) : "0";
+    const roleId = roleW ? await resolveId("/mediavault/roles", roleW.value) : "0";
+
+    node._mvSavePreviewLines = ["Save Preview", "Resolving path..."];
+    node.setDirtyCanvas?.(true, true);
+
+    const preview = await mvPost("/mediavault/preview-save", {
+        project_id: projectId,
+        sequence_id: sequenceId !== "0" ? sequenceId : undefined,
+        shot_id: shotId !== "0" ? shotId : undefined,
+        role_id: roleId !== "0" ? roleId : undefined,
+        custom_name: customNameW?.value || "",
+        format: formatW?.value || "png",
+    });
+
+    node._mvSavePreview = preview;
+    node._mvSavePreviewLines = buildSavePreviewLines(preview);
+
+    const sz = node.computeSize();
+    node.setSize([Math.max(node.size[0], sz[0]), Math.max(node.size[1], sz[1])]);
+    node.setDirtyCanvas?.(true, true);
+}
+
+// ── Searchable Selectors ───────────────────────────────
+
+let _mvSearchModal = null;
+
+function getSearchableFields(node) {
+    return ["project", "sequence", "shot", "role", "asset"]
+        .filter(name => {
+            const widget = findWidget(node, name);
+            return widget && Array.isArray(widget.options?.values);
+        });
+}
+
+function ensureSearchModal() {
+    if (_mvSearchModal) return _mvSearchModal;
+
+    const overlay = document.createElement("div");
+    overlay.style.cssText = [
+        "position:fixed",
+        "inset:0",
+        "display:none",
+        "align-items:center",
+        "justify-content:center",
+        "background:rgba(0,0,0,0.55)",
+        "z-index:10000",
+    ].join(";");
+
+    const panel = document.createElement("div");
+    panel.style.cssText = [
+        "width:min(520px, 92vw)",
+        "max-height:80vh",
+        "display:flex",
+        "flex-direction:column",
+        "gap:10px",
+        "padding:14px",
+        "border-radius:8px",
+        "background:#222",
+        "border:1px solid #555",
+        "box-shadow:0 10px 30px rgba(0,0,0,0.4)",
+        "color:#ddd",
+    ].join(";");
+
+    const title = document.createElement("div");
+    title.textContent = "Search Selector";
+    title.style.cssText = "font-size:14px;font-weight:600;";
+
+    const fieldSelect = document.createElement("select");
+    fieldSelect.style.cssText = "padding:8px;background:#2c2c2c;color:#ddd;border:1px solid #555;border-radius:4px;";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Type to filter...";
+    input.style.cssText = "padding:8px;background:#2c2c2c;color:#ddd;border:1px solid #555;border-radius:4px;";
+
+    const results = document.createElement("div");
+    results.style.cssText = "display:flex;flex-direction:column;gap:6px;overflow:auto;max-height:50vh;";
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Close";
+    closeBtn.style.cssText = "align-self:flex-end;padding:6px 10px;background:#3a3a3a;color:#ddd;border:1px solid #555;border-radius:4px;cursor:pointer;";
+
+    const state = { node: null };
+
+    function getFieldOptions() {
+        const field = fieldSelect.value;
+        const widget = state.node ? findWidget(state.node, field) : null;
+        const values = widget?.options?.values || [];
+        return values.filter(v => v && v !== "No assets found" && v !== "(Select project first)");
+    }
+
+    function renderResults() {
+        results.innerHTML = "";
+        const query = (input.value || "").trim().toLowerCase();
+        const matches = getFieldOptions()
+            .filter(v => !query || String(v).toLowerCase().includes(query))
+            .slice(0, 100);
+
+        if (!matches.length) {
+            const empty = document.createElement("div");
+            empty.textContent = "No matches";
+            empty.style.cssText = "padding:8px;color:#999;";
+            results.appendChild(empty);
+            return;
+        }
+
+        for (const value of matches) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = value;
+            btn.style.cssText = "padding:8px;text-align:left;background:#2c2c2c;color:#ddd;border:1px solid #444;border-radius:4px;cursor:pointer;";
+            btn.onclick = () => {
+                setWidgetValue(state.node, fieldSelect.value, value);
+                overlay.style.display = "none";
+                if (SAVE_PREVIEW_NODES.includes(state.node?.comfyClass)) {
+                    updateSavePreview(state.node);
+                }
+            };
+            results.appendChild(btn);
+        }
+    }
+
+    fieldSelect.addEventListener("change", renderResults);
+    input.addEventListener("input", renderResults);
+    closeBtn.addEventListener("click", () => {
+        overlay.style.display = "none";
+    });
+    overlay.addEventListener("pointerdown", (e) => {
+        if (e.target === overlay) overlay.style.display = "none";
+    });
+
+    panel.append(title, fieldSelect, input, results, closeBtn);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    _mvSearchModal = {
+        overlay,
+        fieldSelect,
+        input,
+        state,
+        renderResults,
+        open(node) {
+            const fields = getSearchableFields(node);
+            if (!fields.length) return;
+
+            state.node = node;
+            title.textContent = `Search Selector — ${node.title || node.comfyClass}`;
+            fieldSelect.innerHTML = "";
+
+            for (const field of fields) {
+                const opt = document.createElement("option");
+                opt.value = field;
+                opt.textContent = field.charAt(0).toUpperCase() + field.slice(1);
+                fieldSelect.appendChild(opt);
+            }
+
+            input.value = "";
+            overlay.style.display = "flex";
+            renderResults();
+            setTimeout(() => input.focus(), 20);
+        },
+    };
+
+    return _mvSearchModal;
+}
+
+const SEARCH_BTN_NAME = "Search Select";
+
+function addSearchButton(node) {
+    if (node.widgets?.find(w => w.name === SEARCH_BTN_NAME)) return;
+
+    const btn = {
+        name: SEARCH_BTN_NAME,
+        type: "MEDIAVAULT_SEARCH",
+        value: null,
+        serialize: false,
+        options: { serialize: false },
+        _clicking: false,
+
+        draw(ctx, _node, widgetWidth, y) {
+            const pad = 8;
+            const btnW = widgetWidth - pad * 2;
+            const btnH = 24;
+            const top = y + 2;
+
+            ctx.fillStyle = this._clicking ? "#555" : "#383838";
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, btnW, btnH, 4);
+                ctx.fill();
+            } else {
+                ctx.fillRect(pad, top, btnW, btnH);
+            }
+
+            ctx.strokeStyle = this._clicking ? "#888" : "#555";
+            ctx.lineWidth = 1;
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(pad, top, btnW, btnH, 4);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(pad, top, btnW, btnH);
+            }
+
+            ctx.fillStyle = "#ccc";
+            ctx.font = "12px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("Search Select", widgetWidth / 2, top + 16);
+            ctx.textAlign = "left";
+        },
+
+        computeSize(width) {
+            return [width, 28];
+        },
+
+        mouse(event, _pos, _node) {
+            if (event.type === "pointerdown" || event.type === "mousedown") {
+                this._clicking = true;
+                _node.setDirtyCanvas(true);
+                ensureSearchModal().open(_node);
+                setTimeout(() => {
+                    this._clicking = false;
+                    _node.setDirtyCanvas(true);
+                }, 150);
+                return true;
+            }
+            return false;
+        },
+    };
+
+    node.widgets = node.widgets || [];
+    const refreshIdx = node.widgets.findIndex(w => w.name === REFRESH_BTN_NAME);
+    const insertAt = refreshIdx >= 0 ? refreshIdx : node.widgets.length;
+    node.widgets.splice(insertAt, 0, btn);
+}
+
+function ensureSearchButton(node) {
+    setTimeout(() => addSearchButton(node), 100);
+}
+
 // ── Auto-sync Save node from Load node ──────────────────
 const LOAD_NODE_TYPES = ["LoadFromMediaVault", "LoadVideoFrameFromMediaVault", "LoadVideoFromMediaVault"];
 
@@ -495,6 +891,7 @@ async function prefillFromLoadNode(saveNode) {
             }
         }
         saveNode.setDirtyCanvas?.(true);
+        updateSavePreview(saveNode);
         console.log("[MediaVault] ✓ Save node pre-filled from:", loadNode.title || loadNode.comfyClass);
     }
 }
@@ -519,6 +916,9 @@ async function doRefreshAction(node) {
         if (roleNames.length > 0) updateComboWidget(roleW, roleNames, true);
     }
     await cascadeUpdate(node, "project");
+    if (SAVE_PREVIEW_NODES.includes(node.comfyClass)) {
+        await updateSavePreview(node);
+    }
     // Ensure node is large enough for all widgets after thumbnail loads
     requestAnimationFrame(() => {
         const sz = node.computeSize();
@@ -697,6 +1097,9 @@ async function restoreLiveDropdowns(node) {
     }
 
     node.setDirtyCanvas?.(true);
+    if (SAVE_PREVIEW_NODES.includes(node.comfyClass)) {
+        updateSavePreview(node);
+    }
     console.log(`[MediaVault] ✓ Restored dropdowns for ${node.comfyClass}: ${savedProj}`);
 }
 
@@ -842,7 +1245,11 @@ app.registerExtension({
             const originalCb = widget.callback;
             widget.callback = function (v) {
                 if (originalCb) originalCb.call(this, v);
-                cascadeUpdate(node, wName);
+                Promise.resolve(cascadeUpdate(node, wName)).finally(() => {
+                    if (SAVE_PREVIEW_NODES.includes(node.comfyClass)) {
+                        updateSavePreview(node);
+                    }
+                });
             };
         }
 
@@ -887,6 +1294,24 @@ app.registerExtension({
         // Also add a manual Refresh button so the user can force re-query
         // This also refreshes the project list itself (new projects added after ComfyUI started)
         addRefreshButton(node);
+        addSearchButton(node);
+
+        if (SAVE_PREVIEW_NODES.includes(node.comfyClass)) {
+            addSavePreviewWidget(node);
+
+            for (const wName of ["custom_name", "format"]) {
+                const widget = findWidget(node, wName);
+                if (!widget) continue;
+
+                const originalCb = widget.callback;
+                widget.callback = function (v) {
+                    if (originalCb) originalCb.call(this, v);
+                    updateSavePreview(node);
+                };
+            }
+
+            setTimeout(() => updateSavePreview(node), 700);
+        }
 
         // Re-add button after workflow load / node configure (ComfyUI strips dynamic widgets)
         // AND restore saved dropdown values that ComfyUI rejected (not in static options list)
@@ -943,6 +1368,14 @@ app.registerExtension({
             }
 
             ensureRefreshButton(this);
+            ensureSearchButton(this);
+
+            if (SAVE_PREVIEW_NODES.includes(this.comfyClass)) {
+                const hasPreviewWidget = this.widgets?.some(w => w.type === "MEDIAVAULT_SAVE_PREVIEW");
+                if (!hasPreviewWidget) {
+                    addSavePreviewWidget(this);
+                }
+            }
 
             // Ensure video info widget exists for video nodes
             if (VIDEO_INFO_NODES.includes(this.comfyClass)) {
@@ -959,6 +1392,10 @@ app.registerExtension({
             if (VIDEO_INFO_NODES.includes(this.comfyClass)) {
                 setTimeout(() => updateVideoInfo(this), 2500);
             }
+
+            if (SAVE_PREVIEW_NODES.includes(this.comfyClass)) {
+                setTimeout(() => updateSavePreview(this), 1500);
+            }
         };
 
         // ── Auto-populate Save node from any Load node in the graph ──
@@ -973,6 +1410,8 @@ app.registerExtension({
                 prefillFromLoadNode(node);
             });
             copyBtn.serialize = false;
+
+            setTimeout(() => updateSavePreview(node), 1000);
         }
     },
 });

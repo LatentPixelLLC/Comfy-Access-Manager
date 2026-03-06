@@ -34,8 +34,143 @@ function ThumbnailService() { return core.services.ThumbnailService; }
 function MediaInfoService() { return core.services.MediaInfoService; }
 function detectMediaType(f) { return core.utils.mediaTypes.detectMediaType(f); }
 function resolveFilePath(p) { return core.utils.pathResolver.resolveFilePath(p); }
+function generateVaultName(...a) { return core.utils.naming.generateVaultName(...a); }
 function generateFromConvention(...a) { return core.utils.naming.generateFromConvention(...a); }
 function getNextVersion(...a) { return core.utils.naming.getNextVersion(...a); }
+function getVaultDirectory(...a) { return core.utils.naming.getVaultDirectory(...a); }
+function resolveCollision(...a) { return core.utils.naming.resolveCollision(...a); }
+
+const COMFY_FORMAT_INFO = {
+    png: { ext: 'png' },
+    jpg: { ext: 'jpg' },
+    webp: { ext: 'webp' },
+    'mp4 (H.264)': { ext: 'mp4' },
+    'mp4 (H.265)': { ext: 'mp4' },
+    'webm (VP9)': { ext: 'webm' },
+    'mov (ProRes)': { ext: 'mov' },
+    'avi (FFV1)': { ext: 'avi' },
+    wav: { ext: 'wav' },
+    flac: { ext: 'flac' },
+    mp3: { ext: 'mp3' },
+    ogg: { ext: 'ogg' },
+};
+
+function getComfyFormatInfo(format) {
+    return COMFY_FORMAT_INFO[format] || COMFY_FORMAT_INFO.png;
+}
+
+function buildSavePreview(db, { project, sequence, shot, role, customName, format }) {
+    const vaultRoot = getSetting('vault_root');
+    if (!vaultRoot) {
+        throw new Error('Vault root path not configured. Go to Settings to set it.');
+    }
+
+    const fmt = getComfyFormatInfo(format || 'png');
+    const originalName = `preview.${fmt.ext}`;
+    const { type: mediaType } = detectMediaType(originalName);
+    const vaultDir = getVaultDirectory(
+        vaultRoot,
+        project.code,
+        mediaType,
+        sequence?.code,
+        shot?.code
+    );
+
+    let previewName = null;
+
+    // Match the save route's Shot Builder logic first.
+    if (project.naming_convention) {
+        try {
+            const convention = JSON.parse(project.naming_convention);
+
+            let nextVersion = 1;
+            const versionScanDir = path.join(
+                vaultRoot,
+                project.code,
+                sequence?.code || '',
+                shot?.code || ''
+            );
+            nextVersion = getNextVersion(versionScanDir, role?.code || 'output');
+
+            const result = generateFromConvention(convention, {
+                project: project.code,
+                sequence: sequence?.name || '',
+                shot: shot?.name || '',
+                role: role?.code || 'output',
+                version: nextVersion,
+                episode: project.episode || '',
+                take: 1,
+                counter: 1,
+            }, `.${fmt.ext}`);
+
+            if (result) previewName = result.vaultName;
+        } catch (err) {
+            console.warn('[ComfyUI] Preview naming convention failed, falling back to default:', err.message);
+        }
+    }
+
+    // Fall back to the same legacy naming logic FileService.importFile() uses.
+    if (!previewName) {
+        let version = 1;
+        if (role?.code) {
+            const shotToken = shot?.name || shot?.code;
+            const seqToken = sequence?.name || sequence?.code;
+            let basePattern;
+            if (sequence?.code && shot?.code) {
+                basePattern = `${shotToken}_${role.code.toLowerCase()}_v`;
+            } else if (sequence?.code) {
+                basePattern = `${seqToken}_${role.code.toLowerCase()}_v`;
+            } else {
+                basePattern = `${project.code}_${role.code.toLowerCase()}_v`;
+            }
+            version = getNextVersion(vaultDir, basePattern);
+        }
+
+        const counter = getNextVersion(vaultDir, '');
+        const result = generateVaultName({
+            originalName,
+            projectCode: project.code,
+            sequenceCode: sequence?.code,
+            sequenceName: sequence?.name,
+            shotCode: shot?.code,
+            shotName: shot?.name,
+            roleCode: role?.code,
+            version,
+            mediaType,
+            counter,
+            customName: customName || undefined,
+        });
+        previewName = result.vaultName;
+    }
+
+    let flowTask = null;
+    if (shot?.flow_id && role?.name) {
+        flowTask = db.prepare(
+            `SELECT flow_id, step_name
+             FROM flow_tasks
+             WHERE entity_type = 'Shot'
+               AND entity_flow_id = ?
+               AND LOWER(step_name) = LOWER(?)
+             LIMIT 1`
+        ).get(shot.flow_id, role.name);
+    }
+
+    let finalName = previewName;
+    const candidatePath = path.join(vaultDir, previewName);
+    if (fs.existsSync(candidatePath)) {
+        finalName = resolveCollision(vaultDir, previewName);
+    }
+
+    return {
+        directory: vaultDir,
+        filename: finalName,
+        full_path: path.join(vaultDir, finalName),
+        media_type: mediaType,
+        flow_linked: !!project.flow_id,
+        auto_publish: getSetting('flow_auto_publish') === 'true' && !!project.flow_id,
+        flow_task_name: flowTask?.step_name || null,
+    };
+}
 
 
 // ═══════════════════════════════════════════
@@ -195,6 +330,33 @@ router.get('/mapping/:nodeId', (req, res) => {
 // ═══════════════════════════════════════════
 //  SAVE TO VAULT (ComfyUI outputs → vault)
 // ═══════════════════════════════════════════
+
+// POST /preview-save — Resolve where a Save node would write before execution
+router.post('/preview-save', (req, res) => {
+    const { project_id, sequence_id, shot_id, role_id, custom_name, format } = req.body || {};
+    if (!project_id) return res.status(400).json({ error: 'project_id required' });
+
+    const db = getDb();
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(project_id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const sequence = sequence_id ? db.prepare('SELECT * FROM sequences WHERE id = ?').get(sequence_id) : null;
+    const shot = shot_id ? db.prepare('SELECT * FROM shots WHERE id = ?').get(shot_id) : null;
+    const role = role_id ? db.prepare('SELECT * FROM roles WHERE id = ?').get(role_id) : null;
+
+    try {
+        res.json(buildSavePreview(db, {
+            project,
+            sequence,
+            shot,
+            role,
+            customName: custom_name,
+            format,
+        }));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // POST /save — Save a ComfyUI output file into the vault
 router.post('/save', async (req, res) => {

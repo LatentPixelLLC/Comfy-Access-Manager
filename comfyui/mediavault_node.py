@@ -98,6 +98,38 @@ try:
             print(f"[MediaVault] proxy error (backing off {_MV_BACKOFF_SEC}s): {e}")
             return []
 
+    def _proxy_mv_json(path, payload=None, method="POST"):
+        """JSON request proxy to MediaVault API for POST-style helper routes."""
+        if not _mv_is_reachable():
+            return {"error": "MediaVault not available"}, 503
+
+        url = f"{MEDIAVAULT_URL}{path}"
+        body = json.dumps(payload or {}).encode()
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method=method,
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                return data, getattr(resp, "status", 200)
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode() if hasattr(e, "read") else ""
+            try:
+                data = json.loads(raw) if raw else {"error": e.reason}
+            except Exception:
+                data = {"error": raw or str(e.reason)}
+            return data, e.code
+        except Exception as e:
+            global _mv_alive, _mv_last_check
+            _mv_alive = False
+            _mv_last_check = time.time()
+            print(f"[MediaVault] proxy json error (backing off {_MV_BACKOFF_SEC}s): {e}")
+            return {"error": str(e)}, 503
+
     @PromptServer.instance.routes.get("/mediavault/projects")
     async def mv_projects(request):
         data = _proxy_mv("/api/comfyui/projects")
@@ -142,6 +174,17 @@ try:
             path += "?" + "&".join(params)
         data = _proxy_mv(path)
         return web.json_response(data or [])
+
+    @PromptServer.instance.routes.post("/mediavault/preview-save")
+    async def mv_preview_save(request):
+        """Proxy save-preview requests from the browser extension to CAM."""
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        data, status = _proxy_mv_json("/api/comfyui/preview-save", payload, method="POST")
+        return web.json_response(data or {}, status=status)
 
     @PromptServer.instance.routes.get("/mediavault/thumbnail/{asset_id}")
     async def mv_thumbnail(request):
