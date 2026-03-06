@@ -45,11 +45,12 @@ try:
         glBegin, glEnd, glVertex2f, glRasterPos2f, glLineWidth,
         glBitmap, glPixelStorei, glPixelZoom,
         glDrawPixels,
+        glGenLists, glNewList, glEndList, glCallList, glDeleteLists,
         GL_PROJECTION, GL_MODELVIEW, GL_BLEND,
         GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_QUADS, GL_LINE_LOOP,
         GL_UNPACK_ALIGNMENT, GL_RGBA, GL_UNSIGNED_BYTE,
         GL_DEPTH_TEST, GL_SCISSOR_TEST, GL_TEXTURE_2D,
-        GL_ALL_ATTRIB_BITS,
+        GL_ALL_ATTRIB_BITS, GL_COMPILE,
     )
     from OpenGL.GLU import gluOrtho2D
     _HAS_GL = True
@@ -5278,16 +5279,46 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
+            # ── Draw overlays (with display-list caching where possible) ──
+            # Metadata burn-in: NOT cached — frame number changes every frame
             if self._show_metadata:
                 self._drawMetadataBurnIn(w, h)
+
+            # Status stamp: cached — only changes on source switch / status change
             if self._show_status:
-                self._drawStatusStamp(w, h)
+                _st_meta = self._overlay_meta or {}
+                _st_key = (w, h, _st_meta.get('status', 'WIP'))
+                self._cachedDraw('status', _st_key,
+                                 lambda: self._drawStatusStamp(w, h))
+
+            # Watermark: cached — fixed text, only invalidates on resize
             if self._show_watermark:
-                self._drawWatermarkText(w, h)
+                self._cachedDraw('watermark', (w, h),
+                                 lambda: self._drawWatermarkText(w, h))
+
+            # CAM overlay: cached if no frame-dependent elements
             if self._show_cam_overlay:
-                self._drawCAMOverlay(w, h)
+                _cam_d = self._cam_overlay_data
+                _cam_live = False
+                if _cam_d:
+                    _cam_pre = _cam_d.get("preset", {})
+                    for _el in _cam_pre.get("config", {}).get("elements", []):
+                        if _el.get("enabled", True) and _el.get("type") in (
+                                "frame_number", "timecode", "shot_and_frame"):
+                            _cam_live = True
+                            break
+                if _cam_live:
+                    self._drawCAMOverlay(w, h)
+                else:
+                    _cam_key = (w, h, id(_cam_d) if _cam_d else None)
+                    self._cachedDraw('cam', _cam_key,
+                                     lambda: self._drawCAMOverlay(w, h))
+
+            # ComfyUI overlay: cached — only changes on source switch
             if self._show_comfyui:
-                self._drawComfyUIOverlay(w, h)
+                _cu_key = (w, h, getattr(self, '_comfyui_path', None))
+                self._cachedDraw('comfyui', _cu_key,
+                                 lambda: self._drawComfyUIOverlay(w, h))
 
             glDisable(GL_BLEND)
             glPopMatrix()
@@ -5307,6 +5338,53 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         except Exception as e:
             print("[OVERLAY-DIAG] render() EXCEPTION frame %d: %s" % (_diag_count, e))
             import traceback; traceback.print_exc()
+
+    # ── GL display list cache ────────────────────────────────────
+
+    def _cachedDraw(self, section, cache_key, draw_fn):
+        """Execute draw_fn with GL display list caching.
+
+        If *cache_key* matches the previous call for *section*, replay
+        the cached display list instead of re-executing draw_fn.
+        All GL commands issued by draw_fn (glBitmap, glDrawPixels,
+        glBegin/glEnd, glColor4f, etc.) are captured at compile time
+        and replayed in a single glCallList call on subsequent frames.
+        """
+        if not hasattr(self, '_dl_cache'):
+            self._dl_cache = {}
+
+        prev = self._dl_cache.get(section)
+        if prev and prev[0] == cache_key:
+            glCallList(prev[1])
+            return
+
+        # Invalidate old list
+        if prev:
+            try:
+                glDeleteLists(prev[1], 1)
+            except Exception:
+                pass
+
+        # Compile new display list
+        dl = glGenLists(1)
+        if not dl:
+            # Allocation failed — draw without caching
+            draw_fn()
+            return
+        try:
+            glNewList(dl, GL_COMPILE)
+            draw_fn()
+            glEndList()
+        except Exception:
+            try:
+                glEndList()
+            except Exception:
+                pass
+            draw_fn()
+            return
+
+        self._dl_cache[section] = (cache_key, dl)
+        glCallList(dl)
 
     # ── GL drawing helpers ───────────────────────────────────────
 
