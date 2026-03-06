@@ -131,23 +131,29 @@ QTreeWidget::item:hover:!selected {
 }
 QTreeWidget::branch { background: transparent; }
 
-/* ── Table (center) ──────────── */
-QTableWidget {
+/* ── Center asset tree ───────── */
+QTreeWidget#assetTree {
     background: #25252d;
     border: 1px solid #3a3a46;
     border-radius: 6px;
-    gridline-color: #333340;
     color: #d4d4d8;
     font-size: 13px;
     outline: none;
-    selection-background-color: #2ec4b650;
-    selection-color: #fff;
+    padding: 2px;
 }
-QTableWidget::item {
+QTreeWidget#assetTree::item {
     padding: 3px 8px;
+    border-radius: 3px;
 }
-QTableWidget::item:hover {
+QTreeWidget#assetTree::item:selected {
+    background: #2ec4b650;
+    color: #fff;
+}
+QTreeWidget#assetTree::item:hover:!selected {
     background: #333340;
+}
+QTreeWidget#assetTree::branch {
+    background: transparent;
 }
 QHeaderView::section {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #35354a, stop:1 #2a2a3a);
@@ -587,20 +593,20 @@ class AssetPickerDialog(QDialog):
         self._tree.itemClicked.connect(self._onTreeClick)
         splitter.addWidget(self._tree)
 
-        # Center: table
-        self._table = QTableWidget()
+        # Center: grouped tree (replaces flat table)
+        self._table = QTreeWidget()
+        self._table.setObjectName("assetTree")
         self._table.setColumnCount(4)
-        self._table.setHorizontalHeaderLabels(["Name", "Role", "Version", "Date"])
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self._table.setHeaderLabels(["Name", "Role", "Version", "Date"])
+        self._table.header().setStretchLastSection(True)
+        self._table.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._table.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._table.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._table.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setShowGrid(False)
+        self._table.setRootIsDecorated(True)
         self._table.setAlternatingRowColors(False)
         self._table.setSortingEnabled(True)
         self._table.doubleClicked.connect(self._onDoubleClick)
@@ -707,67 +713,165 @@ class AssetPickerDialog(QDialog):
         """Filter table to the selected tree level."""
         self._applyFilters()
 
-    # ── Table ────────────────────────────────────────────────────
+    # ── Table (grouped tree) ──────────────────────────────────────
+
+    @staticmethod
+    def _groupAssets(assets):
+        """Group assets into version families for the tree view.
+
+        For each version number, finds the asset with the shortest
+        vault_name (the 'root').  All assets whose name starts with
+        that root prefix (+ '_' or end-of-name) are grouped under it.
+
+        Returns a list of (root_asset, [variant_assets]) tuples.
+        variant_assets includes the root itself so it can be selected.
+        Singletons return (asset, []).
+        """
+        import re
+        version_re = re.compile(r'_v(\d+)')
+
+        # Step 1: parse version and stem from each name
+        parsed = []  # (asset, stem, version_int)
+        for a in assets:
+            name = a.get('vault_name', '')
+            match = version_re.search(name)
+            if match:
+                version = int(match.group(1))
+                stem = name[:match.start()]
+            else:
+                version = -1
+                stem = name
+            parsed.append((a, stem, version))
+
+        # Step 2: group by version number
+        by_version = {}  # version_int -> [(asset, stem)]
+        for a, stem, ver in parsed:
+            by_version.setdefault(ver, []).append((a, stem))
+
+        # Step 3: within each version, find root stems and cluster
+        result = []
+        for ver in sorted(by_version.keys(), reverse=True):
+            group = by_version[ver]
+            if len(group) == 1:
+                result.append((group[0][0], []))
+                continue
+
+            # Sort by stem length so shortest is first
+            group.sort(key=lambda x: len(x[1]))
+            assigned = set()  # indices already clustered
+
+            for i, (root_a, root_stem) in enumerate(group):
+                if i in assigned:
+                    continue
+                # Gather all assets whose stem == root_stem or
+                # starts with root_stem + '_'
+                variants = [(root_a, root_stem)]
+                assigned.add(i)
+                for j, (other_a, other_stem) in enumerate(group):
+                    if j in assigned:
+                        continue
+                    if other_stem == root_stem or other_stem.startswith(root_stem + '_'):
+                        variants.append((other_a, other_stem))
+                        assigned.add(j)
+
+                if len(variants) > 1:
+                    # Multi-variant group
+                    result.append((root_a, [v[0] for v in variants]))
+                else:
+                    result.append((root_a, []))
+
+        return result
+
+    def _makeTreeItem(self, asset):
+        """Create a QTreeWidgetItem for a single asset."""
+        name = asset.get('vault_name', 'unknown')
+        role = '%s %s' % (asset.get('_role_icon', ''), asset.get('_role_name', '')) \
+            if asset.get('_role_icon') else asset.get('_role_name', '')
+        version = 'v%03d' % asset['version'] if asset.get('version') else ''
+        date_str = (asset.get('created_at') or '')[:10]
+
+        scope = self._data.get('scope', 'shot')
+        if scope in ('sequence', 'project') and asset.get('shot_name'):
+            name = '%s  (%s)' % (name, asset['shot_name'])
+        elif scope == 'project' and asset.get('seq_name'):
+            name = '%s  (%s)' % (name, asset['seq_name'])
+
+        item = QTreeWidgetItem([name, role, version, date_str])
+        item.setData(0, Qt.UserRole, asset.get('file_path', ''))
+        item.setData(0, Qt.UserRole + 1, asset.get('id'))
+        item.setData(0, Qt.UserRole + 2, asset)
+
+        is_current = asset.get('is_current', False)
+        is_missing = not asset.get('file_path') or not os.path.exists(asset.get('file_path', ''))
+
+        if is_current:
+            brush = QBrush(QColor('#2ec4b640'))
+            font = QFont()
+            font.setBold(True)
+            for c in range(4):
+                item.setBackground(c, brush)
+                item.setFont(c, font)
+        if is_missing:
+            dim = QBrush(QColor('#555'))
+            for c in range(4):
+                item.setForeground(c, dim)
+
+        return item
 
     def _populateTable(self, assets=None):
         if assets is None:
             assets = self._all_assets
 
         self._table.setSortingEnabled(False)
-        self._table.setRowCount(len(assets))
+        self._table.clear()
+        self._table.setHeaderLabels(["Name", "Role", "Version", "Date"])
 
-        current_brush = QBrush(QColor("#2ec4b640"))
-        bold_font = QFont()
-        bold_font.setBold(True)
-        dim_brush = QBrush(QColor("#555"))
-        current_row = -1
+        groups = self._groupAssets(assets)
+        current_item = None
+        group_font = QFont()
+        group_font.setBold(True)
+        group_brush = QBrush(QColor('#8a8a9a'))
 
-        for row, a in enumerate(assets):
-            name = a.get("vault_name", "unknown")
-            role = "%s %s" % (a.get("_role_icon", ""), a.get("_role_name", "")) if a.get("_role_icon") else a.get("_role_name", "")
-            version = "v%03d" % a["version"] if a.get("version") else ""
-            date_str = (a.get("created_at") or "")[:10]  # YYYY-MM-DD
+        for root_asset, variants in groups:
+            if not variants:
+                # Singleton - show as flat top-level item
+                item = self._makeTreeItem(root_asset)
+                self._table.addTopLevelItem(item)
+                if root_asset.get('is_current', False):
+                    current_item = item
+            else:
+                # Group header — shows root name + variant count
+                root_name = root_asset.get('vault_name', 'unknown')
+                version = 'v%03d' % root_asset['version'] if root_asset.get('version') else ''
+                label = '%s   [%d]' % (root_name, len(variants))
+                parent = QTreeWidgetItem([label, '', version, ''])
+                # Group header is not selectable — just a label
+                parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
+                for c in range(4):
+                    parent.setFont(c, group_font)
+                    parent.setForeground(c, group_brush)
 
-            # Add shot/sequence context if wider scope
-            scope = self._data.get("scope", "shot")
-            if scope in ("sequence", "project") and a.get("shot_name"):
-                name = "%s  (%s)" % (name, a["shot_name"])
-            elif scope == "project" and a.get("seq_name"):
-                name = "%s  (%s)" % (name, a["seq_name"])
+                # Add all variants (including root) as selectable children
+                for v_asset in variants:
+                    child = self._makeTreeItem(v_asset)
+                    parent.addChild(child)
+                    if v_asset.get('is_current', False):
+                        current_item = child
 
-            items = [
-                QTableWidgetItem(name),
-                QTableWidgetItem(role),
-                QTableWidgetItem(version),
-                QTableWidgetItem(date_str),
-            ]
-
-            # Store file_path in first column's user data
-            items[0].setData(Qt.UserRole, a.get("file_path", ""))
-            items[0].setData(Qt.UserRole + 1, a.get("id"))
-            items[0].setData(Qt.UserRole + 2, a)  # full asset dict for sequence resolution
-
-            is_current = a.get("is_current", False)
-            is_missing = not a.get("file_path") or not os.path.exists(a.get("file_path", ""))
-
-            for ci, item in enumerate(items):
-                if is_current:
-                    item.setBackground(current_brush)
-                    item.setFont(bold_font)
-                if is_missing:
-                    item.setForeground(dim_brush)
-                self._table.setItem(row, ci, item)
-
-            if is_current:
-                current_row = row
+                self._table.addTopLevelItem(parent)
+                # Collapse by default to reduce clutter
+                parent.setExpanded(False)
 
         self._table.setSortingEnabled(True)
-        self._count_label.setText("%d assets" % len(assets))
+        self._count_label.setText('%d assets' % len(assets))
 
-        # Scroll to current asset
-        if current_row >= 0:
+        # Scroll to current asset and expand its parent
+        if current_item:
+            parent = current_item.parent()
+            if parent:
+                parent.setExpanded(True)
             self._table.scrollToItem(
-                self._table.item(current_row, 0),
+                current_item,
                 QAbstractItemView.PositionAtCenter
             )
 
@@ -811,12 +915,18 @@ class AssetPickerDialog(QDialog):
         self._populateTable(filtered)
 
     def _onSelectionChanged(self):
-        rows = self._table.selectionModel().selectedRows()
-        if rows:
-            item = self._table.item(rows[0].row(), 0)
-            fp = item.data(Qt.UserRole) if item else ""
+        items = self._table.selectedItems()
+        if items:
+            item = items[0]  # QTreeWidgetItem
+            # Ignore group headers (not selectable, but guard anyway)
+            if not (item.flags() & Qt.ItemIsSelectable):
+                self._selected_path = None
+                self._selected_asset = None
+                self._load_btn.setEnabled(False)
+                return
+            fp = item.data(0, Qt.UserRole) or ""
             self._selected_path = fp
-            self._selected_asset = item.data(Qt.UserRole + 2) if item else None
+            self._selected_asset = item.data(0, Qt.UserRole + 2)
             self._load_btn.setEnabled(bool(fp) and os.path.exists(fp))
         else:
             self._selected_path = None
@@ -824,14 +934,19 @@ class AssetPickerDialog(QDialog):
             self._load_btn.setEnabled(False)
 
     def _onDoubleClick(self, index):
-        """Double-click a row = immediately load."""
-        item = self._table.item(index.row(), 0)
-        if item:
-            fp = item.data(Qt.UserRole)
-            if fp and os.path.exists(fp):
-                self._selected_path = fp
-                self._selected_asset = item.data(Qt.UserRole + 2)
-                self.accept()
+        """Double-click a row = immediately load (or expand group header)."""
+        item = self._table.currentItem()
+        if not item:
+            return
+        # If it's a group header, just toggle expand
+        if not (item.flags() & Qt.ItemIsSelectable):
+            item.setExpanded(not item.isExpanded())
+            return
+        fp = item.data(0, Qt.UserRole)
+        if fp and os.path.exists(fp):
+            self._selected_path = fp
+            self._selected_asset = item.data(0, Qt.UserRole + 2)
+            self.accept()
 
     def selectedPath(self):
         return self._selected_path
