@@ -1273,6 +1273,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self._lut_applied_sgs  = {}     # {source_group: norm_path} — tracks which SG got which LUT
         self._lut_name_by_sg   = {}     # {source_group: lut_filename} for overlay display
         self._source_init_sgs  = set()  # source groups that completed first-time init
+        self._sg_media_dirs    = {}     # {source_group: norm_dir} — tracks media dir per SG (independent of LUT)
 
         # ── ShotGrid Notes side-panel ────────────────────────────
         self._notes_panel = None         # ShotGridNotesPanel instance (lazy)
@@ -3610,21 +3611,24 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         self._syncCurrentSource()
 
         # ── Detect media changes on EXISTING source groups ──
-        # When the user switches to a different shot via Compare/Switch
-        # or version stepping, RV reuses the same sourceGroup node but
-        # with different media.  Detect this by comparing each SG's
-        # current file path to what was stored when its LUT was applied.
+        # When the user opens a new file, uses Switch to, or steps
+        # versions, RV may reuse the same sourceGroup node with
+        # different media.  Detect this by comparing each SG's
+        # current file directory to the last known directory tracked
+        # in _sg_media_dirs (independent of LUT application).
         media_changed = False
         for sg in current_sgs:
             fp = self._pathFromSourceGroup(sg)
             if not fp:
                 continue
             cur_dir = self._normKey(os.path.dirname(fp))
-            prev_dir = self._lut_applied_sgs.get(sg)
+            prev_dir = self._sg_media_dirs.get(sg)
             if prev_dir is not None and prev_dir != cur_dir:
                 # Media in this source group changed — invalidate
-                print("[LUT] Source group %s media changed, clearing LUT state" % sg)
-                del self._lut_applied_sgs[sg]
+                print("[MediaVault] Source group %s media changed "
+                      "(%s -> %s), clearing caches"
+                      % (sg, prev_dir, cur_dir))
+                self._lut_applied_sgs.pop(sg, None)
                 self._lut_name_by_sg.pop(sg, None)
                 # Also clear overlay caches so they re-fetch for new shot
                 self._overlay_meta = None
@@ -3637,6 +3641,8 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 # Remove from init set so heavy work re-runs
                 self._source_init_sgs.discard(sg)
                 new_sgs = new_sgs | {sg}
+            # Always record current dir (first visit or update)
+            self._sg_media_dirs[sg] = cur_dir
 
         if not new_sgs:
             # All source groups already initialized — skip heavy work.
