@@ -2296,15 +2296,19 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
     def _loadAsCompare(self, filepath):
         """Add filepath as a new source for A/B stack comparison (wipe).
 
-        Automatically aligns frame ranges: if the existing source starts
-        at frame 1000 (EXR sequence) and the new source starts at frame 1
-        (QT/MOV), the new source is retimed so both clips overlap on the
-        same global frame range.  Then switches to stack mode so RV's
-        wipe/tile/difference views work.
+        Automatically aligns frame ranges by setting the RVFileSource's
+        group.rangeOffset property.  For example, if the existing EXR
+        starts at frame 1000 and the new QT has embedded timecode
+        starting at frame 1029111, we set rangeOffset = -1028111 so
+        both clips overlap on [1000, 1080].
+
+        Then switches to defaultStack so RV's wipe/tile/difference
+        views work, and clamps in/out points to the overlap region.
         """
         is_seq_notation = '#' in filepath
         if not is_seq_notation and not os.path.exists(filepath):
-            rve.displayFeedback("File not found: %s" % os.path.basename(filepath), 4.0)
+            rve.displayFeedback(
+                "File not found: %s" % os.path.basename(filepath), 4.0)
             return
         try:
             # Track existing source groups so we can find the new one
@@ -2319,10 +2323,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     ri = rvc.nodeRangeInfo(first_sg)
                     existing_start = int(ri.get("start", 1))
                     existing_end = int(ri.get("end", existing_start))
-                    print("[COMPARE-DIAG] Existing source %s: "
-                          "rangeInfo=%s" % (first_sg, ri))
+                    print("[COMPARE] Existing source %s: start=%d end=%d"
+                          % (first_sg, existing_start, existing_end))
                 except Exception as e:
-                    print("[COMPARE-DIAG] Existing rangeInfo failed: %s" % e)
+                    print("[COMPARE] Existing rangeInfo failed: %s" % e)
 
             rvc.addSourceVerbose([filepath])
 
@@ -2332,226 +2336,66 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             for sg in new_sgs:
                 self._stripAutoAudio(sg, filepath)
 
-            # ── Diagnose + auto-align frame ranges ──
+            # ── Auto-align frame ranges ──
             offset_applied = 0
-            if new_sgs:
+            if new_sgs and existing_start is not None:
                 new_sg = sorted(new_sgs)[0]
-
-                # ── Dump ALL properties on key nodes for diagnostics ──
-                try:
-                    nodes = rvc.nodesInGroup(new_sg)
-                    for n in nodes:
-                        nt = rvc.nodeType(n)
-                        if nt not in ("RVFileSource", "RVRetime",
-                                      "RVSourceGroup"):
-                            print("[COMPARE-DIAG]   %s  (%s)  [skipped]"
-                                  % (n, nt))
-                            continue
-                        print("[COMPARE-DIAG] === %s  (%s) ===" % (n, nt))
-                        try:
-                            props = rvc.properties(n)
-                            for p in props:
-                                # Only dump interesting props to keep
-                                # output manageable
-                                plow = p.lower()
-                                if any(k in plow for k in (
-                                    "range", "offset", "warp", "cut",
-                                    "start", "end", "fps", "active",
-                                    "media.movie", "request"
-                                )):
-                                    try:
-                                        val = None
-                                        try:
-                                            val = rvc.getFloatProperty(p)
-                                        except Exception:
-                                            pass
-                                        if val is None:
-                                            try:
-                                                val = rvc.getIntProperty(p)
-                                            except Exception:
-                                                pass
-                                        if val is None:
-                                            try:
-                                                val = rvc.getStringProperty(p)
-                                            except Exception:
-                                                pass
-                                        print("[COMPARE-DIAG]   %s = %s"
-                                              % (p, val))
-                                    except Exception:
-                                        print("[COMPARE-DIAG]   %s = ???" % p)
-                        except Exception:
-                            # properties() might not exist
-                            print("[COMPARE-DIAG]   (no properties() API)")
-                except Exception as e:
-                    print("[COMPARE-DIAG] Property dump error: %s" % e)
-
                 try:
                     ri_new = rvc.nodeRangeInfo(new_sg)
                     new_start = int(ri_new.get("start", 1))
                     new_end = int(ri_new.get("end", new_start))
-                    print("[COMPARE-DIAG] New source rangeInfo "
-                          "BEFORE offset: %s" % ri_new)
+                    print("[COMPARE] New source %s: start=%d end=%d"
+                          % (new_sg, new_start, new_end))
                 except Exception as e:
-                    new_start = 1
-                    new_end = 1
-                    print("[COMPARE-DIAG] New rangeInfo failed: %s" % e)
+                    new_start = existing_start
+                    new_end = existing_end
+                    print("[COMPARE] New rangeInfo failed: %s" % e)
 
-                # ── Try multiple offset approaches ──
-                if existing_start is not None:
-                    offset = existing_start - new_start
-                    if offset != 0:
-                        file_source = None
-                        retime_node = None
-                        for n in rvc.nodesInGroup(new_sg):
-                            nt = rvc.nodeType(n)
-                            if nt == "RVFileSource":
-                                file_source = n
-                            elif nt == "RVRetime":
-                                retime_node = n
+                offset = existing_start - new_start
+                if offset != 0:
+                    # The rangeOffset property lives on the RVFileSource
+                    # node INSIDE the source group (not the group itself).
+                    # Property path: <sgN_source>.group.rangeOffset
+                    file_source = None
+                    for n in rvc.nodesInGroup(new_sg):
+                        if rvc.nodeType(n) == "RVFileSource":
+                            file_source = n
+                            break
 
-                        approaches = []
+                    if file_source:
+                        try:
+                            rvc.setIntProperty(
+                                file_source + ".group.rangeOffset",
+                                [offset], True)
+                            offset_applied = offset
+                            print("[COMPARE] Set %s.group.rangeOffset = %d"
+                                  % (file_source, offset))
 
-                        # Approach A: RVRetime warp
-                        if retime_node:
-                            approaches.append(
-                                ("RVRetime.warp.active+offset", [
-                                    (retime_node + ".warp.active",
-                                     "int", [1]),
-                                    (retime_node + ".warp.offset",
-                                     "float", [float(offset)]),
-                                ]))
-
-                        # Approach B: Source group rangeOffset (int)
-                        approaches.append(
-                            ("group.rangeOffset", [
-                                (new_sg + ".group.rangeOffset",
-                                 "int", [offset]),
-                            ]))
-
-                        # Approach C: RVFileSource cut.in/out
-                        if file_source:
-                            approaches.append(
-                                ("cut.in/out", [
-                                    (file_source + ".cut.in",
-                                     "int", [existing_start]),
-                                    (file_source + ".cut.out",
-                                     "int",
-                                     [existing_start + (new_end - new_start)]),
-                                ]))
-
-                        # Approach D: RVFileSource request.rangeStart
-                        if file_source:
-                            approaches.append(
-                                ("request.rangeStart", [
-                                    (file_source + ".request.rangeStart",
-                                     "int", [existing_start]),
-                                ]))
-
-                        # Approach E: RVFileSource request.readStart  
-                        if file_source:
-                            approaches.append(
-                                ("request.readStart", [
-                                    (file_source + ".request.readStart",
-                                     "int", [existing_start]),
-                                ]))
-
-                        for approach_name, prop_sets in approaches:
-                            print("[COMPARE-DIAG] Trying approach: %s"
-                                  % approach_name)
-                            try:
-                                for prop, ptype, val in prop_sets:
-                                    if ptype == "float":
-                                        rvc.setFloatProperty(
-                                            prop, val, True)
-                                    else:
-                                        rvc.setIntProperty(
-                                            prop, val, True)
-                                    print("[COMPARE-DIAG]   set %s = %s OK"
-                                          % (prop, val))
-                            except Exception as e:
-                                print("[COMPARE-DIAG]   FAILED: %s" % e)
-                                continue
-
-                            # Check if range changed
-                            try:
-                                ri_check = rvc.nodeRangeInfo(new_sg)
-                                check_start = int(
-                                    ri_check.get("start", new_start))
-                                print("[COMPARE-DIAG]   rangeInfo now: %s"
-                                      % ri_check)
-                                if check_start != new_start:
-                                    offset_applied = offset
-                                    print("[COMPARE-DIAG]   *** "
-                                          "APPROACH %s WORKED! "
-                                          "start moved from %d to %d ***"
-                                          % (approach_name, new_start,
-                                             check_start))
-                                    break
-                                else:
-                                    print("[COMPARE-DIAG]   "
-                                          "start still %d (no effect)"
-                                          % check_start)
-                            except Exception:
-                                pass
-
-                        # ── Also try setNodeRangeOffset API ──
-                        if not offset_applied:
-                            try:
-                                rvc.setNodeRangeOffset(new_sg, offset)
-                                offset_applied = offset
-                                print("[COMPARE-DIAG] "
-                                      "setNodeRangeOffset(%s, %d) OK"
-                                      % (new_sg, offset))
-                                ri_check = rvc.nodeRangeInfo(new_sg)
-                                print("[COMPARE-DIAG]   rangeInfo: %s"
-                                      % ri_check)
-                            except Exception as e:
-                                print("[COMPARE-DIAG] "
-                                      "setNodeRangeOffset failed: %s" % e)
+                            # Verify
+                            ri_after = rvc.nodeRangeInfo(new_sg)
+                            print("[COMPARE] After offset: start=%s end=%s"
+                                  % (ri_after.get("start"),
+                                     ri_after.get("end")))
+                        except Exception as e:
+                            print("[COMPARE] rangeOffset failed: %s" % e)
+                    else:
+                        print("[COMPARE] No RVFileSource node found")
 
             # Switch to stack mode (required for wipe/tile/difference).
             rvc.setViewNode("defaultStack")
 
-            # Print global frame range after stack setup
-            try:
-                gs = rvc.frameStart()
-                ge = rvc.frameEnd()
-                gf = rvc.frame()
-                print("[COMPARE-DIAG] Stack mode: global range=[%d,%d] "
-                      "frame=%d" % (gs, ge, gf))
-            except Exception:
-                pass
-
-            # ── Restrict playback range to the overlap region ──
-            # If we couldn't offset the source, at least restrict the
-            # timeline to where the EXR lives so the user isn't scrubbing
-            # through dead frames with a frozen slate clamped on top.
+            # ── Clamp in/out points to the overlap region ──
             if existing_start is not None and existing_end is not None:
                 try:
                     rvc.setInPoint(existing_start)
                     rvc.setOutPoint(existing_end)
-                    print("[COMPARE-DIAG] Set in/out points: [%d, %d]"
-                          % (existing_start, existing_end))
-                except Exception as e:
-                    print("[COMPARE-DIAG] setInPoint/setOutPoint "
-                          "failed: %s" % e)
-                    # Try setting frame range via properties on
-                    # the stack node
-                    try:
-                        rvc.setFrameStart(existing_start)
-                        rvc.setFrameEnd(existing_end)
-                        print("[COMPARE-DIAG] setFrameStart/End: "
-                              "[%d, %d]" % (existing_start, existing_end))
-                    except Exception as e2:
-                        print("[COMPARE-DIAG] setFrameStart/End "
-                              "also failed: %s" % e2)
+                except Exception:
+                    pass
 
-            # Jump to start of overlap region
+            # Jump to start of content
             if existing_start is not None:
                 try:
                     rvc.setFrame(existing_start)
-                    print("[COMPARE-DIAG] Jumped to frame %d" %
-                          existing_start)
                 except Exception:
                     pass
 
