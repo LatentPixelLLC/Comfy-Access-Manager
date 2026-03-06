@@ -2298,9 +2298,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
         Automatically aligns frame ranges: if the existing source starts
         at frame 1000 (EXR sequence) and the new source starts at frame 1
-        (QT/MOV), the new source is offset by +999 so both clips overlap
-        on the same global frame range.  Then switches to stack mode so
-        RV's wipe/tile/difference views actually work.
+        (QT/MOV), the new source is retimed so both clips overlap on the
+        same global frame range.  Then switches to stack mode so RV's
+        wipe/tile/difference views work.
         """
         is_seq_notation = '#' in filepath
         if not is_seq_notation and not os.path.exists(filepath):
@@ -2312,13 +2312,17 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
             # Get frame range of the first existing source for alignment
             existing_start = None
+            existing_end = None
             if before:
                 first_sg = sorted(before)[0]
                 try:
                     ri = rvc.nodeRangeInfo(first_sg)
                     existing_start = int(ri.get("start", 1))
-                except Exception:
-                    pass
+                    existing_end = int(ri.get("end", existing_start))
+                    print("[COMPARE-DIAG] Existing source %s: "
+                          "rangeInfo=%s" % (first_sg, ri))
+                except Exception as e:
+                    print("[COMPARE-DIAG] Existing rangeInfo failed: %s" % e)
 
             rvc.addSourceVerbose([filepath])
 
@@ -2328,39 +2332,104 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             for sg in new_sgs:
                 self._stripAutoAudio(sg, filepath)
 
-            # ── Auto-align frame ranges for wipe comparison ──
-            # If existing source starts at frame 1000 (EXR) and the new
-            # source starts at frame 1 (QT), set rangeOffset on the new
-            # source so its frame 1 lands at global frame 1000.
+            # ── Diagnose new source structure ──
             offset_applied = 0
-            if existing_start is not None and new_sgs:
+            if new_sgs:
                 new_sg = sorted(new_sgs)[0]
+
+                # Print all nodes in the new source group to understand
+                # what RV created
+                try:
+                    nodes = rvc.nodesInGroup(new_sg)
+                    print("[COMPARE-DIAG] New source %s nodes:" % new_sg)
+                    for n in nodes:
+                        nt = rvc.nodeType(n)
+                        print("[COMPARE-DIAG]   %s  (%s)" % (n, nt))
+                except Exception as e:
+                    print("[COMPARE-DIAG] nodesInGroup error: %s" % e)
+
                 try:
                     ri_new = rvc.nodeRangeInfo(new_sg)
                     new_start = int(ri_new.get("start", 1))
+                    new_end = int(ri_new.get("end", new_start))
+                    print("[COMPARE-DIAG] New source %s: "
+                          "rangeInfo=%s" % (new_sg, ri_new))
+                except Exception as e:
+                    new_start = 1
+                    new_end = 1
+                    print("[COMPARE-DIAG] New rangeInfo failed: %s" % e)
+
+                # ── Auto-align via RVRetime node ──
+                # Each RVSourceGroup has an RVRetime sub-node whose
+                # warp.offset property shifts the source's frame range
+                # in the global timeline.
+                if existing_start is not None:
                     offset = existing_start - new_start
                     if offset != 0:
-                        rvc.setIntProperty(
-                            new_sg + ".group.rangeOffset", [offset], True)
-                        offset_applied = offset
-                        print("[MediaVault] Compare: auto-aligned frames — "
-                              "offset %s by %+d (native start=%d, "
-                              "existing start=%d)"
-                              % (os.path.basename(filepath), offset,
-                                 new_start, existing_start))
-                except Exception as e:
-                    print("[MediaVault] Compare: frame alignment failed: "
-                          "%s" % e)
+                        try:
+                            retime_node = None
+                            for n in rvc.nodesInGroup(new_sg):
+                                if rvc.nodeType(n) == "RVRetime":
+                                    retime_node = n
+                                    break
+
+                            if retime_node:
+                                rvc.setFloatProperty(
+                                    retime_node + ".warp.offset",
+                                    [float(offset)], True)
+                                offset_applied = offset
+                                print("[COMPARE-DIAG] Set %s.warp.offset = %d"
+                                      % (retime_node, offset))
+                            else:
+                                # No RVRetime node — try setting offset
+                                # on the file source's request property
+                                print("[COMPARE-DIAG] No RVRetime node found,"
+                                      " trying request.rangeOffset")
+                                for n in rvc.nodesInGroup(new_sg):
+                                    if rvc.nodeType(n) == "RVFileSource":
+                                        rvc.setIntProperty(
+                                            n + ".request.rangeOffset",
+                                            [offset], True)
+                                        offset_applied = offset
+                                        print("[COMPARE-DIAG] Set %s"
+                                              ".request.rangeOffset = %d"
+                                              % (n, offset))
+                                        break
+
+                            # Verify the offset took effect
+                            try:
+                                ri_after = rvc.nodeRangeInfo(new_sg)
+                                print("[COMPARE-DIAG] After offset: "
+                                      "rangeInfo=%s" % ri_after)
+                            except Exception:
+                                pass
+
+                        except Exception as e:
+                            print("[COMPARE-DIAG] Frame offset FAILED: "
+                                  "%s" % e)
+                            import traceback; traceback.print_exc()
 
             # Switch to stack mode (required for wipe/tile/difference).
             # Sequence mode plays clips end-to-end which doesn't allow
             # A/B wipe comparison.
             rvc.setViewNode("defaultStack")
 
+            # Print global frame range after stack setup
+            try:
+                gs = rvc.frameStart()
+                ge = rvc.frameEnd()
+                gf = rvc.frame()
+                print("[COMPARE-DIAG] Stack mode: global range=[%d,%d] "
+                      "frame=%d" % (gs, ge, gf))
+            except Exception:
+                pass
+
             # Jump to the overlap region so both sources are visible
-            if existing_start is not None and offset_applied != 0:
+            if existing_start is not None:
                 try:
                     rvc.setFrame(existing_start)
+                    print("[COMPARE-DIAG] Jumped to frame %d" %
+                          existing_start)
                 except Exception:
                     pass
 
@@ -2373,6 +2442,7 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                     "Compare: %s" % os.path.basename(filepath), 3.0)
         except Exception as e:
             print("[MediaVault] _loadAsCompare error: %s" % e)
+            import traceback; traceback.print_exc()
             rve.displayFeedback("Error: %s" % e, 5.0)
 
     def _getActiveSourceGroup(self):
