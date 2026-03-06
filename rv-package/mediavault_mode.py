@@ -1285,26 +1285,6 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
         print("[MediaVault] Initialising mediavault-mode")
 
-        def _role_items(mode):
-            """Build submenu item list for a given mode (compare/switch).
-
-            Initial menu before source loads — no asset data yet,
-            so just show navigation actions (no flat role dump).
-            """
-            items = []
-            items.append(
-                ("Prev Version",
-                 lambda e, _m=mode: self._stepVersion(1, _m), None, None))
-            items.append(
-                ("Next Version",
-                 lambda e, _m=mode: self._stepVersion(-1, _m), None, None))
-            items.append(("_", None))
-            items.append(
-                ("Browse All ...",
-                 lambda e, _m=mode: self._showPickerDialog(_m), None, None)
-            )
-            return items
-
         self.init(
             "mediavault-mode",
             [
@@ -1322,9 +1302,14 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                  "Switch to ... role popup"),
             ],
             None,
+            # NOTE: "Compare to ..." and "Switch to ..." are flat actions
+            # that pop up a fresh Qt menu.  RV's native setMenu() has a
+            # bug where nested submenus ACCUMULATE across rebuilds instead
+            # of being replaced, so we cannot use nested tuple submenus
+            # for dynamic content.
             [("MediaVault", [
-                ("Compare to ...", _role_items("compare")),
-                ("Switch to ...", _role_items("switch")),
+                ("Compare to ...", self._showCompareRoleMenu, "alt+v", None),
+                ("Switch to ...", self._showSwitchRoleMenu, "alt+shift+v", None),
                 ("Browse All ...", self.showBrowseAll, "alt+b", None),
                 ("_", None),
                 ("Prev Version", self.prevVersion, "alt+Left", None),
@@ -1373,219 +1358,22 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
 
     # ── dynamic native menu ──────────────────────────────────────
 
-    _menu_rebuild_count = 0  # class‑level counter
-
     def _rebuildNativeMenu(self):
-        """Rebuild the MediaVault right-click menu with version sub-submenus.
+        """Pre-cache role data so the Qt popup opens instantly.
 
-        Called when the source changes and role data is freshly cached.
-        Uses self._cached_data to populate Compare/Switch submenus with
-        per-role version lists instead of flat "load latest" entries.
+        RV's native MinorMode.setMenu() has a bug where nested submenus
+        ACCUMULATE across rebuilds instead of being replaced.  We therefore
+        no longer embed dynamic version lists in the right-click menu.
+        Instead, "Compare to ..." and "Switch to ..." are flat actions that
+        pop up a fresh Qt QMenu (built from scratch each time, no stale
+        entries).  This method just ensures _cached_data is warm so the
+        first popup opens without a network delay.
         """
-        MediaVaultMode._menu_rebuild_count += 1
-        build_id = MediaVaultMode._menu_rebuild_count
-
-        def _version_items(mode):
-            """Build role submenu items using cached data.
-
-            Roles with multiple versions become sub-submenus listing
-            individual versions (v229, v228, ...).  Roles with one
-            version are flat actions.
-            """
-            items = []
-            data = self._cached_data
-            if not data:
-                # No cached data — just show navigation (no flat role dump)
-                items.append(("Prev Version",
-                              lambda e, _m=mode: self._stepVersion(1, _m),
-                              None, None))
-                items.append(("Next Version",
-                              lambda e, _m=mode: self._stepVersion(-1, _m),
-                              None, None))
-                items.append(("_", None))
-                items.append(("Browse All ...",
-                              lambda e, _m=mode: self._showPickerDialog(_m),
-                              None, None))
-                return items
-
-            roles = data.get("roles", [])
-            sorted_roles = sorted(
-                roles, key=lambda r: (r.get("name") or "").lower())
-
-            for role in sorted_roles:
-                role_name = role.get("name", "Unassigned")
-                assets = role.get("assets", [])
-                # Sort by version descending
-                sorted_assets = sorted(
-                    assets,
-                    key=lambda a: self._extract_version(
-                        a.get("vault_name", "")),
-                    reverse=True)
-                available = [a for a in sorted_assets if a.get("file_path")]
-                if not available:
-                    continue
-
-                if len(available) == 1:
-                    # Single version — flat action
-                    a = available[0]
-                    label = "%s  (%s)" % (role_name, self._formatVersionLabel(a, include_current=False))
-                    rv_path = self._assetToRvPath(a)
-                    items.append((
-                        label,
-                        lambda e, _m=mode, _p=rv_path: (
-                            self._loadAsCompare(_p) if _m == "compare"
-                            else self._switchTo(_p)),
-                        None, None))
-                else:
-                    # Multiple versions — group by version family
-                    groups = self._groupAssetsForMenu(available)
-                    ver_items = []
-                    for root_asset, variants in groups:
-                        if not variants:
-                            # Singleton version — flat item
-                            vlabel = self._formatVersionLabel(root_asset)
-                            rv_path = self._assetToRvPath(root_asset)
-                            ver_items.append((
-                                vlabel,
-                                lambda e, _m=mode, _p=rv_path: (
-                                    self._loadAsCompare(_p) if _m == "compare"
-                                    else self._switchTo(_p)),
-                                None, None))
-                        else:
-                            # Multi-variant version — sub-submenu
-                            root_name = os.path.splitext(
-                                root_asset.get("vault_name", ""))[0]
-                            import re as _re
-                            _vm = _re.search(r'_v(\d+)', root_asset.get('vault_name', ''))
-                            ver = "v%s" % _vm.group(1) if _vm else ""
-                            group_label = ver or root_name
-                            sub_items = []
-                            for va in variants:
-                                vlabel = self._formatVersionLabel(va)
-                                rv_path = self._assetToRvPath(va)
-                                sub_items.append((
-                                    vlabel,
-                                    lambda e, _m=mode, _p=rv_path: (
-                                        self._loadAsCompare(_p) if _m == "compare"
-                                        else self._switchTo(_p)),
-                                    None, None))
-                            ver_items.append((group_label, sub_items))
-                    items.append((role_name, ver_items))
-
-            if not items:
-                # No roles with assets — show info label only
-                items.append(("(no versions found)", None, None,
-                              lambda *a, **kw: rvc.DisabledMenuState))
-
-            items.append(("_", None))
-            items.append(("Prev Version",
-                          lambda e, _m=mode: self._stepVersion(1, _m),
-                          None, None))
-            items.append(("Next Version",
-                          lambda e, _m=mode: self._stepVersion(-1, _m),
-                          None, None))
-            items.append(("_", None))
-            items.append(("Browse All ...",
-                          lambda e, _m=mode: self._showPickerDialog(_m),
-                          None, None))
-            return items
-
-        new_menu = [("MediaVault", [
-            ("Compare to ...", _version_items("compare")),
-            ("Switch to ...", _version_items("switch")),
-            ("Browse All ...", self.showBrowseAll, "alt+b", None),
-            ("_", None),
-            ("Prev Version", self.prevVersion, "alt+Left", None),
-            ("Next Version", self.nextVersion, "alt+Right", None),
-            ("_", None),
-            ("Set Status", [
-                ("WIP", lambda *args, **kwargs: self.setStatus("WIP"), None, None),
-                ("Review", lambda *args, **kwargs: self.setStatus("Review"), None, None),
-                ("Approved", lambda *args, **kwargs: self.setStatus("Approved"), "alt+a", None),
-                ("Final", lambda *args, **kwargs: self.setStatus("Final"), None, None),
-                ("_", None),
-                ("Reject", lambda *args, **kwargs: self.setStatus("Reject"), "alt+r", None),
-            ]),
-            ("_", None),
-            ("Publish Frame", self.publishFrame, "alt+p", None),
-            ("Save Annotated Frame as Note", self.saveAnnotatedFrameAsNote, "alt+n", None),
-            ("Send Annotation to ShotGrid", self.sendAnnotationToShotGrid, "alt+shift+n", None),
-            ("ShotGrid Notes", self.showShotGridNotes, "alt+s",
-             lambda *args, **kwargs: rvc.CheckedMenuState
-                     if self._notes_panel and self._notes_panel.isVisible()
-                     else rvc.UncheckedMenuState),
-            ("Add to Crate ...", self.addToCrateMenu, "alt+c", None),
-            ("_", None),
-            ("Toggle Overlay", self._toggleOverlay, "shift+o",
-             lambda *args, **kwargs: rvc.CheckedMenuState if self._overlay_enabled
-                     else rvc.UncheckedMenuState),
-            ("  Metadata Burn-in", self._toggleMetadata, None,
-             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_metadata
-                     else rvc.UncheckedMenuState),
-            ("  Status Stamp", self._toggleStatus, None,
-             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_status
-                     else rvc.UncheckedMenuState),
-            ("  Watermark", self._toggleWatermark, None,
-             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_watermark
-                     else rvc.UncheckedMenuState),
-            ("  CAM Overlay Preset", self._toggleCAMOverlay, None,
-             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_cam_overlay
-                     else rvc.UncheckedMenuState),
-            ("  Refresh CAM Overlay", self._refreshCAMOverlay, None, None),
-            ("_", None),
-            ("ComfyUI Metadata", self._toggleComfyUI, "shift+c",
-             lambda *args, **kwargs: rvc.CheckedMenuState if self._show_comfyui
-                     else rvc.UncheckedMenuState),
-        ])]
-
-        try:
-            # --- Diagnostic: log exactly what assets go into the menu ---
-            diag_data = self._cached_data or {}
-            diag_roles = diag_data.get("roles", [])
-            all_vnames = []
-            for dr in diag_roles:
-                for da in dr.get("assets", []):
-                    vn = da.get("vault_name", "?")
-                    all_vnames.append(vn)
-            # Extract distinct shot identifiers from vault_names
-            import re as _re_diag
-            shot_ids_in_menu = set()
-            for vn in all_vnames:
-                m = _re_diag.search(r'VBP_\d+', vn, _re_diag.IGNORECASE)
-                if m:
-                    shot_ids_in_menu.add(m.group(0))
-            print("[MenuDiag] Build #%d — %d roles, %d assets, "
-                  "distinct_shots=%s, first_5=%s"
-                  % (build_id, len(diag_roles), len(all_vnames),
-                     sorted(shot_ids_in_menu) or ['(none)'],
-                     all_vnames[:5]))
-            # Also log the cached_path that produced this data
-            print("[MenuDiag] Build #%d — cached_path=%s"
-                  % (build_id,
-                     os.path.basename(self._cached_path or '(None)')))
-
-            # Defensive: clear old menu before setting new one
-            try:
-                self.setMenu(None)
-            except Exception:
-                pass
-
-            self.setMenu(new_menu)
-            # Record which directory (shot) this menu was built for
-            try:
-                cur = self._getCurrentSourcePath()
-                if cur:
-                    self._menu_source_dir = self._normKey(os.path.dirname(cur))
-            except Exception:
-                pass
-            role_count = len([r for r in diag_roles
-                              if any(a.get("file_path") for a in r.get("assets", []))])
-            print("[MediaVault] Native menu rebuilt with %d roles for %s"
-                  % (role_count, os.path.basename(self._menu_source_dir or '?')))
-        except Exception as e:
-            import traceback
-            print("[MediaVault] Failed to rebuild native menu: %s" % e)
-            traceback.print_exc()
+        scope = (self._cached_data or {}).get("scope", "?")
+        role_count = len([r for r in (self._cached_data or {}).get("roles", [])
+                          if any(a.get("file_path") for a in r.get("assets", []))])
+        print("[MediaVault] Role cache ready for Qt popup — %d roles (scope=%s)"
+              % (role_count, scope))
 
     # ── source path resolution ───────────────────────────────────
 
@@ -2886,15 +2674,6 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             rve.displayFeedback("No related assets found", 3.0)
             return
 
-        # --- Diagnostic: log what the Qt popup received ---
-        qt_vnames = []
-        for r in roles:
-            for a in r.get("assets", []):
-                qt_vnames.append(a.get("vault_name", "?"))
-        print("[MenuDiag] Qt popup (%s): filepath=%s, %d roles, %d assets, first_5=%s"
-              % (mode, os.path.basename(filepath or "?"), len(roles),
-                 len(qt_vnames), qt_vnames[:5]))
-
         # Find current asset's role so we can highlight it
         current_role_id = None
         for role in roles:
@@ -3731,6 +3510,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                 if data and "error" not in data:
                     self._cached_data = data
                     self._cached_path = new_sg_path
+                    # Track directory so _syncCurrentSource detects future
+                    # shot changes correctly.
+                    self._menu_source_dir = self._normKey(
+                        os.path.dirname(new_sg_path))
                     scope = data.get("scope", "?")
                     role_names = [r.get("name") for r in data.get("roles", [])]
                     print("[MediaVault] Role cache ready (scope=%s, %d roles: %s)"
@@ -4365,25 +4148,27 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             self._comfyui_meta = (
                 cached if cached is not False else None)
 
-        # ── Refresh Compare/Switch menus if viewed source changed ──
+        # ── Refresh role cache if viewed source changed ──
         # Compare by DIRECTORY (not full path) so EXR frame changes
         # (render.1000.exr vs render.1001.exr) don't trigger needless
-        # rebuilds, but switching shots (different folders) always does.
+        # re-fetches, but switching shots (different folders) always does.
+        # The Qt popup will use the fresh _cached_data on next open.
         cur_dir = self._normKey(os.path.dirname(cur))
         if (self._menu_source_dir is not None
                 and cur_dir != self._menu_source_dir):
             print("[MediaVault] Viewed source dir changed (%s -> %s), "
-                  "refreshing menus"
+                  "refreshing role cache"
                   % (os.path.basename(self._menu_source_dir or ""),
                      os.path.basename(cur_dir)))
             self._cached_data = None
             self._cached_path = None
+            self._menu_source_dir = cur_dir
             try:
                 self._getRolesData(force_refresh=True)
                 if self._cached_data:
                     self._rebuildNativeMenu()
             except Exception as e:
-                print("[MediaVault] Menu refresh failed: %s" % e)
+                print("[MediaVault] Role cache refresh failed: %s" % e)
 
         # Auto-refresh ShotGrid Notes panel if open
         if (self._notes_panel and self._notes_panel.isVisible()):
