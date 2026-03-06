@@ -2294,7 +2294,14 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
         return fp
 
     def _loadAsCompare(self, filepath):
-        """Add filepath as a new source for A/B sequence comparison."""
+        """Add filepath as a new source for A/B stack comparison (wipe).
+
+        Automatically aligns frame ranges: if the existing source starts
+        at frame 1000 (EXR sequence) and the new source starts at frame 1
+        (QT/MOV), the new source is offset by +999 so both clips overlap
+        on the same global frame range.  Then switches to stack mode so
+        RV's wipe/tile/difference views actually work.
+        """
         is_seq_notation = '#' in filepath
         if not is_seq_notation and not os.path.exists(filepath):
             rve.displayFeedback("File not found: %s" % os.path.basename(filepath), 4.0)
@@ -2303,17 +2310,67 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
             # Track existing source groups so we can find the new one
             before = set(rvc.nodesOfType("RVSourceGroup"))
 
+            # Get frame range of the first existing source for alignment
+            existing_start = None
+            if before:
+                first_sg = sorted(before)[0]
+                try:
+                    ri = rvc.nodeRangeInfo(first_sg)
+                    existing_start = int(ri.get("start", 1))
+                except Exception:
+                    pass
+
             rvc.addSourceVerbose([filepath])
 
             # Strip any auto-discovered audio from the newly created source
             after = set(rvc.nodesOfType("RVSourceGroup"))
-            for sg in (after - before):
+            new_sgs = after - before
+            for sg in new_sgs:
                 self._stripAutoAudio(sg, filepath)
 
-            rvc.setViewNode("defaultSequence")
-            rve.displayFeedback(
-                "Compare: %s" % os.path.basename(filepath), 3.0
-            )
+            # ── Auto-align frame ranges for wipe comparison ──
+            # If existing source starts at frame 1000 (EXR) and the new
+            # source starts at frame 1 (QT), set rangeOffset on the new
+            # source so its frame 1 lands at global frame 1000.
+            offset_applied = 0
+            if existing_start is not None and new_sgs:
+                new_sg = sorted(new_sgs)[0]
+                try:
+                    ri_new = rvc.nodeRangeInfo(new_sg)
+                    new_start = int(ri_new.get("start", 1))
+                    offset = existing_start - new_start
+                    if offset != 0:
+                        rvc.setIntProperty(
+                            new_sg + ".group.rangeOffset", [offset], True)
+                        offset_applied = offset
+                        print("[MediaVault] Compare: auto-aligned frames — "
+                              "offset %s by %+d (native start=%d, "
+                              "existing start=%d)"
+                              % (os.path.basename(filepath), offset,
+                                 new_start, existing_start))
+                except Exception as e:
+                    print("[MediaVault] Compare: frame alignment failed: "
+                          "%s" % e)
+
+            # Switch to stack mode (required for wipe/tile/difference).
+            # Sequence mode plays clips end-to-end which doesn't allow
+            # A/B wipe comparison.
+            rvc.setViewNode("defaultStack")
+
+            # Jump to the overlap region so both sources are visible
+            if existing_start is not None and offset_applied != 0:
+                try:
+                    rvc.setFrame(existing_start)
+                except Exception:
+                    pass
+
+            if offset_applied:
+                rve.displayFeedback(
+                    "Compare: %s (frame offset %+d)"
+                    % (os.path.basename(filepath), offset_applied), 4.0)
+            else:
+                rve.displayFeedback(
+                    "Compare: %s" % os.path.basename(filepath), 3.0)
         except Exception as e:
             print("[MediaVault] _loadAsCompare error: %s" % e)
             rve.displayFeedback("Error: %s" % e, 5.0)
