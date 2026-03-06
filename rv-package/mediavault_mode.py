@@ -842,7 +842,9 @@ class AssetPickerDialog(QDialog):
             else:
                 # Group header — shows root name + variant count
                 root_name = root_asset.get('vault_name', 'unknown')
-                version = 'v%03d' % root_asset['version'] if root_asset.get('version') else ''
+                import re as _re
+                _vm = _re.search(r'_v(\d+)', root_name)
+                version = 'v%s' % _vm.group(1) if _vm else ''
                 label = '%s   [%d]' % (root_name, len(variants))
                 parent = QTreeWidgetItem([label, '', version, ''])
                 # Group header is not selectable — just a label
@@ -1446,7 +1448,9 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                             # Multi-variant version — sub-submenu
                             root_name = os.path.splitext(
                                 root_asset.get("vault_name", ""))[0]
-                            ver = "v%03d" % root_asset["version"] if root_asset.get("version") else ""
+                            import re as _re
+                            _vm = _re.search(r'_v(\d+)', root_asset.get('vault_name', ''))
+                            ver = "v%s" % _vm.group(1) if _vm else ""
                             group_label = "%s  [%d]" % (
                                 ver or root_name, len(variants))
                             sub_items = []
@@ -2856,7 +2860,10 @@ class MediaVaultMode(rv.rvtypes.MinorMode):
                         # Multi-variant version — nested sub-submenu
                         root_name = os.path.splitext(
                             root_asset.get("vault_name", ""))[0]
-                        ver = "v%03d" % root_asset["version"] if root_asset.get("version") else ""
+                        # Extract version from vault_name (not DB version field)
+                        import re as _re
+                        _vm = _re.search(r'_v(\d+)', root_asset.get('vault_name', ''))
+                        ver = "v%s" % _vm.group(1) if _vm else ""
                         group_label = "%s  [%d]" % (ver or root_name, len(variants))
                         ver_sub = QMenu(group_label, sub)
                         ver_sub.setStyleSheet(menu.styleSheet())
